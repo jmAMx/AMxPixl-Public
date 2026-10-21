@@ -1,25 +1,33 @@
 import { app } from '../app';
 import { Stroke } from '../core/brush';
 import type { Doc } from '../core/document';
-import { ctx2d, layerMatrix, newCanvas } from '../core/layers';
-import { apply, invert, mapRect, setT, type Pt, type Rect } from '../core/math';
+import { lumOf } from '../actions';
+import { ctx2d, newCanvas } from '../core/layers';
+import { apply, invert, mapRect, setT, xformMatrix, type Pt, type Rect } from '../core/math';
 import { sampleDoc } from '../core/render';
-import type { RasterLayer } from '../core/types';
+import type { PixelTarget } from '../core/types';
 import { hexToRgb, rgbToHex } from '../ui/color';
 import { view } from '../ui/canvasview';
 import { h } from '../ui/dom';
 import { checkbox, seg, slider, toast } from '../ui/widgets';
 import type { PInfo, Tool } from './tool';
 
-/** The active layer if it can take paint; otherwise explains why not. */
-export function paintableLayer(doc: Doc): RasterLayer | null {
+/** What painting should go to (the active layer's pixels or its mask), or null after explaining why not. */
+export function paintableTarget(doc: Doc): { target: PixelTarget; isMask: boolean } | null {
   const a = doc.active;
   if (!a) { toast('Add a layer first (Layer › New Layer).'); return null; }
-  if (a.type === 'text' || a.type === 'shape') { toast(`"${a.name}" is a ${a.type} layer. Rasterize it first (Layer › Rasterize), or add a new layer to paint on.`); return null; }
-  if (a.type === 'adjust') { toast('Adjustment layers have no pixels. Select an image layer to paint on.'); return null; }
-  if (!a.visible) { toast('That layer is hidden. Show it before painting.'); return null; }
-  return a;
+  const pt = doc.paintTarget();
+  if (pt) {
+    if (!a.visible) { toast('That layer is hidden. Show it before painting.'); return null; }
+    return pt;
+  }
+  if (a.type === 'text' || a.type === 'shape') toast(`"${a.name}" is a ${a.type} layer. Rasterize it first (Layer › Rasterize), or add a new layer to paint on.`);
+  else toast(`${a.type === 'group' ? 'Groups' : a.type === 'effect' ? 'Effect layers' : 'Adjustment layers'} have no pixels. Add a mask (Layer › Add Layer Mask) to paint where it applies.`);
+  return null;
 }
+
+/** On a mask, light colours reveal and dark colours hide (like Photoshop's white/black). */
+const maskHides = () => lumOf(app.fg) < 0.5;
 
 function pickColor(p: PInfo, toBg = false) {
   const doc = app.doc!;
@@ -52,6 +60,7 @@ class PaintTool implements Tool {
   hint: string;
   private stroke: Stroke | null = null;
   private last: Pt | null = null;
+  private onMask = false;
 
   constructor(public id: 'brush' | 'eraser', public name: string, public key: string, public icon: Tool['icon']) {
     this.hint = id === 'brush'
@@ -75,10 +84,12 @@ class PaintTool implements Tool {
   down(p: PInfo) {
     if (p.alt && this.id === 'brush') { pickColor(p); return; }
     const doc = app.doc!;
-    const layer = paintableLayer(doc);
-    if (!layer) return;
+    const pt = paintableTarget(doc);
+    if (!pt) return;
     const o = this.o;
-    this.stroke = new Stroke(doc, layer, { color: app.fg, size: o.size, hardness: o.hardness, opacity: o.opacity, flow: o.flow, erase: this.id === 'eraser', pressure: o.pressure });
+    this.onMask = pt.isMask;
+    const erase = pt.isMask ? this.id === 'eraser' || maskHides() : this.id === 'eraser';
+    this.stroke = new Stroke(doc, pt.target, { color: pt.isMask ? '#ffffff' : app.fg, size: o.size, hardness: o.hardness, opacity: o.opacity, flow: o.flow, erase, pressure: o.pressure });
     if (p.shift && this.last) this.stroke.add({ x: this.last.x, y: this.last.y, pressure: p.pressure });
     this.stroke.add({ x: p.x, y: p.y, pressure: p.pressure });
   }
@@ -90,10 +101,10 @@ class PaintTool implements Tool {
 
   up(p: PInfo) {
     if (!this.stroke) return;
-    this.stroke.end(this.id === 'brush' ? 'Brush' : 'Eraser');
+    this.stroke.end(this.onMask ? 'Paint mask' : this.id === 'brush' ? 'Brush' : 'Eraser');
     this.stroke = null;
     this.last = { x: p.x, y: p.y };
-    if (this.id === 'brush') app.useColor(app.fg);
+    if (this.id === 'brush' && !this.onMask) app.useColor(app.fg);
   }
 
   keydown(e: KeyboardEvent) {
@@ -136,11 +147,13 @@ class FillTool implements Tool {
 
   down(p: PInfo) {
     const doc = app.doc!;
-    const layer = paintableLayer(doc);
-    if (!layer) return;
+    const pt = paintableTarget(doc);
+    if (!pt) return;
+    if (pt.isMask) { toast('The paint bucket works on image pixels. To fill a mask, select an area and use Edit › Fill.'); return; }
+    const layer = pt.target;
     doc.ensureCovers(layer);
     const c = doc.canvasOf(layer);
-    const lp = apply(invert(layerMatrix(layer)), p.x, p.y);
+    const lp = apply(invert(xformMatrix(layer.t)), p.x, p.y);
     const sx = Math.floor(lp.x), sy = Math.floor(lp.y);
     const W = c.width, H = c.height;
     if (sx < 0 || sy < 0 || sx >= W || sy >= H) return;
@@ -237,26 +250,39 @@ class GradientTool implements Tool {
     view.requestOverlay();
     if (!p0 || !p1 || Math.hypot(p1.x - p0.x, p1.y - p0.y) < 1) return;
     const doc = app.doc!;
-    const layer = paintableLayer(doc);
-    if (!layer) return;
+    const pt = paintableTarget(doc);
+    if (!pt) return;
+    const layer = pt.target;
     doc.ensureCovers(layer);
     const o = app.opts.gradient;
     const mask = doc.maskForLayer(layer);
-    const m = layerMatrix(layer);
-    doc.editPixels(layer, 'Gradient', (ctx, c) => {
+    const m = xformMatrix(layer.t);
+    doc.editPixels(layer, pt.isMask ? 'Mask gradient' : 'Gradient', (ctx, c) => {
       const tmp = newCanvas(c.width, c.height);
       const t = ctx2d(tmp);
       setT(t, invert(m));
       const g = o.kind === 'linear'
         ? t.createLinearGradient(p0.x, p0.y, p1.x, p1.y)
         : t.createRadialGradient(p0.x, p0.y, 0, p0.x, p0.y, Math.hypot(p1.x - p0.x, p1.y - p0.y));
-      g.addColorStop(0, app.fg);
-      g.addColorStop(1, o.toTransparent ? app.fg + '00' : app.bg);
+      if (pt.isMask) {
+        // On a mask the gradient sets visibility: light = shown, dark = hidden.
+        g.addColorStop(0, `rgba(255,255,255,${lumOf(app.fg)})`);
+        g.addColorStop(1, `rgba(255,255,255,${o.toTransparent ? 0 : lumOf(app.bg)})`);
+      } else {
+        g.addColorStop(0, app.fg);
+        g.addColorStop(1, o.toTransparent ? app.fg + '00' : app.bg);
+      }
       t.fillStyle = g;
       const cover = mapRect(m, { x: 0, y: 0, w: c.width, h: c.height });
       t.fillRect(cover.x - 2, cover.y - 2, cover.w + 4, cover.h + 4);
-      if (mask) { t.setTransform(1, 0, 0, 1, 0, 0); t.globalCompositeOperation = 'destination-in'; t.drawImage(mask, 0, 0); }
+      t.setTransform(1, 0, 0, 1, 0, 0);
+      if (mask) { t.globalCompositeOperation = 'destination-in'; t.drawImage(mask, 0, 0); }
       ctx.globalAlpha = o.opacity;
+      if (pt.isMask) {
+        ctx.globalCompositeOperation = 'destination-out';
+        if (mask) ctx.drawImage(mask, 0, 0); else ctx.fillRect(0, 0, c.width, c.height);
+        ctx.globalCompositeOperation = 'source-over';
+      }
       ctx.drawImage(tmp, 0, 0);
     });
   }

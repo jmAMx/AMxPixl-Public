@@ -1,4 +1,4 @@
-import { adjMode, buildLut } from './adjustments';
+import { adjMode, buildLut, wheelOffset } from './adjustments';
 import type { AdjParams } from './types';
 
 const VS = `#version 300 es
@@ -9,6 +9,7 @@ const FS = `#version 300 es
 precision highp float;
 in vec2 vUv; out vec4 o;
 uniform sampler2D uSrc; uniform sampler2D uLut; uniform int uMode; uniform vec4 uP; uniform vec3 uTint;
+uniform vec3 uHsl[8]; uniform vec4 uGrade[3]; uniform mat3 uMix;
 float lum(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)); }
 vec3 rgb2hsl(vec3 c) {
   float mx = max(c.r, max(c.g, c.b)), mn = min(c.r, min(c.g, c.b)), l = (mx + mn) * 0.5, d = mx - mn;
@@ -53,6 +54,40 @@ void main() {
     if (uP.x > 0.5) c = mix(2.0 * l * uTint, 1.0 - 2.0 * (1.0 - l) * (1.0 - uTint), step(0.5, l));
   } else if (uMode == 4) {
     c = vec3(step(uP.x / 255.0, lum(c)));
+  } else if (uMode == 5) {
+    // HSL mixer: blend the two nearest colour-range settings by hue; greys are left alone.
+    vec3 h = rgb2hsl(c);
+    float hd = h.x * 360.0;
+    float centers[9] = float[9](0.0, 30.0, 60.0, 120.0, 180.0, 240.0, 270.0, 300.0, 360.0);
+    vec3 adj = vec3(0.0);
+    for (int i = 0; i < 8; i++) {
+      if (hd >= centers[i] && hd <= centers[i + 1]) {
+        adj = mix(uHsl[i], uHsl[(i + 1) % 8], (hd - centers[i]) / (centers[i + 1] - centers[i]));
+        break;
+      }
+    }
+    float w = smoothstep(0.0, 0.15, h.y);
+    h.x = fract(h.x + adj.x * w / 360.0 + 1.0);
+    h.y = clamp(h.y * (1.0 + adj.y * w), 0.0, 1.0);
+    c = hsl2rgb(h);
+    c = adj.z >= 0.0 ? mix(c, vec3(1.0), adj.z * w * 0.5) : mix(c, vec3(0.0), -adj.z * w * 0.5);
+  } else if (uMode == 6) {
+    float l = lum(c);
+    float sh = 1.0 - smoothstep(0.0, 0.55 + uP.x * 0.3, l);
+    float hi = smoothstep(0.45 + uP.x * 0.3, 1.0, l);
+    float mid = max(0.0, 1.0 - sh - hi);
+    c += uGrade[0].rgb * sh + uGrade[1].rgb * mid + uGrade[2].rgb * hi;
+    c += vec3(uGrade[0].a * sh + uGrade[1].a * mid + uGrade[2].a * hi);
+  } else if (uMode == 7) {
+    c = texelFetch(uLut, ivec2(int(clamp(lum(c), 0.0, 1.0) * 255.0 + 0.5), 0), 0).rgb;
+  } else if (uMode == 8) {
+    c = uMix * c;
+    if (uP.x > 0.5) c = vec3(c.r);
+  } else if (uMode == 9) {
+    float l0 = lum(c);
+    vec3 f = mix(c, c * uTint, uP.x);
+    if (uP.y > 0.5) f *= l0 / max(lum(f), 1e-4);
+    c = f;
   }
   o = vec4(clamp(c, 0.0, 1.0), s.a);
 }`;
@@ -113,7 +148,7 @@ export class GLFX {
     };
     this.srcTex = tex();
     this.lutTex = tex();
-    for (const n of ['uSrc', 'uLut', 'uMode', 'uP', 'uTint']) this.loc[n] = gl.getUniformLocation(this.prog, n);
+    for (const n of ['uSrc', 'uLut', 'uMode', 'uP', 'uTint', 'uHsl', 'uGrade', 'uMix']) this.loc[n] = gl.getUniformLocation(this.prog, n);
     this.maxSize = gl.getParameter(gl.MAX_TEXTURE_SIZE);
     this.ok = true;
   }
@@ -137,7 +172,7 @@ export class GLFX {
     const mode = adjMode(a);
     gl.activeTexture(gl.TEXTURE1);
     gl.bindTexture(gl.TEXTURE_2D, this.lutTex);
-    if (mode === 0) gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 256, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, buildLut(a));
+    if (mode === 0 || mode === 7) gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 256, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, buildLut(a));
     gl.uniform1i(this.loc.uSrc, 0);
     gl.uniform1i(this.loc.uLut, 1);
     gl.uniform1i(this.loc.uMode, mode);
@@ -150,6 +185,19 @@ export class GLFX {
       p = [1, 0, 0, 0];
       const n = parseInt(a.tint.slice(1), 16);
       tint = [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255];
+    }
+    const rgb = (h: string): [number, number, number] => { const n = parseInt(h.slice(1), 16) || 0; return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255]; };
+    if (a.kind === 'hsl') gl.uniform3fv(this.loc.uHsl, new Float32Array(a.bands.flatMap(([h, s, l]) => [(h / 100) * 30, s / 100, l / 100])));
+    else if (a.kind === 'grade') {
+      p = [a.balance / 100, 0, 0, 0];
+      gl.uniform4fv(this.loc.uGrade, new Float32Array([...wheelOffset(a.shadows), ...wheelOffset(a.midtones), ...wheelOffset(a.highlights)]));
+    } else if (a.kind === 'mixer') {
+      p = [a.mono ? 1 : 0, 0, 0, 0];
+      const m = [a.r, a.g, a.b];
+      gl.uniformMatrix3fv(this.loc.uMix, false, new Float32Array([0, 1, 2].flatMap((j) => m.map((row) => row[j] / 100))));
+    } else if (a.kind === 'photofilter') {
+      p = [a.density / 100, a.preserve ? 1 : 0, 0, 0];
+      tint = rgb(a.color);
     }
     gl.uniform4f(this.loc.uP, ...p);
     gl.uniform3f(this.loc.uTint, ...tint);

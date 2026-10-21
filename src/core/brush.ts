@@ -1,7 +1,7 @@
 import type { Doc } from './document';
-import { cloneCanvas, cropCanvas, ctx2d, layerMatrix, newCanvas } from './layers';
-import { apply, intersect, invert, matScale, roundOut, setT, union, type Mat, type Rect } from './math';
-import type { RasterLayer } from './types';
+import { cloneCanvas, cropCanvas, ctx2d, newCanvas } from './layers';
+import { apply, intersect, invert, matScale, roundOut, setT, union, xformMatrix, type Mat, type Rect } from './math';
+import type { PixelTarget } from './types';
 
 export interface BrushOpts {
   color: string;
@@ -55,13 +55,13 @@ export class Stroke {
   private carry = 0;
   private dirty: Rect | null = null;
 
-  constructor(private doc: Doc, private layer: RasterLayer, private o: BrushOpts) {
+  constructor(private doc: Doc, private layer: PixelTarget, private o: BrushOpts) {
     if (!o.erase) doc.ensureCovers(layer);
     this.src = doc.canvasOf(layer);
     this.backup = cloneCanvas(this.src);
     this.buffer = newCanvas(this.src.width, this.src.height);
     this.mask = doc.maskForLayer(layer);
-    const m = layerMatrix(layer);
+    const m = xformMatrix(layer.t);
     this.inv = invert(m);
     // Build the dab at the resolution it'll land at in the layer's own pixels.
     this.stamp = makeStamp(o.erase ? '#000000' : o.color, o.size / Math.max(0.05, matScale(m)), o.hardness, o.flow);

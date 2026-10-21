@@ -1,4 +1,4 @@
-import { Doc, newId } from './document';
+import { Doc, flatLayers, newId } from './document';
 import { ctx2d, newCanvas } from './layers';
 import type { Layer, Meta } from './types';
 
@@ -54,10 +54,12 @@ export async function encodePixl(doc: Doc): Promise<Blob> {
   const blobs: Blob[] = [];
   const index: Record<string, [number, number]> = {};
   let offset = 0;
-  for (const l of meta.layers) {
-    if (l.type !== 'raster' || index[l.key]) continue;
-    const b = await canvasBlob(doc.pool.get(l.key)!);
-    index[l.key] = [offset, b.size];
+  // Every pixel buffer in use: raster layers anywhere in the tree, plus layer masks.
+  const keys = flatLayers(meta.layers).flatMap((l) => [l.type === 'raster' ? l.key : null, l.mask?.key ?? null]);
+  for (const key of keys) {
+    if (!key || index[key]) continue;
+    const b = await canvasBlob(doc.pool.get(key)!);
+    index[key] = [offset, b.size];
     offset += b.size;
     blobs.push(b);
   }

@@ -1,10 +1,12 @@
 import { app } from '../app';
-import { flipLayer, resetTransform, rasterizeLayer } from '../actions';
-import { ADJ_LABELS, curveTable, histogram, type Histogram } from '../core/adjustments';
-import type { Doc } from '../core/document';
+import { applyMask, deleteMask, flipLayer, invertMask, rasterizeLayer, resetTransform, setMaskProp, setPlacedTransform } from '../actions';
+import { ADJ_LABELS, HSL_BANDS, curveTable, histogram, type Histogram } from '../core/adjustments';
+import { flatLayers, type Doc } from '../core/document';
+import { fxDef } from '../core/effects';
 import { ctx2d, localBounds, newCanvas } from '../core/layers';
 import { renderDoc } from '../core/render';
-import type { AdjParams, AdjustLayer, Channel, CurvePts, Layer, LevelsCh, PlacedLayer, ShapeLayer, TextLayer } from '../core/types';
+import type { AdjParams, AdjustLayer, Channel, CurvePts, EffectLayer, GradeWheel, Layer, LevelsCh, PlacedLayer, ShapeLayer, TextLayer } from '../core/types';
+import { isPlaced } from '../core/types';
 import { h } from './dom';
 import { allFontsLoaded, fontList, loadInstalledFonts } from './fonts';
 import { checkbox, icon, numField, seg, slider } from './widgets';
@@ -13,10 +15,12 @@ const deg = (r: number) => (r * 180) / Math.PI;
 
 /** Histogram of everything beneath a layer (what an adjustment layer receives), at a cheap preview size. */
 function histBelow(doc: Doc, layer: Layer): Histogram {
-  const i = doc.indexOf(layer.id);
+  const flat = flatLayers(doc.layers);
+  const i = flat.findIndex((l) => l.id === layer.id);
   const s = Math.min(1, 320 / Math.max(doc.width, doc.height));
   const c = newCanvas(Math.max(1, doc.width * s), Math.max(1, doc.height * s));
-  renderDoc(doc, c, [s, 0, 0, s, 0, 0], { layers: doc.layers.slice(0, i) });
+  // Approximation for layers inside groups: everything drawn before it, ignoring group blending.
+  renderDoc(doc, c, [s, 0, 0, s, 0, 0], { layers: flat.slice(0, i).filter((l) => l.type !== 'group') });
   return histogram(ctx2d(c, true).getImageData(0, 0, c.width, c.height));
 }
 
@@ -63,20 +67,20 @@ export function propertiesPanel() {
       return { w: Math.abs(bb.w * l.t.sx), h: Math.abs(bb.h * l.t.sy) };
     };
     const commit = commitSelf;
-    const x = numField('X', l.t.x, (v) => { l.t = { ...l.t, x: v }; commit('Move'); }, { unit: 'px' });
-    const y = numField('Y', l.t.y, (v) => { l.t = { ...l.t, y: v }; commit('Move'); }, { unit: 'px' });
+    const x = numField('X', l.t.x, (v) => { setPlacedTransform(l, { ...l.t, x: v }); commit('Move'); }, { unit: 'px' });
+    const y = numField('Y', l.t.y, (v) => { setPlacedTransform(l, { ...l.t, y: v }); commit('Move'); }, { unit: 'px' });
     const setSize = (axis: 'w' | 'h', v: number) => {
       if (l.type === 'shape') l.shape = { ...l.shape, [axis]: Math.sign(l.shape[axis] || 1) * v };
       else {
         const bb = b();
-        if (axis === 'w') l.t = { ...l.t, sx: Math.sign(l.t.sx) * (v / bb.w) };
-        else l.t = { ...l.t, sy: Math.sign(l.t.sy) * (v / bb.h) };
+        if (axis === 'w') setPlacedTransform(l, { ...l.t, sx: Math.sign(l.t.sx) * (v / bb.w) });
+        else setPlacedTransform(l, { ...l.t, sy: Math.sign(l.t.sy) * (v / bb.h) });
       }
       commit('Resize layer');
     };
     const w = numField('W', size().w, (v) => setSize('w', Math.max(1, v)), { unit: 'px' });
     const hh = numField('H', size().h, (v) => setSize('h', Math.max(1, v)), { unit: 'px' });
-    const a = numField('Angle', deg(l.t.rot), (v) => { l.t = { ...l.t, rot: (v * Math.PI) / 180 }; commit('Rotate'); }, { unit: '°', decimals: 1 });
+    const a = numField('Angle', deg(l.t.rot), (v) => { setPlacedTransform(l, { ...l.t, rot: (v * Math.PI) / 180 }); commit('Rotate'); }, { unit: '°', decimals: 1 });
     refreshers.push(() => { x.set(l.t.x); y.set(l.t.y); const s = size(); w.set(s.w); hh.set(s.h); a.set(deg(l.t.rot)); });
     let note: HTMLElement | null = null;
     if (l.type === 'raster') {
@@ -197,8 +201,121 @@ export function propertiesPanel() {
       }
       case 'levels': kids.push(levelsUI(l, e)); break;
       case 'curves': kids.push(curvesUI(l, e)); break;
+      case 'hsl': {
+        let attr = 0;
+        const box = h('div');
+        const draw = () => {
+          box.replaceChildren(...HSL_BANDS.map(([name, col], i) => h('div', { class: 'band-row' },
+            h('span', { class: 'band-dot', style: `background:${col}` }),
+            sl(name, -100, 100, (l.adj as typeof a).bands[i][attr], (v) => upd<typeof a>((x) => { x.bands[i][attr] = v; return x; })))));
+        };
+        draw();
+        kids.push(seg([{ v: '0', label: 'Hue' }, { v: '1', label: 'Saturation' }, { v: '2', label: 'Lightness' }], '0', (v) => { attr = Number(v); draw(); }), box,
+          h('p', { class: 'props-note' }, 'Shift, boost or mute one colour range at a time, e.g. make skies deeper (Blues) or skin warmer (Oranges).'));
+        break;
+      }
+      case 'grade': {
+        let tone: 'shadows' | 'midtones' | 'highlights' = 'shadows';
+        const box = h('div');
+        const draw = () => {
+          const w = (l.adj as typeof a)[tone];
+          const set = (patch: Partial<GradeWheel>) => upd<typeof a>((x) => { x[tone] = { ...x[tone], ...patch }; return x; });
+          const hue = sl('Hue', 0, 360, w.hue, (v) => set({ hue: v }), 1, '°');
+          hue.classList.add('hue-track');
+          box.replaceChildren(hue, sl('Amount', 0, 100, w.amount, (v) => set({ amount: v })), sl('Brightness', -100, 100, w.lum, (v) => set({ lum: v })));
+        };
+        draw();
+        kids.push(seg([{ v: 'shadows', label: 'Shadows' }, { v: 'midtones', label: 'Midtones' }, { v: 'highlights', label: 'Highlights' }], tone, (v) => { tone = v; draw(); }), box,
+          sl('Balance', -100, 100, a.balance, (v) => upd<typeof a>((x) => ({ ...x, balance: v }))),
+          h('p', { class: 'props-note' }, 'Classic film looks: push shadows toward teal/blue and highlights toward orange/cream.'));
+        break;
+      }
+      case 'gradmap': {
+        const PRESETS: [string, string, string, string, boolean][] = [
+          ['Black & white', '#000000', '#808080', '#ffffff', false],
+          ['Sepia', '#2b1a0e', '#8a5a33', '#f3e2c4', true],
+          ['Teal & orange', '#0e2a33', '#5f7a77', '#ffc58a', true],
+          ['Cool film', '#10141f', '#a0525a', '#f6e7c8', false],
+          ['Synthwave', '#1a0b2e', '#d6409f', '#ffe08a', true],
+          ['Night vision', '#001400', '#1f8a2a', '#c8ffb0', true],
+        ];
+        kids.push(
+          h('div', { class: 'btn-row' }, ...PRESETS.map(([name, d0, m, l1, mid]) => h('button', {
+            class: 'btn small grad-preset', type: 'button', title: name, style: `background:linear-gradient(90deg,${d0},${mid ? m + ',' : ''}${l1})`,
+            onclick: () => { upd<typeof a>((x) => ({ ...x, dark: d0, mid: m, light: l1, useMid: mid }), true); build(true); },
+          }))),
+          h('div', { class: 'prop-line' }, h('span', { class: 'dim' }, 'Shadows'), colorInput(a.dark, (v) => upd<typeof a>((x) => ({ ...x, dark: v })), e.done)),
+          h('div', { class: 'prop-line' }, checkbox('Midtones', a.useMid, (v) => upd<typeof a>((x) => ({ ...x, useMid: v }), true)), colorInput(a.mid, (v) => upd<typeof a>((x) => ({ ...x, mid: v })), e.done)),
+          h('div', { class: 'prop-line' }, h('span', { class: 'dim' }, 'Highlights'), colorInput(a.light, (v) => upd<typeof a>((x) => ({ ...x, light: v })), e.done)),
+          checkbox('Reverse', a.reverse, (v) => upd<typeof a>((x) => ({ ...x, reverse: v }), true)),
+          h('p', { class: 'props-note' }, 'Maps brightness to colours. Try Soft Light or Color blend at lower opacity for subtle toning.'));
+        break;
+      }
+      case 'mixer': {
+        let out: 'r' | 'g' | 'b' = 'r';
+        const box = h('div');
+        const draw = () => {
+          const row = (l.adj as typeof a)[out];
+          box.replaceChildren(...(['Red', 'Green', 'Blue'] as const).map((n, j) =>
+            sl(n, -200, 200, row[j], (v) => upd<typeof a>((x) => { x[out][j] = v; return x; }), 1, '%')));
+        };
+        draw();
+        kids.push(seg([{ v: 'r', label: 'Red out' }, { v: 'g', label: 'Green out' }, { v: 'b', label: 'Blue out' }], out, (v) => { out = v; draw(); }), box,
+          checkbox('Monochrome (uses the Red output mix)', a.mono, (v) => upd<typeof a>((x) => ({ ...x, mono: v }), true)));
+        break;
+      }
+      case 'photofilter': {
+        const PRESETS: [string, string][] = [['Warming (85)', '#ec8a00'], ['Warming (LBA)', '#fa9600'], ['Cooling (80)', '#006dff'], ['Cooling (LBB)', '#005dff'], ['Sepia', '#ac7a33'], ['Underwater', '#00c1b1'], ['Deep red', '#ff0000'], ['Deep emerald', '#008c00']];
+        const pick = h('select', { onchange: () => { if (pick.value) { upd<typeof a>((x) => ({ ...x, color: pick.value }), true); build(true); } } },
+          h('option', { value: '' }, 'Preset filter…'), ...PRESETS.map(([n, c]) => h('option', { value: c, selected: c === a.color }, n)));
+        kids.push(pick,
+          h('div', { class: 'prop-line' }, h('span', { class: 'dim' }, 'Colour'), colorInput(a.color, (v) => upd<typeof a>((x) => ({ ...x, color: v })), e.done)),
+          sl('Density', 0, 100, a.density, (v) => upd<typeof a>((x) => ({ ...x, density: v })), 1, '%'),
+          checkbox('Preserve brightness', a.preserve, (v) => upd<typeof a>((x) => ({ ...x, preserve: v }), true)));
+        break;
+      }
     }
     return section(label, ...kids);
+  };
+
+  const effectSection = (l: EffectLayer) => {
+    const def = fxDef(l.fx.kind);
+    if (!def) return section('Effect', h('p', { class: 'props-note' }, `Unknown effect "${l.fx.kind}".`));
+    const e = edit(l, def.label);
+    const set = (key: string, v: number | string | boolean, final: boolean) => { l.fx = { ...l.fx, v: { ...l.fx.v, [key]: v } }; e.live(); if (final) e.done(); };
+    const kids = def.params.map((p) => {
+      const cur = l.fx.v[p.key] ?? p.value;
+      switch (p.type) {
+        case 'range': return slider({ label: p.label, min: p.min, max: p.max, step: p.step ?? 1, value: Number(cur), unit: p.unit, onInput: (v) => set(p.key, v, false), onChange: e.done });
+        case 'bool': return checkbox(p.label, !!cur, (v) => set(p.key, v, true));
+        case 'color': return h('div', { class: 'prop-line' }, h('span', { class: 'dim' }, p.label), colorInput(String(cur), (v) => set(p.key, v, false), e.done));
+        case 'select': return h('label', { class: 'field wide' }, h('span', null, p.label),
+          p.options.length <= 3 ? seg(p.options.map(([v, lab]) => ({ v, label: lab })), String(cur), (v) => set(p.key, v, true))
+            : h('select', { onchange: (ev: Event) => set(p.key, (ev.target as HTMLSelectElement).value, true) }, ...p.options.map(([v, lab]) => h('option', { value: v, selected: v === cur }, lab))));
+      }
+    });
+    return section(def.label, ...kids,
+      h('div', { class: 'btn-row' },
+        def.seeded ? h('button', { class: 'btn small', type: 'button', title: 'Re-roll the random pattern', onclick: () => { l.fx = { ...l.fx, seed: Math.floor(Math.random() * 1000) }; e.live(); e.done(); } }, icon('dice'), 'New variation') : null,
+        h('button', { class: 'btn small', type: 'button', onclick: () => { l.fx = { ...l.fx, v: Object.fromEntries(def.params.map((p) => [p.key, p.value])) }; e.live(); e.done(); build(true); } }, 'Reset')),
+      h('p', { class: 'props-note' }, 'Affects everything below this layer (or only its group, or the layer it is clipped to). Add a mask to limit where it applies.'));
+  };
+
+  const maskSection = (l: Layer) => {
+    const doc = app.doc!;
+    const m = l.mask!;
+    const done = (label: string) => commitSelf(label);
+    return section('Layer Mask',
+      h('div', { class: 'btn-row' }, h('span', { class: 'dim' }, 'Paint on'),
+        seg([{ v: 'layer', label: isPlaced(l) && l.type === 'raster' ? 'Pixels' : 'Layer' }, { v: 'mask', label: 'Mask' }], doc.maskEdit ? 'mask' : 'layer', (v) => { doc.setActive(l.id, v === 'mask'); doc.touch('meta'); })),
+      checkbox('Mask enabled', m.enabled, (v) => { setMaskProp({ enabled: v }); done(v ? 'Enable mask' : 'Disable mask'); }),
+      slider({ label: 'Density', min: 0, max: 1, display: 100, value: m.density, unit: '%', onInput: (v) => setMaskProp({ density: v }), onChange: () => done('Mask density') }),
+      slider({ label: 'Feather', min: 0, max: 250, step: 0.5, value: m.feather, unit: 'px', onInput: (v) => setMaskProp({ feather: v }), onChange: () => done('Mask feather') }),
+      h('div', { class: 'btn-row' },
+        h('button', { class: 'btn small', type: 'button', onclick: invertMask }, 'Invert'),
+        l.type === 'raster' ? h('button', { class: 'btn small', type: 'button', title: 'Bake the mask into the pixels', onclick: applyMask }, 'Apply') : null,
+        h('button', { class: 'btn small danger', type: 'button', onclick: deleteMask }, 'Delete')),
+      h('p', { class: 'props-note' }, 'White reveals, black hides: paint with the brush (press D for default colours, X to swap). Feather softens edges live.'));
   };
 
   const levelsUI = (l: AdjustLayer, e: ReturnType<typeof edit>) => {
@@ -331,13 +448,17 @@ export function propertiesPanel() {
     if (l.type === 'text') kids.push(textSection(l));
     if (l.type === 'shape') kids.push(shapeSection(l));
     if (l.type === 'adjust') kids.push(adjSection(l));
-    if (l.type !== 'adjust') kids.push(transformSection(l));
+    if (l.type === 'effect') kids.push(effectSection(l));
+    if (l.type === 'group') kids.push(section('Group', h('p', { class: 'props-note' },
+      `${l.children.length} layer${l.children.length === 1 ? '' : 's'}. With "Pass Through" blending, adjustments and effects inside the group also affect layers below it; pick any other blend mode in the Layers panel to keep them inside the group.`)));
+    if (l.mask) kids.push(maskSection(l));
+    if (isPlaced(l)) kids.push(transformSection(l));
     body.replaceChildren(...kids.filter(Boolean) as HTMLElement[]);
   };
 
   const signature = () => {
     const doc = app.doc, l = doc?.active;
-    return doc && l ? `${l.id}|${l.type}|${doc.index}|${doc.entries.length}` : String(!!doc);
+    return doc && l ? `${l.id}|${l.type}|${!!l.mask}|${doc.maskEdit}|${doc.index}|${doc.entries.length}` : String(!!doc);
   };
 
   // Rebuild when the selected layer or the history position changes; otherwise just refresh numbers in place

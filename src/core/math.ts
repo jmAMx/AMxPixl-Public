@@ -68,6 +68,14 @@ export function roundOut(r: Rect): Rect {
 /** Rounds away floating-point noise (e.g. -1.2e-16 -> 0) so repeated flips/rotations stay exact. */
 export const tidy = (v: number) => Math.round(v * 1e9) / 1e9 + 0;
 
+/** Splits an affine matrix back into position/rotation/scale (exact for rotations, flips and uniform scales). */
+export function decompose(m: Mat): Xform {
+  const sx = Math.hypot(m[0], m[1]);
+  const rot = Math.atan2(tidy(m[1]), tidy(m[0]));
+  const sy = (m[0] * m[3] - m[1] * m[2]) / (sx || 1e-9);
+  return { x: tidy(m[4]), y: tidy(m[5]), sx: tidy(sx), sy: tidy(sy), rot: tidy(rot) };
+}
+
 export function intersect(a: Rect, b: Rect): Rect | null {
   const x = Math.max(a.x, b.x), y = Math.max(a.y, b.y);
   const x1 = Math.min(a.x + a.w, b.x + b.w), y1 = Math.min(a.y + a.h, b.y + b.h);

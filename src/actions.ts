@@ -1,13 +1,14 @@
 import { app } from './app';
 import { defaultAdj, ADJ_LABELS } from './core/adjustments';
-import { Doc, newId } from './core/document';
+import { Doc, flatLayers, newId } from './core/document';
+import { defaultFx, fxDef } from './core/effects';
 import { baseName, canvasBlob, decodeImage, decodePixl, docFromCanvas, encodePixl, extOf, PIXL_ACCEPT, saveBlob } from './core/fileio';
-import { cloneCanvas, ctx2d, layerMatrix, localBounds, newCanvas } from './core/layers';
-import { apply, mul, roundOut, tidy, xformMatrix, type Mat, type Pt, type Rect, type Xform } from './core/math';
+import { cloneCanvas, ctx2d, follow, layerMatrix, localBounds, newCanvas } from './core/layers';
+import { apply, decompose, invert, matScale, mul, roundOut, setT, tidy, union, xformMatrix, type Mat, type Pt, type Rect, type Xform } from './core/math';
 import { flatten, renderDoc } from './core/render';
 import { invertSel, mapSel, selBounds } from './core/selection';
-import type { AdjKind, Layer, PlacedLayer, RasterLayer } from './core/types';
-import { isPlaced } from './core/types';
+import type { AdjKind, GroupLayer, Layer, Mask, PlacedLayer, RasterLayer } from './core/types';
+import { isFilter, isPlaced } from './core/types';
 import { view } from './ui/canvasview';
 import { ask, toast } from './ui/widgets';
 
@@ -139,12 +140,55 @@ export function newAdjustment(kind: AdjKind) {
   doc.commit(`New ${ADJ_LABELS[kind]} layer`);
 }
 
+export function newEffect(kind: string) {
+  const doc = need(); const def = fxDef(kind); if (!doc || !def) return;
+  doc.insertLayer({ id: newId(), type: 'effect', name: def.label, visible: true, opacity: 1, blend: 'normal', fx: defaultFx(kind) });
+  doc.commit(`New ${def.label} layer`);
+}
+
+export function newGroup() {
+  const doc = need(); if (!doc) return;
+  doc.insertLayer({ id: newId(), type: 'group', name: doc.nextName('Group'), visible: true, opacity: 1, blend: 'pass-through', children: [], open: true });
+  doc.commit('New group');
+}
+
+/** Puts the active layer into a new group in its place. */
+export function groupLayer() {
+  const doc = need(); const l = doc?.active; if (!doc || !l) return;
+  const at = doc.locate(l.id)!;
+  const g: GroupLayer = { id: newId(), type: 'group', name: doc.nextName('Group'), visible: true, opacity: 1, blend: 'pass-through', children: [l], open: true };
+  at.list.splice(at.index, 1, g);
+  doc.setActive(g.id);
+  doc.commit('Group layer');
+}
+
+export function ungroup() {
+  const doc = need(); const a = doc?.active; if (!doc || !a) return;
+  const g = a.type === 'group' ? a : doc.locate(a.id)?.parent;
+  if (!g) { toast('Select a group to ungroup.'); return; }
+  const at = doc.locate(g.id)!;
+  at.list.splice(at.index, 1, ...g.children);
+  doc.setActive(g.children[g.children.length - 1]?.id ?? null);
+  doc.commit('Ungroup');
+}
+
+/** Copies a layer (and a group's whole contents) with fresh ids and its own pixel buffers. */
+function cloneLayer(doc: Doc, l: Layer): Layer {
+  const c = structuredClone(l) as Layer;
+  const fix = (x: Layer) => {
+    x.id = newId();
+    if (x.type === 'raster') x.key = doc.addCanvas(cloneCanvas(doc.pool.get(x.key)!));
+    if (x.mask) x.mask.key = doc.addCanvas(cloneCanvas(doc.pool.get(x.mask.key)!));
+    if (x.type === 'group') x.children.forEach(fix);
+  };
+  fix(c);
+  return c;
+}
+
 export function duplicateLayer() {
   const doc = need(); const l = doc?.active; if (!doc || !l) return;
-  const copy = structuredClone(l) as Layer;
-  copy.id = newId();
+  const copy = cloneLayer(doc, l);
   copy.name = `${l.name} copy`;
-  if (copy.type === 'raster') copy.key = doc.addCanvas(cloneCanvas(doc.canvasOf(copy)));
   doc.insertLayer(copy, l.id);
   doc.commit('Duplicate layer');
 }
@@ -155,27 +199,35 @@ export function deleteLayer(id = app.doc?.activeId) {
   doc.commit('Delete layer');
 }
 
-export function setLayerProp(id: string, patch: Partial<Pick<Layer, 'name' | 'visible' | 'opacity' | 'blend'>>, label?: string) {
+export function setLayerProp(id: string, patch: Partial<Pick<Layer, 'name' | 'visible' | 'opacity' | 'blend' | 'clip'>>, label?: string) {
   const doc = need(); const l = doc?.layer(id); if (!doc || !l) return;
   Object.assign(l, patch);
   if (label) doc.commit(label); else doc.touch('meta');
 }
 
-export function moveLayer(id: string, toIndex: number) {
-  const doc = need(); if (!doc) return;
-  const i = doc.indexOf(id);
-  if (i < 0) return;
-  const [l] = doc.layers.splice(i, 1);
-  doc.layers.splice(Math.max(0, Math.min(doc.layers.length, toIndex)), 0, l);
+/** Moves a layer into `list` (the document's or a group's children) at `index`. */
+export function moveLayer(id: string, list: Layer[], index: number) {
+  const doc = need(); const l = doc?.layer(id); if (!doc || !l) return;
+  if (l.type === 'group' && (l.children === list || flatLayers(l.children).some((x) => x.type === 'group' && x.children === list))) return;
+  doc.moveLayerTo(id, list, index);
   doc.commit('Reorder layers');
 }
 
 export function arrange(dir: 'up' | 'down' | 'top' | 'bottom') {
   const doc = need(); const id = doc?.activeId; if (!doc || !id) return;
-  const i = doc.indexOf(id);
-  const to = dir === 'up' ? i + 1 : dir === 'down' ? i - 1 : dir === 'top' ? doc.layers.length - 1 : 0;
-  if (to === i || to < 0 || to >= doc.layers.length) return;
-  moveLayer(id, to);
+  const at = doc.locate(id)!;
+  const i = at.index, n = at.list.length;
+  const to = dir === 'up' ? i + 2 : dir === 'down' ? i - 1 : dir === 'top' ? n : 0;
+  if ((dir === 'up' && i >= n - 1) || (dir === 'down' && i <= 0)) return;
+  moveLayer(id, at.list, to);
+}
+
+export function toggleClip() {
+  const doc = need(); const l = doc?.active; if (!doc || !l) return;
+  const at = doc.locate(l.id)!;
+  if (!l.clip && at.index === 0) { toast('A clipping mask needs a layer below it to clip to.'); return; }
+  l.clip = !l.clip;
+  doc.commit(l.clip ? 'Create clipping mask' : 'Release clipping mask');
 }
 
 function rasterOf(doc: Doc, layers: Layer[], rect: Rect): HTMLCanvasElement {
@@ -184,27 +236,36 @@ function rasterOf(doc: Doc, layers: Layer[], rect: Rect): HTMLCanvasElement {
   return c;
 }
 
+const fullRect = (doc: Doc): Rect => ({ x: 0, y: 0, w: doc.width, h: doc.height });
+
+/** Turns text, a shape or a whole group into plain pixels (keeping its mask, clipping and blend). */
 export function rasterizeLayer() {
   const doc = need(); const l = doc?.active;
-  if (!doc || !l || l.type === 'raster' || l.type === 'adjust') { toast('Select a text or shape layer to rasterize.'); return; }
-  const b = roundOut(doc.layerBounds(l));
-  const c = rasterOf(doc, [{ ...l, opacity: 1, blend: 'normal', visible: true }], b);
-  const r: RasterLayer = { id: l.id, type: 'raster', name: l.name, visible: l.visible, opacity: l.opacity, blend: l.blend, key: doc.addCanvas(c), t: { x: b.x, y: b.y, sx: 1, sy: 1, rot: 0 } };
-  doc.layers[doc.indexOf(l.id)] = r;
-  doc.commit('Rasterize');
+  if (!doc || !l || l.type === 'raster' || isFilter(l)) { toast('Select a text, shape or group layer to rasterize.'); return; }
+  const b = l.type === 'group' ? fullRect(doc) : roundOut(doc.layerBounds(l));
+  const c = rasterOf(doc, [{ ...l, opacity: 1, blend: l.type === 'group' ? 'pass-through' : 'normal', visible: true, mask: null, clip: false } as Layer], b);
+  const r: RasterLayer = {
+    id: l.id, type: 'raster', name: l.name, visible: l.visible, opacity: l.opacity, blend: l.blend === 'pass-through' ? 'normal' : l.blend,
+    clip: l.clip, mask: l.mask, key: doc.addCanvas(c), t: { x: b.x, y: b.y, sx: 1, sy: 1, rot: 0 },
+  };
+  const at = doc.locate(l.id)!;
+  at.list[at.index] = r;
+  doc.commit(l.type === 'group' ? 'Merge group' : 'Rasterize');
 }
 
 export function mergeDown() {
   const doc = need(); const l = doc?.active; if (!doc || !l) return;
-  const i = doc.indexOf(l.id);
-  const below = doc.layers[i - 1];
+  const at = doc.locate(l.id)!;
+  const below = at.list[at.index - 1];
   if (!below) { toast('There is no layer below to merge into.'); return; }
-  if (below.type === 'adjust') { toast("Can't merge into an adjustment layer."); return; }
-  const full = { x: 0, y: 0, w: doc.width, h: doc.height };
-  const c = rasterOf(doc, [{ ...below, opacity: 1, blend: 'normal', visible: true }, { ...l, visible: true }], full);
-  const merged: RasterLayer = { id: below.id, type: 'raster', name: below.name, visible: below.visible, opacity: below.opacity, blend: below.blend, key: doc.addCanvas(c), t: { x: 0, y: 0, sx: 1, sy: 1, rot: 0 } };
-  doc.layers.splice(i - 1, 2, merged);
-  doc.activeId = merged.id;
+  if (isFilter(below)) { toast("Can't merge into an adjustment or effect layer."); return; }
+  const c = rasterOf(doc, [{ ...below, opacity: 1, blend: below.type === 'group' ? 'pass-through' : 'normal', visible: true, clip: false } as Layer, { ...l, visible: true }], fullRect(doc));
+  const merged: RasterLayer = {
+    id: below.id, type: 'raster', name: below.name, visible: below.visible, opacity: below.opacity,
+    blend: below.blend === 'pass-through' ? 'normal' : below.blend, clip: below.clip, key: doc.addCanvas(c), t: { x: 0, y: 0, sx: 1, sy: 1, rot: 0 },
+  };
+  at.list.splice(at.index - 1, 2, merged);
+  doc.setActive(merged.id);
   doc.commit('Merge down');
 }
 
@@ -213,8 +274,14 @@ export function flattenImage() {
   const c = flatten(doc);
   const l: RasterLayer = { id: newId(), type: 'raster', name: 'Background', visible: true, opacity: 1, blend: 'normal', key: doc.addCanvas(c), t: { x: 0, y: 0, sx: 1, sy: 1, rot: 0 } };
   doc.layers = [l];
-  doc.activeId = l.id;
+  doc.setActive(l.id);
   doc.commit('Flatten image');
+}
+
+/** Changes a placed layer's transform; a mask on the layer moves with it. */
+export function setPlacedTransform(l: PlacedLayer, t: Xform) {
+  if (l.mask) l.mask.t = follow(l.mask.t, layerMatrix(l), t);
+  l.t = t;
 }
 
 /** Sets a layer's transform so the local point `lp` lands on document point `dp`. */
@@ -229,7 +296,7 @@ function aboutCenter(label: string, f: (t: Xform) => Xform) {
   const b = localBounds(l, doc.pool);
   const lc = { x: b.x + b.w / 2, y: b.y + b.h / 2 };
   const dc = apply(layerMatrix(l), lc.x, lc.y);
-  l.t = placeAt(f(l.t), lc, dc);
+  setPlacedTransform(l, placeAt(f(l.t), lc, dc));
   doc.commit(label);
 }
 
@@ -239,17 +306,10 @@ export const resetTransform = () => aboutCenter('Reset transform', (t) => ({ ...
 
 // ---------- whole-document transforms (all lossless) ----------
 
-/** Splits an affine matrix back into position/rotation/scale (exact for rotations, flips and uniform scales). */
-function decompose(m: Mat): Xform {
-  const sx = Math.hypot(m[0], m[1]);
-  const rot = Math.atan2(tidy(m[1]), tidy(m[0]));
-  const sy = (m[0] * m[3] - m[1] * m[2]) / (sx || 1e-9);
-  return { x: tidy(m[4]), y: tidy(m[5]), sx: tidy(sx), sy: tidy(sy), rot: tidy(rot) };
-}
-
 export function transformDoc(label: string, g: Mat, w: number, h: number, scaleShapes?: [number, number]) {
   const doc = need(); if (!doc) return;
-  for (const l of doc.layers) {
+  for (const l of doc.all()) {
+    if (l.mask) l.mask.t = decompose(mul(g, xformMatrix(l.mask.t)));
     if (!isPlaced(l)) continue;
     if (l.type === 'shape' && scaleShapes) {
       const [kx, ky] = scaleShapes;
@@ -304,6 +364,75 @@ export function flipCanvas(axis: 'h' | 'v') {
   transformDoc(axis === 'h' ? 'Flip canvas horizontal' : 'Flip canvas vertical', axis === 'h' ? [-1, 0, 0, 1, W, 0] : [1, 0, 0, -1, 0, H], W, H);
 }
 
+// ---------- masks ----------
+
+/** Adds a mask: show everything, hide everything, or show just the current selection. */
+export function addMask(mode: 'reveal' | 'hide' | 'selection' = app.doc?.selection ? 'selection' : 'reveal') {
+  const doc = need(); const l = doc?.active; if (!doc || !l) return;
+  if (l.mask) { toast('This layer already has a mask.'); return; }
+  let r = fullRect(doc);
+  if (isPlaced(l)) r = roundOut(union(r, doc.layerBounds(l)));
+  const c = newCanvas(r.w, r.h);
+  const x = ctx2d(c);
+  if (mode === 'reveal') { x.fillStyle = '#fff'; x.fillRect(0, 0, r.w, r.h); }
+  else if (mode === 'selection') { const s = doc.selectionMask(); if (s) x.drawImage(s, -r.x, -r.y); }
+  l.mask = { key: doc.addCanvas(c), t: { x: r.x, y: r.y, sx: 1, sy: 1, rot: 0 }, enabled: true, density: 1, feather: 0 };
+  doc.maskEdit = true;
+  if (mode === 'selection') doc.setSelection(null);
+  doc.commit('Add layer mask');
+}
+
+export function deleteMask() {
+  const doc = need(); const l = doc?.active; if (!doc || !l?.mask) return;
+  l.mask = null;
+  doc.maskEdit = false;
+  doc.commit('Delete layer mask');
+}
+
+export function setMaskProp(patch: Partial<Pick<Mask, 'enabled' | 'density' | 'feather'>>, label?: string) {
+  const doc = need(); const m = doc?.active?.mask; if (!doc || !m) return;
+  Object.assign(m, patch);
+  if (label) doc.commit(label); else doc.touch('meta');
+}
+
+export function invertMask() {
+  const doc = need(); const m = doc?.active?.mask; if (!doc || !m) return;
+  doc.editPixels(m, 'Invert mask', (ctx, c) => {
+    const tmp = newCanvas(c.width, c.height);
+    const t = ctx2d(tmp);
+    t.fillStyle = '#fff';
+    t.fillRect(0, 0, c.width, c.height);
+    t.globalCompositeOperation = 'destination-out';
+    t.drawImage(c, 0, 0);
+    ctx.globalCompositeOperation = 'copy';
+    ctx.drawImage(tmp, 0, 0);
+  });
+}
+
+/** Bakes the mask into an image layer's pixels and removes it. */
+export function applyMask() {
+  const doc = need(); const l = doc?.active;
+  if (!doc || !l?.mask) return;
+  if (l.type !== 'raster') { toast('Only image layers can have their mask applied. Rasterize first.'); return; }
+  const m = l.mask;
+  const mc = doc.pool.get(m.key)!;
+  const rel = mul(invert(layerMatrix(l)), xformMatrix(m.t));
+  doc.editPixels(l, 'Apply layer mask', (ctx, c) => {
+    const tmp = newCanvas(c.width, c.height);
+    const t = ctx2d(tmp);
+    t.save();
+    setT(t, rel);
+    if (m.feather > 0) t.filter = `blur(${m.feather / matScale(layerMatrix(l))}px)`;
+    t.drawImage(mc, 0, 0);
+    t.restore();
+    if (m.density < 1) { t.fillStyle = `rgba(255,255,255,${1 - m.density})`; t.fillRect(0, 0, c.width, c.height); }
+    ctx.globalCompositeOperation = 'destination-in';
+    ctx.drawImage(tmp, 0, 0);
+    l.mask = null;
+    doc.maskEdit = false;
+  });
+}
+
 // ---------- selection ----------
 
 export function selectAll() {
@@ -324,38 +453,48 @@ export function invertSelection() {
   doc.commit('Invert selection');
 }
 
-function needRaster(doc: Doc, verb: string): RasterLayer | null {
+function needTarget(doc: Doc, verb: string) {
+  const pt = doc.paintTarget();
+  if (pt) return pt;
   const l = doc.active;
-  if (l?.type === 'raster') return l;
-  toast(l ? `Can't ${verb} a ${l.type === 'adjust' ? 'adjustment' : l.type} layer${l.type === 'adjust' ? '' : ' (rasterize it first)'}.` : 'Select a layer first.');
+  toast(!l ? 'Select a layer first.' : isFilter(l) || l.type === 'group'
+    ? `Can't ${verb} a ${l.type === 'group' ? 'group' : l.type === 'effect' ? 'effect' : 'adjustment'} layer (add a mask to paint where it applies).`
+    : `Can't ${verb} a ${l.type} layer (rasterize it first).`);
   return null;
 }
 
+/** Delete: clears the selected pixels (or hides them, on a mask). With nothing selected, deletes the layer. */
 export function clearSelection() {
   const doc = need(); if (!doc) return;
   if (!doc.selection) { if (doc.active) deleteLayer(); return; }
-  const l = needRaster(doc, 'clear pixels on'); if (!l) return;
-  const mask = doc.maskForLayer(l)!;
-  doc.editPixels(l, 'Clear', (ctx) => { ctx.globalCompositeOperation = 'destination-out'; ctx.drawImage(mask, 0, 0); });
+  const pt = needTarget(doc, 'clear pixels on'); if (!pt) return;
+  const mask = doc.maskForLayer(pt.target)!;
+  doc.editPixels(pt.target, pt.isMask ? 'Hide in mask' : 'Clear', (ctx) => { ctx.globalCompositeOperation = 'destination-out'; ctx.drawImage(mask, 0, 0); });
 }
 
+/** Fills the selection (or everything) with a colour. On a mask, light colours reveal and dark ones hide. */
 export function fillWith(which: 'fg' | 'bg') {
   const doc = need(); if (!doc) return;
-  const l = needRaster(doc, 'fill'); if (!l) return;
-  doc.ensureCovers(l);
-  const mask = doc.maskForLayer(l);
+  const pt = needTarget(doc, 'fill'); if (!pt) return;
+  doc.ensureCovers(pt.target);
+  const mask = doc.maskForLayer(pt.target);
   const color = app[which];
-  doc.editPixels(l, 'Fill', (ctx, c) => {
-    if (!mask) { ctx.fillStyle = color; ctx.fillRect(0, 0, c.width, c.height); return; }
+  const hide = pt.isMask && lumOf(color) < 0.5;
+  doc.editPixels(pt.target, pt.isMask ? (hide ? 'Hide in mask' : 'Reveal in mask') : 'Fill', (ctx, c) => {
     const tmp = newCanvas(c.width, c.height);
     const t = ctx2d(tmp);
-    t.fillStyle = color;
+    t.fillStyle = pt.isMask ? '#fff' : color;
     t.fillRect(0, 0, c.width, c.height);
-    t.globalCompositeOperation = 'destination-in';
-    t.drawImage(mask, 0, 0);
+    if (mask) { t.globalCompositeOperation = 'destination-in'; t.drawImage(mask, 0, 0); }
+    ctx.globalCompositeOperation = hide ? 'destination-out' : 'source-over';
     ctx.drawImage(tmp, 0, 0);
   });
-  app.useColor(color);
+  if (!pt.isMask) app.useColor(color);
+}
+
+export function lumOf(hex: string) {
+  const n = parseInt(hex.slice(1), 16) || 0;
+  return (((n >> 16) & 255) * 0.299 + ((n >> 8) & 255) * 0.587 + (n & 255) * 0.114) / 255;
 }
 
 // ---------- clipboard ----------
@@ -365,10 +504,10 @@ let clip: { canvas: HTMLCanvasElement; at: Pt } | null = null;
 export async function copy(merged = false, cut = false) {
   const doc = need(); if (!doc) return;
   const l = doc.active;
-  if (!merged && !isPlaced(l)) { toast('Select an image layer to copy from.'); return; }
-  const r = (doc.selection && selBounds(doc.selection, doc.width, doc.height)) || (merged || !l ? { x: 0, y: 0, w: doc.width, h: doc.height } : roundOut(doc.layerBounds(l as PlacedLayer)));
+  if (!merged && !isPlaced(l)) { toast('Select an image layer to copy from (or use Copy Merged).'); return; }
+  const r = (doc.selection && selBounds(doc.selection, doc.width, doc.height)) || (merged || !l ? fullRect(doc) : roundOut(doc.layerBounds(l as PlacedLayer)));
   const c = newCanvas(r.w, r.h);
-  renderDoc(doc, c, [1, 0, 0, 1, -r.x, -r.y], { layers: merged ? undefined : [{ ...(l as PlacedLayer), opacity: 1, blend: 'normal', visible: true }], clip: merged });
+  renderDoc(doc, c, [1, 0, 0, 1, -r.x, -r.y], { layers: merged ? undefined : [{ ...(l as PlacedLayer), opacity: 1, blend: 'normal', visible: true, clip: false }], clip: merged });
   const mask = doc.selectionMask();
   if (mask) { const x = ctx2d(c); x.globalCompositeOperation = 'destination-in'; x.drawImage(mask, -r.x, -r.y); }
   clip = { canvas: c, at: { x: r.x, y: r.y } };

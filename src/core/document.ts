@@ -1,8 +1,8 @@
 import { apply, invert, mapRect, roundOut, union, xformMatrix, type Rect } from './math';
-import { cloneCanvas, cropCanvas, ctx2d, layerMatrix, localBounds, newCanvas, type Pool } from './layers';
+import { cropCanvas, ctx2d, layerMatrix, localBounds, newCanvas, type Pool } from './layers';
 import { invalidate } from './pyramid';
 import { buildMask } from './selection';
-import type { Layer, Meta, PlacedLayer, RasterLayer, Selection } from './types';
+import type { GroupLayer, Layer, Meta, PixelTarget, PlacedLayer, RasterLayer, Selection } from './types';
 import { isPlaced } from './types';
 
 /**
@@ -23,6 +23,27 @@ export const newId = () => `L${Date.now().toString(36)}${(idSeq++).toString(36)}
 
 export type ChangeKind = 'pixels' | 'meta' | 'history';
 
+/** Every layer in a tree, bottom to top; a group's children come just before the group itself. */
+export function flatLayers(list: Layer[], out: Layer[] = []): Layer[] {
+  for (const l of list) {
+    if (l.type === 'group') flatLayers(l.children, out);
+    out.push(l);
+  }
+  return out;
+}
+
+/** Visible pixel-carrying layers in the order they're drawn (hidden groups hide their children). */
+export function visiblePlaced(list: Layer[], out: PlacedLayer[] = []): PlacedLayer[] {
+  for (const l of list) {
+    if (!l.visible) continue;
+    if (l.type === 'group') visiblePlaced(l.children, out);
+    else if (isPlaced(l)) out.push(l);
+  }
+  return out;
+}
+
+export interface Located { list: Layer[]; index: number; parent: GroupLayer | null }
+
 export class Doc {
   name: string;
   width: number;
@@ -31,6 +52,9 @@ export class Doc {
   activeId: string | null = null;
   selection: Selection | null = null;
   counter = 1;
+
+  /** Painting goes to the active layer's mask instead of its pixels (UI state, not part of history). */
+  maskEdit = false;
 
   readonly pool: Pool = new Map();
   entries: Entry[] = [];
@@ -59,12 +83,24 @@ export class Doc {
   }
 
   get dirty() { return this.index !== this.savedIndex; }
-  get active(): Layer | null { return this.layers.find((l) => l.id === this.activeId) ?? null; }
+  get active(): Layer | null { return this.activeId ? this.layer(this.activeId) : null; }
   get activePlaced(): PlacedLayer | null { const a = this.active; return isPlaced(a) ? a : null; }
   get activeRaster(): RasterLayer | null { const a = this.active; return a?.type === 'raster' ? a : null; }
 
-  layer(id: string) { return this.layers.find((l) => l.id === id) ?? null; }
-  indexOf(id: string) { return this.layers.findIndex((l) => l.id === id); }
+  /** All layers, depth-first, bottom to top. */
+  all(): Layer[] { return flatLayers(this.layers); }
+
+  layer(id: string): Layer | null { return this.all().find((l) => l.id === id) ?? null; }
+
+  /** Where a layer lives in the tree: its sibling list, its index there, and its group (if any). */
+  locate(id: string, list: Layer[] = this.layers, parent: GroupLayer | null = null): Located | null {
+    for (let i = 0; i < list.length; i++) {
+      const l = list[i];
+      if (l.id === id) return { list, index: i, parent };
+      if (l.type === 'group') { const r = this.locate(id, l.children, l); if (r) return r; }
+    }
+    return null;
+  }
 
   snapshot(): Meta {
     return structuredClone({
@@ -77,6 +113,7 @@ export class Doc {
     const c = structuredClone(m);
     this.width = c.width; this.height = c.height; this.layers = c.layers;
     this.activeId = c.activeId; this.selection = c.selection; this.counter = c.counter;
+    if (!this.active?.mask) this.maskEdit = false;
   }
 
   /** Something changed that isn't (yet) a history step, e.g. a slider being dragged. */
@@ -85,7 +122,7 @@ export class Doc {
     this.onChange(this, kind);
   }
 
-  /** A raster buffer's pixels changed (painting, filters, undo); `r` limits it to a region of that buffer. */
+  /** A pixel buffer changed (painting, filters, undo); `r` limits it to a region of that buffer. */
   markPixels(key: string, notify = true, r?: Rect) {
     invalidate(this.pool.get(key), r);
     if (notify) this.touch('pixels');
@@ -190,7 +227,10 @@ export class Doc {
   /** Frees pixel buffers no longer reachable from the document or any history step. */
   gc() {
     const live = new Set<string>();
-    const scan = (ls: Layer[]) => ls.forEach((l) => l.type === 'raster' && live.add(l.key));
+    const scan = (ls: Layer[]) => flatLayers(ls).forEach((l) => {
+      if (l.type === 'raster') live.add(l.key);
+      if (l.mask) live.add(l.mask.key);
+    });
     scan(this.layers);
     for (const e of this.entries) { scan(e.before.layers); scan(e.after.layers); e.pixels.forEach((p) => live.add(p.key)); }
     for (const k of [...this.pool.keys()]) if (!live.has(k)) this.pool.delete(k);
@@ -204,43 +244,47 @@ export class Doc {
     return k;
   }
 
-  canvasOf(l: RasterLayer) { return this.pool.get(l.key)!; }
+  canvasOf(t: PixelTarget) { return this.pool.get(t.key)!; }
 
-  /** Gives a raster layer its own copy of its pixels under a new key (so edits can't reach shared history buffers). */
-  forkPixels(l: RasterLayer) {
-    l.key = this.addCanvas(cloneCanvas(this.canvasOf(l)));
+  /** What painting tools should draw on: the active layer's mask (in mask mode) or its pixels. */
+  paintTarget(): { target: PixelTarget; isMask: boolean; layer: Layer } | null {
+    const a = this.active;
+    if (!a) return null;
+    if (this.maskEdit && a.mask) return { target: a.mask, isMask: true, layer: a };
+    if (a.type === 'raster') return { target: a, isMask: false, layer: a };
+    return null;
   }
 
   /**
-   * Grows a raster layer's pixel buffer so it covers `docRect`, keeping existing pixels in place. Lets you paint
-   * past a pasted image's edges. Returns false when the layer is scaled so far down that covering would be huge.
+   * Grows a pixel buffer so it covers `docRect`, keeping existing pixels in place. Lets you paint past a pasted
+   * image's edges. Returns false when the target is scaled so far down that covering would be huge.
    */
-  ensureCovers(l: RasterLayer, docRect: Rect = { x: 0, y: 0, w: this.width, h: this.height }) {
-    const src = this.canvasOf(l);
-    const need = roundOut(mapRect(invert(layerMatrix(l)), docRect));
+  ensureCovers(t: PixelTarget, docRect: Rect = { x: 0, y: 0, w: this.width, h: this.height }) {
+    const src = this.canvasOf(t);
+    const need = roundOut(mapRect(invert(xformMatrix(t.t)), docRect));
     const cur = { x: 0, y: 0, w: src.width, h: src.height };
     const u = roundOut(union(cur, need));
     if (u.x >= 0 && u.y >= 0 && u.x + u.w <= cur.w && u.y + u.h <= cur.h) return true;
     if (u.w > 12000 || u.h > 12000 || u.w * u.h > 80e6) return false;
     const c = newCanvas(u.w, u.h);
     ctx2d(c).drawImage(src, -u.x, -u.y);
-    const m = xformMatrix({ ...l.t, x: 0, y: 0 });
+    const m = xformMatrix({ ...t.t, x: 0, y: 0 });
     const shift = apply(m, u.x, u.y);
-    l.t = { ...l.t, x: l.t.x + shift.x, y: l.t.y + shift.y };
-    l.key = this.addCanvas(c);
+    t.t = { ...t.t, x: t.t.x + shift.x, y: t.t.y + shift.y };
+    t.key = this.addCanvas(c);
     return true;
   }
 
-  /** Runs `fn` on a raster layer's pixels and records the change (limited to `rect` in layer pixels if given). */
-  editPixels(l: RasterLayer, label: string, fn: (ctx: CanvasRenderingContext2D, c: HTMLCanvasElement) => void, rect?: Rect) {
-    const c = this.canvasOf(l);
+  /** Runs `fn` on a pixel buffer and records the change (limited to `rect` in buffer pixels if given). */
+  editPixels(t: PixelTarget, label: string, fn: (ctx: CanvasRenderingContext2D, c: HTMLCanvasElement) => void, rect?: Rect) {
+    const c = this.canvasOf(t);
     const r = rect ?? { x: 0, y: 0, w: c.width, h: c.height };
     const ctx = ctx2d(c);
     const before = cropCanvas(c, r);
     ctx.save();
     fn(ctx, c);
     ctx.restore();
-    this.commit(label, [{ key: l.key, rect: r, before, after: null }]);
+    this.commit(label, [{ key: t.key, rect: r, before, after: null }]);
   }
 
   // ---------- selection ----------
@@ -259,14 +303,14 @@ export class Doc {
     return canvas;
   }
 
-  /** The selection mask mapped into a raster layer's own pixel grid. */
-  maskForLayer(l: RasterLayer): HTMLCanvasElement | null {
+  /** The selection mask mapped into a pixel buffer's own grid. */
+  maskForLayer(t: PixelTarget): HTMLCanvasElement | null {
     const mask = this.selectionMask();
     if (!mask) return null;
-    const src = this.canvasOf(l);
+    const src = this.canvasOf(t);
     const c = newCanvas(src.width, src.height);
     const ctx = ctx2d(c);
-    const m = invert(layerMatrix(l));
+    const m = invert(xformMatrix(t.t));
     ctx.setTransform(m[0], m[1], m[2], m[3], m[4], m[5]);
     ctx.imageSmoothingEnabled = true;
     ctx.drawImage(mask, 0, 0);
@@ -277,17 +321,37 @@ export class Doc {
 
   nextName(base = 'Layer') { return `${base} ${this.counter++}`; }
 
+  /** Inserts above `aboveId` in the same group (or at the top of the document). */
   insertLayer(l: Layer, aboveId: string | null = this.activeId) {
-    const i = aboveId ? this.indexOf(aboveId) : -1;
-    this.layers.splice(i >= 0 ? i + 1 : this.layers.length, 0, l);
+    const at = aboveId ? this.locate(aboveId) : null;
+    if (at) at.list.splice(at.index + 1, 0, l);
+    else this.layers.push(l);
     this.activeId = l.id;
+    this.maskEdit = false;
   }
 
   removeLayer(id: string) {
-    const i = this.indexOf(id);
-    if (i < 0) return;
-    this.layers.splice(i, 1);
-    if (this.activeId === id) this.activeId = this.layers[Math.min(i, this.layers.length - 1)]?.id ?? (this.layers[i - 1]?.id ?? null);
+    const at = this.locate(id);
+    if (!at) return;
+    at.list.splice(at.index, 1);
+    if (this.activeId === id || !this.layer(this.activeId ?? '')) {
+      this.activeId = at.list[Math.min(at.index, at.list.length - 1)]?.id ?? at.parent?.id ?? this.layers[this.layers.length - 1]?.id ?? null;
+    }
+    this.maskEdit = false;
+  }
+
+  /** Moves a layer to `index` within `list` (which may be a group's children). */
+  moveLayerTo(id: string, list: Layer[], index: number) {
+    const at = this.locate(id);
+    if (!at) return;
+    const [l] = at.list.splice(at.index, 1);
+    if (at.list === list && at.index < index) index--;
+    list.splice(Math.max(0, Math.min(list.length, index)), 0, l);
+  }
+
+  setActive(id: string | null, mask = false) {
+    this.activeId = id;
+    this.maskEdit = mask && !!this.active?.mask;
   }
 
   newRasterLayer(name = this.nextName(), fill?: string): RasterLayer {

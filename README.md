@@ -24,7 +24,9 @@ This runs the desktop app with live reload. `npm run package` builds `src-tauri/
 ## What makes it different
 
 - **Lossless transforms.** Layers keep their original pixels. You can scale, rotate, flip, resize the image or crop as many times as you like, and nothing degrades. Pixels are resampled once, on export.
-- **Adjustment layers on the GPU:** Brightness/Contrast, Levels, Curves, Exposure, Hue/Saturation, Vibrance, Color Balance, Black & White, Invert, Threshold and Posterize. All of them can be edited or removed later.
+- **Adjustment layers on the GPU:** Brightness/Contrast, Levels, Curves, Exposure, Hue/Saturation, HSL / Colour Mixer, Vibrance, Color Balance, Colour Grading, Photo Filter, Channel Mixer, Gradient Map, Black & White, Invert, Threshold and Posterize. All of them can be edited or removed later.
+- **Effect layers on the GPU:** film grain, halation, bloom, diffusion, light leaks, fade & split tone, dust & scratches, lens distortion, chromatic aberration, vignette, CRT screen, VHS tape, compression artifacts, bit crush & dither, glitch and halftone. Sizes are in document pixels, so the preview matches the export at any zoom.
+- **Compositing:** layer masks (with live density and feather), clipping masks, and layer groups (Pass Through or isolated).
 - **Vector text and shapes** stay sharp at any size until you rasterize them.
 - **Fast on integrated GPUs.** Zoomed-out views draw from a cached preview pyramid, and undo data stays on the GPU.
 

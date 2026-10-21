@@ -3,7 +3,7 @@ import { createDoc, exportImage, nextUntitled, resizeCanvas, resizeImage } from 
 import { cloneCanvas, ctx2d } from '../core/layers';
 import { FILTERS, maskedMerge, type FilterDef, type Params } from '../core/filters';
 import { h } from './dom';
-import { paintableLayer } from '../tools/paint';
+import { paintableTarget } from '../tools/paint';
 import { checkbox, dialog, numField, seg, slider, toast } from './widgets';
 
 const PRESETS: [string, number, number][] = [
@@ -121,7 +121,8 @@ export function exportDialog() {
 /** Destructive filter with live on-canvas preview; Cancel restores the original pixels. */
 export function filterDialog(def: FilterDef) {
   const doc = app.doc; if (!doc) return;
-  const layer = paintableLayer(doc); if (!layer) return;
+  const pt = paintableTarget(doc); if (!pt) return;
+  const layer = pt.target;
   const src = doc.canvasOf(layer);
   const key = layer.key;
   const backup = cloneCanvas(src);

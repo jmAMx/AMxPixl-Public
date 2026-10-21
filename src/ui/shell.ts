@@ -9,7 +9,7 @@ import { colorPanel } from './colorpanel';
 import { aboutDialog, canvasSizeDialog, exportDialog, filterDialog, imageSizeDialog, newDocDialog, shortcutsDialog } from './dialogs';
 import { h, isTyping } from './dom';
 import { historyPanel } from './historypanel';
-import { layersPanel } from './layerspanel';
+import { effectMenuItems, layersPanel, maskMenuItems } from './layerspanel';
 import { propertiesPanel } from './properties';
 import { closePopups, dialogOpen, icon, popupMenu, toast, type MenuItem } from './widgets';
 
@@ -85,12 +85,19 @@ const MENUS: MenuDef[] = [
   {
     title: 'Layer', items: [
       { label: 'New Layer', accel: 'Ctrl+Shift+N', run: A.newLayer, enabled: hasDoc },
+      { label: 'New Group', run: A.newGroup, enabled: hasDoc },
       { label: 'New Adjustment Layer', sub: () => ADJ_ORDER.map((k) => ({ label: ADJ_LABELS[k], disabled: !app.doc, onClick: () => A.newAdjustment(k) })) },
+      { label: 'New Effect Layer', sub: effectMenuItems },
       { label: 'Duplicate Layer', accel: 'Ctrl+J', run: A.duplicateLayer, enabled: hasLayer },
       { label: 'Delete Layer', run: () => A.deleteLayer(), enabled: hasLayer },
       'sep',
+      { label: 'Group Layer', accel: 'Ctrl+G', run: A.groupLayer, enabled: hasLayer },
+      { label: 'Ungroup', accel: 'Ctrl+Shift+G', run: A.ungroup, enabled: hasLayer },
+      { label: 'Create/Release Clipping Mask', accel: 'Ctrl+Alt+G', run: A.toggleClip, enabled: hasLayer },
+      { label: 'Layer Mask', sub: () => (app.doc?.active ? maskMenuItems() : [{ label: 'Select a layer first', disabled: true }]) },
+      'sep',
       { label: 'Merge Down', accel: 'Ctrl+E', run: A.mergeDown, enabled: hasLayer },
-      { label: 'Rasterize', run: A.rasterizeLayer, enabled: () => app.doc?.active?.type === 'text' || app.doc?.active?.type === 'shape' },
+      { label: 'Rasterize / Merge Group', run: A.rasterizeLayer, enabled: () => ['text', 'shape', 'group'].includes(app.doc?.active?.type ?? '') },
       'sep',
       { label: 'Transform', sub: () => [
         { label: 'Flip Horizontal', onClick: () => A.flipLayer('h'), disabled: !app.doc?.activePlaced },
@@ -116,7 +123,12 @@ const MENUS: MenuDef[] = [
     ],
   },
   {
-    title: 'Filter', items: FILTERS.map((f) => ({ label: `${f.name}…`, run: () => filterDialog(f), enabled: hasLayer })),
+    title: 'Filter', items: [
+      { label: 'Effect Layer (editable)', sub: effectMenuItems },
+      { label: 'Adjustment Layer (editable)', sub: () => ADJ_ORDER.map((k) => ({ label: ADJ_LABELS[k], disabled: !app.doc, onClick: () => A.newAdjustment(k) })) },
+      'sep',
+      ...FILTERS.map((f) => ({ label: `${f.name}…`, run: () => filterDialog(f), enabled: hasLayer })),
+    ],
   },
   {
     title: 'View', items: [

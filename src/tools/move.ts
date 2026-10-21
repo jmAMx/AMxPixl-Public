@@ -1,9 +1,9 @@
 import { app } from '../app';
-import { layerMatrix, localBounds, ctx2d } from '../core/layers';
+import { visiblePlaced } from '../core/document';
+import { follow, layerMatrix, localBounds, ctx2d } from '../core/layers';
 import { apply, corners, invert, pointInPoly, xformMatrix, type Mat, type Pt, type Rect, type Xform } from '../core/math';
 import type { PlacedLayer, ShapeProps } from '../core/types';
-import { isPlaced } from '../core/types';
-import { flipLayer, resetTransform, rotateLayer90 } from '../actions';
+import { flipLayer, resetTransform, rotateLayer90, setPlacedTransform } from '../actions';
 import { view } from '../ui/canvasview';
 import { h } from '../ui/dom';
 import { checkbox, icon } from '../ui/widgets';
@@ -24,6 +24,8 @@ interface Drag {
   p0: Pt;
   t0: Xform;
   m0: Mat;
+  /** The layer mask's placement at drag start (masks move with their layer). */
+  maskT0?: Xform;
   box: Rect;
   shape0?: ShapeProps;
   moved: boolean;
@@ -41,9 +43,9 @@ function screenCorners(l: PlacedLayer): Pt[] {
 /** Top-most visible layer with a pixel (or box) under the document point. */
 export function layerAt(x: number, y: number): PlacedLayer | null {
   const doc = app.doc!;
-  for (let i = doc.layers.length - 1; i >= 0; i--) {
-    const l = doc.layers[i];
-    if (!isPlaced(l) || !l.visible) continue;
+  const layers = visiblePlaced(doc.layers);
+  for (let i = layers.length - 1; i >= 0; i--) {
+    const l = layers[i];
     const b = localBounds(l, doc.pool);
     const lp = apply(invert(layerMatrix(l)), x, y);
     if (lp.x < b.x || lp.y < b.y || lp.x >= b.x + b.w || lp.y >= b.y + b.h) continue;
@@ -111,7 +113,7 @@ class MoveTool implements Tool {
     let hit = this.hit(p);
     if ((app.opts.move.autoSelect || p.ctrl) && hit.kind !== 'scale' && hit.kind !== 'rotate') {
       const l = layerAt(p.x, p.y);
-      if (l && l.id !== doc.activeId) { doc.activeId = l.id; doc.touch('meta'); }
+      if (l && l.id !== doc.activeId) { doc.setActive(l.id); doc.touch('meta'); }
       hit = l ? { kind: 'move' } : hit;
     }
     const l = doc.activePlaced;
@@ -120,7 +122,7 @@ class MoveTool implements Tool {
     this.drag = {
       kind, layer: l, h: hit.kind === 'scale' ? hit.h : undefined, p0: { x: p.x, y: p.y },
       t0: { ...l.t }, m0: layerMatrix(l), box: localBounds(l, doc.pool),
-      shape0: l.type === 'shape' ? { ...l.shape } : undefined, moved: false,
+      shape0: l.type === 'shape' ? { ...l.shape } : undefined, moved: false, maskT0: l.mask ? { ...l.mask.t } : undefined,
     };
   }
 
@@ -167,6 +169,7 @@ class MoveTool implements Tool {
       const off = apply(lin, cl.x, cl.y);
       l.t = { ...d.t0, rot, x: cd.x - off.x, y: cd.y - off.y };
     }
+    if (l.mask && d.maskT0) l.mask.t = follow(d.maskT0, d.m0, l.t);
     app.doc!.touch('meta');
   }
 
@@ -183,7 +186,7 @@ class MoveTool implements Tool {
     const step = e.shiftKey ? 10 : 1;
     const dir = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[e.key];
     if (!dir) return false;
-    l.t = { ...l.t, x: l.t.x + dir[0] * step, y: l.t.y + dir[1] * step };
+    setPlacedTransform(l, { ...l.t, x: l.t.x + dir[0] * step, y: l.t.y + dir[1] * step });
     app.doc!.commit('Nudge');
     return true;
   }

@@ -1,4 +1,4 @@
-import { matScale, mul, setT, xformMatrix, type Mat, type Rect } from './math';
+import { decompose, invert, matScale, mul, setT, xformMatrix, type Mat, type Rect, type Xform } from './math';
 import { displaySource } from './pyramid';
 import { drawText, layoutText } from './text';
 import type { PlacedLayer, ShapeProps } from './types';
@@ -6,6 +6,14 @@ import type { PlacedLayer, ShapeProps } from './types';
 export type Pool = Map<string, HTMLCanvasElement>;
 
 export const layerMatrix = (l: PlacedLayer): Mat => xformMatrix(l.t);
+
+/**
+ * Where something placed relative to a layer (e.g. its linked mask, originally at `t0`) ends up when the layer
+ * moves from matrix `from` to transform `to`.
+ */
+export function follow(t0: Xform, from: Mat, to: Xform): Xform {
+  return decompose(mul(mul(xformMatrix(to), invert(from)), xformMatrix(t0)));
+}
 
 /** The layer's own box in local (pre-transform) pixels. */
 export function localBounds(l: PlacedLayer, pool: Pool): Rect {
