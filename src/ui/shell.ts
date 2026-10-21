@@ -236,7 +236,8 @@ function menubar() {
     h('div', { class: 'brand', title: 'AMxPixl' },
       h('img', { class: 'mono for-dark', src: 'brand/monogram-dark.png', alt: '' }),
       h('img', { class: 'mono for-light', src: 'brand/monogram-light.png', alt: '' }),
-      h('span', { class: 'wordmark' }, h('span', { class: 'px-name' }, 'Pixl'))),
+      h('span', { class: 'wordmark' }, h('span', { class: 'px-name' }, 'Pixl')),
+      h('span', { class: 'app-version', title: `AMxPixl version ${__APP_VERSION__}` }, `v${__APP_VERSION__}`)),
     h('nav', { class: 'menus' }, ...buttons),
     h('div', { class: 'grow' }),
     undoBtn, redoBtn, themeBtn);
