@@ -1,0 +1,53 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "productName": "AMxPixl",
+  "version": "0.1.0",
+  "identifier": "solutions.automatrix.amxpixl",
+  "build": {
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:1420",
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "AMxPixl",
+        "width": 1366,
+        "height": 800,
+        "minWidth": 1000,
+        "minHeight": 620,
+        "center": true,
+        "maximized": true,
+        "resizable": true,
+        "dragDropEnabled": false,
+        "backgroundColor": "#121615"
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "publisher": "AutoMatrix Solutions LLC",
+    "copyright": "AutoMatrix Solutions LLC",
+    "shortDescription": "Pixl Editor",
+    "longDescription": "AMxPixl (Pixl Editor): a lightweight, non-destructive image editor.",
+    "category": "GraphicsAndDesign",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser"
+      }
+    }
+  }
+}

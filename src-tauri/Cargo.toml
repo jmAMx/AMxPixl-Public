@@ -1,0 +1,26 @@
+[package]
+name = "amxpixl"
+version = "0.1.0"
+description = "AMxPixl (Pixl Editor)"
+authors = ["AutoMatrix Solutions LLC"]
+license = "UNLICENSED"
+edition = "2024"
+rust-version = "1.90"
+
+[lib]
+name = "amxpixl_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.7.3", features = [] }
+
+[dependencies]
+tauri = { version = "2.12.4", features = [] }
+
+# Smaller, faster release build.
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true
