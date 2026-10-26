@@ -1,11 +1,10 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
   <style>
-    .tile { fill: #fbfcfc; stroke: #cfd8d6; } .front { fill: #1f2a28; } .hill { fill: #f4f7f6; }
-    @media (prefers-color-scheme: dark) { .tile { fill: #1c2422; stroke: #33423f; } .front { fill: #eef3f2; } .hill { fill: #1c2422; } }
+    .front { fill: #1f2a28; stroke: #fbfcfc; } .hill { fill: #f4f7f6; }
+    @media (prefers-color-scheme: dark) { .front { fill: #eef3f2; stroke: #1c2422; } .hill { fill: #1c2422; } }
   </style>
-  <rect class="tile" x="0.5" y="0.5" width="31" height="31" rx="7"/>
-  <rect x="12" y="5" width="15" height="15" rx="2.5" fill="#2ee6be"/>
-  <rect class="front" x="5" y="12" width="15" height="15" rx="2.5"/>
-  <circle cx="16" cy="16.5" r="1.7" fill="#2ee6be"/>
-  <path class="hill" d="M6.5 25.5l4.5-5.5 3 3.5 2-2 3.5 4z"/>
+  <rect x="10" y="2" width="20" height="20" rx="3.5" fill="#2ee6be"/>
+  <rect class="front" x="2.5" y="9.5" width="20" height="20" rx="3.5"/>
+  <circle cx="16.5" cy="15.5" r="2" fill="#2ee6be"/>
+  <path class="hill" d="M4.5 27.5l5.5-6.5 3.5 4 2.5-2.5 4.5 5z"/>
 </svg>

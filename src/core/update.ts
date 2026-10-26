@@ -12,8 +12,8 @@ export interface UpdateInfo { version: string; url: string; notes: string }
 
 /** "0.10.1" > "0.9.3": compares dotted numbers, ignoring a leading "v". */
 export function newer(a: string, b: string) {
-  const pa = a.replace(/^v/i, '').split('.').map((n) => parseInt(n) || 0);
-  const pb = b.replace(/^v/i, '').split('.').map((n) => parseInt(n) || 0);
+  const pa = a.replace(/^v/i, '').replace('+', '.').split('.').map((n) => parseInt(n) || 0);
+  const pb = b.replace(/^v/i, '').replace('+', '.').split('.').map((n) => parseInt(n) || 0);
   for (let i = 0; i < Math.max(pa.length, pb.length); i++) if ((pa[i] ?? 0) !== (pb[i] ?? 0)) return (pa[i] ?? 0) > (pb[i] ?? 0);
   return false;
 }

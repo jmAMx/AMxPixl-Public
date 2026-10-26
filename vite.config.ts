@@ -8,7 +8,8 @@ const { version } = JSON.parse(readFileSync(new URL('./package.json', import.met
 export default defineConfig({
   base: './',
   clearScreen: false,
-  define: { __APP_VERSION__: JSON.stringify(version) },
+  // A build number travels as semver build metadata ("0.4.5+1") and is shown as a fourth part ("0.4.5.1").
+  define: { __APP_VERSION__: JSON.stringify(version.replace('+', '.')) },
   server: { port: 1420, strictPort: true },
   build: { target: 'chrome110', outDir: 'dist', sourcemap: false },
 });
