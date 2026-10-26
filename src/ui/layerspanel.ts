@@ -1,7 +1,7 @@
 import { app } from '../app';
 import {
   addMask, applyLook, applyMask, clearStyles, deleteLayer, deleteMask, duplicateLayer, groupLayer, invertMask, lookSourceLayers, mergeDown,
-  moveLayer, newAdjustment, newEffect, newGroup, newLayer, newLut, rasterizeLayer, setLayerProp, setMaskProp, toggleClip, ungroup,
+  moveLayer, newAdjustment, newEffect, newGroup, newLayer, newLut, rasterizeLayer, selectLayerShape, setLayerProp, setMaskProp, toggleClip, ungroup,
 } from '../actions';
 import { BUILTIN_LOOKS, savedLooks } from '../core/looks';
 import { hasStyles } from '../core/styles';
@@ -165,8 +165,12 @@ export function layersPanel() {
       main = h('span', { class: `thumb icon-thumb ${l.type}-thumb` }, icon(l.type === 'group' ? 'group' : l.type === 'effect' ? 'fx' : 'adjust'));
     }
     main.classList.toggle('target', isActive && !doc.maskEdit);
-    main.title = 'Edit layer';
-    main.addEventListener('click', (e) => { e.stopPropagation(); doc.setActive(l.id, false); doc.touch('meta'); });
+    main.title = l.type === 'adjust' || l.type === 'effect' ? 'Edit layer' : 'Edit layer (Ctrl+click to select its shape)';
+    main.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (e.ctrlKey || e.metaKey) { selectLayerShape(l.id, e.shiftKey ? 'add' : e.altKey ? 'sub' : 'replace'); return; }
+      doc.setActive(l.id, false); doc.touch('meta');
+    });
 
     let maskEl: HTMLElement | null = null;
     if (l.mask) {

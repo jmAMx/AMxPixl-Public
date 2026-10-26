@@ -23,6 +23,8 @@ export interface TextProps {
   align: 'left' | 'center' | 'right';
   lineHeight: number;
   tracking: number;
+  /** False for hard pixel edges (pixel art). Missing means on. */
+  antiAlias?: boolean;
 }
 
 export interface ShapeProps {
@@ -34,6 +36,8 @@ export interface ShapeProps {
   stroke: string | null;
   strokeWidth: number;
   radius: number;
+  /** False for hard pixel edges (pixel art). Missing means on. */
+  antiAlias?: boolean;
 }
 
 export interface LevelsCh { inBlack: number; inWhite: number; gamma: number; outBlack: number; outWhite: number }
@@ -78,6 +82,8 @@ interface LayerBase {
   mask?: Mask | null;
   styles?: LayerStyles | null;
   blendIf?: BlendIf | null;
+  /** Blend in linear light, like GIMP 2.10+ (set on layers imported from GIMP so they look the same). */
+  linear?: boolean;
 }
 
 /** Editable layer effects drawn from the layer's shape (sizes in document pixels, opacity 0..1). */
@@ -133,9 +139,11 @@ export const isFilter = (l: Layer | null | undefined): l is FilterLayer => !!l &
 /** One step of a selection: shapes are combined in order, added or subtracted. */
 export interface SelOp {
   mode: 'add' | 'sub';
-  shape: 'rect' | 'ellipse' | 'poly';
-  /** rect/ellipse: [x, y, w, h]; poly: [x0, y0, x1, y1, ...] in document pixels. */
+  shape: 'rect' | 'ellipse' | 'poly' | 'mask';
+  /** rect/ellipse/mask: [x, y, w, h] (for a mask, its bounding box); poly: [x0, y0, x1, y1, ...] in document pixels. */
   pts: number[];
+  /** mask: a document-sized alpha image in the pixel pool (opaque = selected, soft edges allowed). */
+  key?: string;
 }
 export interface Selection { ops: SelOp[] }
 
@@ -148,4 +156,8 @@ export interface Meta {
   selection: Selection | null;
   counter: number;
   guides?: Guide[];
+  /** Quick Mask mode: the selection being painted, as a document-sized alpha image in the pool. */
+  quickMask?: string | null;
+  /** Nearest neighbour keeps pixel art blocky when layers or the image are scaled. Missing means smooth. */
+  resample?: 'smooth' | 'nearest';
 }

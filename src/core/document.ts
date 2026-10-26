@@ -1,7 +1,7 @@
 import { apply, invert, mapRect, roundOut, union, xformMatrix, type Rect } from './math';
 import { cropCanvas, ctx2d, layerMatrix, localBounds, newCanvas, type Pool } from './layers';
 import { invalidate } from './pyramid';
-import { buildMask } from './selection';
+import { buildMask, selOutline } from './selection';
 import type { GroupLayer, Guide, Layer, Meta, PixelTarget, PlacedLayer, RasterLayer, Selection } from './types';
 import { isPlaced } from './types';
 
@@ -53,6 +53,10 @@ export class Doc {
   selection: Selection | null = null;
   counter = 1;
   guides: Guide[] = [];
+  /** Pool key of the Quick Mask being painted, or null when not in Quick Mask mode. */
+  quickMask: string | null = null;
+  /** How layers are resampled when scaled: smooth, or nearest neighbour for blocky pixel art. */
+  resample: 'smooth' | 'nearest' = 'smooth';
 
   /** Painting goes to the active layer's mask instead of its pixels (UI state, not part of history). */
   maskEdit = false;
@@ -63,7 +67,15 @@ export class Doc {
   index = 0;
   private last: Meta;
   savedIndex = 0;
-  fileHandle: FileSystemFileHandle | null = null;
+  /** Where this document was opened from / last saved to as .pixl (for Save and Recent Files). */
+  file: { name: string; path?: string | null; handle?: FileSystemFileHandle | null } | null = null;
+  /** Stable id for crash-recovery storage. */
+  readonly uid = `D${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
+  /** Pixel buffers changed since the last autosave, and those already autosaved. */
+  readonly dirtyKeys = new Set<string>();
+  readonly storedKeys = new Set<string>();
+  /** Things an import couldn't bring across exactly (shown once after opening). */
+  importNotes: string[] = [];
 
   /** View state, kept per document. */
   zoom = 1;
@@ -106,14 +118,15 @@ export class Doc {
   snapshot(): Meta {
     return structuredClone({
       width: this.width, height: this.height, layers: this.layers, activeId: this.activeId,
-      selection: this.selection, counter: this.counter, guides: this.guides,
+      selection: this.selection, counter: this.counter, guides: this.guides, quickMask: this.quickMask, resample: this.resample,
     });
   }
 
   private restore(m: Meta) {
     const c = structuredClone(m);
     this.width = c.width; this.height = c.height; this.layers = c.layers;
-    this.activeId = c.activeId; this.selection = c.selection; this.counter = c.counter; this.guides = c.guides ?? [];
+    this.activeId = c.activeId; this.selection = c.selection; this.counter = c.counter; this.guides = c.guides ?? []; this.quickMask = c.quickMask ?? null;
+    this.resample = c.resample ?? 'smooth';
     if (!this.active?.mask) this.maskEdit = false;
   }
 
@@ -126,6 +139,7 @@ export class Doc {
   /** A pixel buffer changed (painting, filters, undo); `r` limits it to a region of that buffer. */
   markPixels(key: string, notify = true, r?: Rect) {
     invalidate(this.pool.get(key), r);
+    this.dirtyKeys.add(key);
     if (notify) this.touch('pixels');
   }
 
@@ -228,13 +242,17 @@ export class Doc {
   /** Frees pixel buffers no longer reachable from the document or any history step. */
   gc() {
     const live = new Set<string>();
-    const scan = (ls: Layer[]) => flatLayers(ls).forEach((l) => {
-      if (l.type === 'raster') live.add(l.key);
-      if (l.mask) live.add(l.mask.key);
-      if (l.type === 'adjust' && l.adj.kind === 'lut' && l.adj.key) live.add(l.adj.key);
-    });
-    scan(this.layers);
-    for (const e of this.entries) { scan(e.before.layers); scan(e.after.layers); e.pixels.forEach((p) => live.add(p.key)); }
+    const scan = (m: Pick<Meta, 'layers' | 'selection' | 'quickMask'>) => {
+      flatLayers(m.layers).forEach((l) => {
+        if (l.type === 'raster') live.add(l.key);
+        if (l.mask) live.add(l.mask.key);
+        if (l.type === 'adjust' && l.adj.kind === 'lut' && l.adj.key) live.add(l.adj.key);
+      });
+      for (const op of m.selection?.ops ?? []) if (op.key) live.add(op.key);
+      if (m.quickMask) live.add(m.quickMask);
+    };
+    scan(this);
+    for (const e of this.entries) { scan(e.before); scan(e.after); e.pixels.forEach((p) => live.add(p.key)); }
     for (const k of [...this.pool.keys()]) if (!live.has(k)) this.pool.delete(k);
   }
 
@@ -243,6 +261,7 @@ export class Doc {
   addCanvas(c: HTMLCanvasElement) {
     const k = newKey();
     this.pool.set(k, c);
+    this.dirtyKeys.add(k);
     return k;
   }
 
@@ -251,6 +270,8 @@ export class Doc {
   /** What painting tools should draw on: the active layer's mask (in mask mode) or its pixels. */
   paintTarget(): { target: PixelTarget; isMask: boolean; layer: Layer } | null {
     const a = this.active;
+    const qm = this.quickMaskTarget;
+    if (qm && a) return { target: qm, isMask: true, layer: a };
     if (!a) return null;
     if (this.maskEdit && a.mask) return { target: a.mask, isMask: true, layer: a };
     // A warped layer's pixels don't line up with the canvas until the warp is applied.
@@ -301,9 +322,25 @@ export class Doc {
   selectionMask(): HTMLCanvasElement | null {
     if (!this.selection) return null;
     if (this.maskCache && this.maskCache.sel === this.selection) return this.maskCache.canvas;
-    const canvas = buildMask(this.selection, this.width, this.height);
+    const canvas = buildMask(this.selection, this.width, this.height, this.pool);
     this.maskCache = { sel: this.selection, canvas };
     return canvas;
+  }
+
+  private outlineCache: { sel: Selection; path: Path2D } | null = null;
+
+  /** The selection's outline in document coordinates (cached), for drawing marching ants. */
+  selectionOutline(): Path2D | null {
+    if (!this.selection) return null;
+    if (this.outlineCache?.sel === this.selection) return this.outlineCache.path;
+    const path = selOutline(this.selection, this.width, this.height, this.pool);
+    this.outlineCache = { sel: this.selection, path };
+    return path;
+  }
+
+  /** A quick-mask target: painting it edits the selection-to-be (document space). */
+  get quickMaskTarget(): PixelTarget | null {
+    return this.quickMask ? { key: this.quickMask, t: { x: 0, y: 0, sx: 1, sy: 1, rot: 0 } } : null;
   }
 
   /** The selection mask mapped into a pixel buffer's own grid. */

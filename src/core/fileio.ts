@@ -1,5 +1,6 @@
 import { Doc, flatLayers, newId } from './document';
 import { ctx2d, newCanvas } from './layers';
+import { fileName, isDesktop, openDialog, readPath, saveDialog, writePath, type Filters } from './platform';
 import type { Layer, Meta } from './types';
 
 const MAGIC = 'PIXL';
@@ -93,13 +94,17 @@ export async function decodePixl(blob: Blob, fallbackName: string): Promise<Doc>
   doc.selection = null;
   doc.counter = m.counter || doc.layers.length + 1;
   doc.guides = m.guides ?? [];
+  doc.resample = m.resample ?? 'smooth';
   doc.resetHistory('Open');
   return doc;
 }
 
-// ---------- pickers (File System Access API with download/input fallbacks) ----------
+// ---------- pickers (native dialogs on desktop; File System Access API / download fallbacks in a browser) ----------
 
-type Picked = { file: File; handle: FileSystemFileHandle | null };
+/** Where a file lives: a real path on desktop, or a browser file handle. Used to save back and reopen. */
+export interface FileRef { name: string; path?: string | null; handle?: FileSystemFileHandle | null }
+
+export type Picked = { file: File; ref: FileRef };
 
 interface FSWindow {
   showOpenFilePicker?: (o: unknown) => Promise<FileSystemFileHandle[]>;
@@ -107,14 +112,26 @@ interface FSWindow {
 }
 const fsw = window as unknown as FSWindow;
 
+/** Layered files from other editors that AMxPixl can import. */
+export const LAYERED_EXT = ['psd', 'xcf'];
+
 export async function pickFiles(kind: 'any' | 'image', multiple = true): Promise<Picked[]> {
+  if (isDesktop) {
+    const filters: Filters = kind === 'image'
+      ? [{ name: 'Images', extensions: IMAGE_EXT }]
+      : [{ name: 'Images, projects and layered files', extensions: ['pixl', ...LAYERED_EXT, ...IMAGE_EXT] }, { name: 'Pixl project', extensions: ['pixl'] },
+        { name: 'Photoshop / GIMP', extensions: LAYERED_EXT }, { name: 'Images', extensions: IMAGE_EXT }];
+    const paths = await openDialog(filters, multiple);
+    return Promise.all(paths.map(async (p) => ({ file: await readPath(p), ref: { name: fileName(p), path: p } })));
+  }
+  const layered = { 'application/octet-stream': LAYERED_EXT.map((e) => '.' + e) } as Record<string, string[]>;
   const types = kind === 'image'
     ? [{ description: 'Images', accept: IMAGE_TYPES }]
-    : [{ description: 'Images and Pixl projects', accept: { ...IMAGE_TYPES, ...PIXL_TYPES } }, { description: 'Pixl project', accept: PIXL_TYPES }];
+    : [{ description: 'Images, projects and layered files', accept: { ...IMAGE_TYPES, ...PIXL_TYPES, ...layered } }, { description: 'Pixl project', accept: PIXL_TYPES }];
   if (fsw.showOpenFilePicker) {
     try {
       const hs = await fsw.showOpenFilePicker({ multiple, types, id: 'amxpixl-open' });
-      return Promise.all(hs.map(async (h) => ({ file: await h.getFile(), handle: h })));
+      return Promise.all(hs.map(async (h) => ({ file: await h.getFile(), ref: { name: h.name, handle: h } })));
     } catch (e) {
       if ((e as DOMException).name === 'AbortError') return [];
     }
@@ -123,19 +140,30 @@ export async function pickFiles(kind: 'any' | 'image', multiple = true): Promise
     const inp = document.createElement('input');
     inp.type = 'file';
     inp.multiple = multiple;
-    inp.accept = kind === 'image' ? 'image/*' : 'image/*,.pixl';
-    inp.onchange = () => res([...(inp.files ?? [])].map((f) => ({ file: f, handle: null })));
+    inp.accept = kind === 'image' ? 'image/*' : 'image/*,.pixl,.psd,.xcf';
+    inp.onchange = () => res([...(inp.files ?? [])].map((f) => ({ file: f, ref: { name: f.name } })));
     inp.click();
   });
 }
 
-/** Saves a blob; returns the handle used (null for a plain download) or undefined if cancelled. */
-export async function saveBlob(blob: Blob, suggested: string, handle: FileSystemFileHandle | null, accept: Record<string, string[]>): Promise<FileSystemFileHandle | null | undefined> {
-  if (handle) {
-    const w = await handle.createWritable();
+/**
+ * Saves a blob, overwriting `existing` when given, otherwise asking where. Returns where it went (a ref with no
+ * path or handle for a plain browser download), or undefined if cancelled.
+ */
+export async function saveBlob(blob: Blob, suggested: string, existing: FileRef | null, accept: Record<string, string[]>): Promise<FileRef | undefined> {
+  if (existing?.path) { await writePath(existing.path, blob); return existing; }
+  if (existing?.handle) {
+    const w = await existing.handle.createWritable();
     await w.write(blob);
     await w.close();
-    return handle;
+    return existing;
+  }
+  if (isDesktop) {
+    const ext = Object.values(accept).flat().map((e) => e.replace('.', ''));
+    const path = await saveDialog(suggested, [{ name: ext[0]?.toUpperCase() ?? 'File', extensions: ext }]);
+    if (!path) return undefined;
+    await writePath(path, blob);
+    return { name: fileName(path), path };
   }
   if (fsw.showSaveFilePicker) {
     try {
@@ -143,7 +171,7 @@ export async function saveBlob(blob: Blob, suggested: string, handle: FileSystem
       const w = await h.createWritable();
       await w.write(blob);
       await w.close();
-      return h;
+      return { name: h.name, handle: h };
     } catch (e) {
       if ((e as DOMException).name === 'AbortError') return undefined;
       throw e;
@@ -154,7 +182,7 @@ export async function saveBlob(blob: Blob, suggested: string, handle: FileSystem
   a.download = suggested;
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 4000);
-  return null;
+  return { name: suggested };
 }
 
 export const PIXL_ACCEPT = PIXL_TYPES;

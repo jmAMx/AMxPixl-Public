@@ -1,6 +1,7 @@
 import type { Doc } from './document';
 import { cloneCanvas, cropCanvas, ctx2d, newCanvas } from './layers';
-import { apply, intersect, invert, matScale, roundOut, setT, union, xformMatrix, type Mat, type Rect } from './math';
+import { glops } from './glops';
+import { apply, intersect, invert, matScale, mul, roundOut, setT, union, xformMatrix, type Mat, type Rect } from './math';
 import type { PixelTarget } from './types';
 
 export interface BrushOpts {
@@ -15,6 +16,10 @@ export interface BrushOpts {
   clone?: { dx: number; dy: number };
   /** Healing brush: after cloning, match the surrounding colour and light (texture from the source, tone from here). */
   heal?: boolean;
+  /** Clone/heal from this document-sized image of all visible layers instead of the target's own pixels. */
+  sample?: HTMLCanvasElement | null;
+  /** Anti-aliasing off: whole pixels only, like a pencil (pixel art). */
+  aliased?: boolean;
 }
 
 export interface StrokePoint { x: number; y: number; pressure: number }
@@ -40,6 +45,27 @@ function makeStamp(color: string, diameter: number, hardness: number, flow: numb
   ctx.beginPath();
   ctx.arc(r, r, r, 0, Math.PI * 2);
   ctx.fill();
+  stampCache.set(key, c);
+  return c;
+}
+
+/** A hard round tip `d` pixels across, every pixel fully on or off (small sizes come out square, like a pencil). */
+function pixelStamp(color: string, d: number, flow: number) {
+  const key = `px|${color}|${d}|${flow.toFixed(2)}`;
+  const hit = stampCache.get(key);
+  if (hit) return hit;
+  if (stampCache.size > 24) stampCache.clear();
+  const c = newCanvas(d, d);
+  const ctx = ctx2d(c);
+  ctx.globalAlpha = flow;
+  ctx.fillStyle = color;
+  const r = d / 2, lim = r * r + 0.5;
+  for (let y = 0; y < d; y++) {
+    const dy = y + 0.5 - r;
+    let x0 = -1, x1 = -1;
+    for (let x = 0; x < d; x++) { const dx = x + 0.5 - r; if (dx * dx + dy * dy <= lim) { if (x0 < 0) x0 = x; x1 = x; } }
+    if (x0 >= 0) ctx.fillRect(x0, y, x1 - x0 + 1, 1);
+  }
   stampCache.set(key, c);
   return c;
 }
@@ -83,7 +109,16 @@ export class Stroke {
     if (this.dabC.width < size || this.dabC.height < size) { this.dabC.width = size; this.dabC.height = size; }
     const d = ctx2d(this.dabC);
     d.globalCompositeOperation = 'copy';
-    d.drawImage(this.backup, -(qs.x - rr - 1), -(qs.y - rr - 1));
+    if (this.o.sample) {
+      // Document-space image of all layers, mapped so the source point lands on this dab's centre.
+      d.save();
+      setT(d, mul(mul([1, 0, 0, 1, -(q.x - rr - 1), -(q.y - rr - 1)], this.inv), [1, 0, 0, 1, -dx, -dy]));
+      d.imageSmoothingEnabled = true;
+      d.drawImage(this.o.sample, 0, 0);
+      d.restore();
+    } else {
+      d.drawImage(this.backup, -(qs.x - rr - 1), -(qs.y - rr - 1));
+    }
     d.globalCompositeOperation = 'destination-in';
     d.drawImage(this.stamp, 1, 1, rr * 2, rr * 2);
     d.globalCompositeOperation = 'source-over';
@@ -94,33 +129,79 @@ export class Stroke {
     return { x: q.x - rr - 1, y: q.y - rr - 1, w: size, h: size };
   }
 
+  /** The all-layers sample image, cut out and mapped into this layer's pixel grid for region `R`. */
+  private sampleRegion(R: Rect) {
+    const c = newCanvas(R.w, R.h);
+    const x = ctx2d(c);
+    setT(x, mul([1, 0, 0, 1, -R.x, -R.y], this.inv));
+    x.imageSmoothingEnabled = true;
+    x.drawImage(this.o.sample!, 0, 0);
+    return c;
+  }
+
   /**
-   * Healing: keep the cloned texture but take the broad colour and light from the destination. Each pixel becomes
-   * clone + (blur(original) - blur(clone)), weighted by how much was cloned there. Runs once, when the stroke ends.
+   * Healing, live on the GPU: keep the cloned texture but take the broad colour and light from the destination.
+   * Each pixel becomes clone + (surroundings of the destination - surroundings of the source), weighted by how
+   * much was cloned. "Surroundings" is a blur that leaves out the painted area itself (the flaw being covered),
+   * so colour comes in from the edges of the stroke, much like Photoshop's healing brush. Only `rr` is rewritten.
    */
-  private heal(r: Rect) {
-    const br = Math.max(2, (this.o.size / this.pxScale) * 0.45);
+  private healRegion(rr: Rect) {
+    // Wide strokes or scribbled patches need a wider reach to find their edges.
+    const ext = union(this.dirty, rr)!;
+    const br = Math.max(2, (this.o.size / this.pxScale) * 0.45, Math.min(ext.w, ext.h) * 0.3);
     const pad = Math.ceil(br * 2.5);
-    const R = intersect({ x: r.x - pad, y: r.y - pad, w: r.w + pad * 2, h: r.h + pad * 2 }, { x: 0, y: 0, w: this.src.width, h: this.src.height });
-    if (!R) return r;
-    const blurred = (c: HTMLCanvasElement) => {
+    const R = intersect({ x: rr.x - pad, y: rr.y - pad, w: rr.w + pad * 2, h: rr.h + pad * 2 }, { x: 0, y: 0, w: this.src.width, h: this.src.height });
+    if (!R) return;
+    const cov = cropCanvas(this.buffer, R);
+    // Cut the painted area out, then blur: the colour of what's left is a weighted average of the surroundings.
+    const around = (c: HTMLCanvasElement) => {
+      const x = ctx2d(c);
+      x.globalCompositeOperation = 'destination-out';
+      x.drawImage(cov, 0, 0);
       const out = newCanvas(c.width, c.height);
-      const x = ctx2d(out);
-      x.filter = `blur(${br}px)`;
-      x.drawImage(c, 0, 0);
+      const o = ctx2d(out);
+      o.filter = `blur(${br}px)`;
+      o.drawImage(c, 0, 0);
       return out;
     };
-    const C = cropCanvas(this.src, R), D = cropCanvas(this.backup, R), M = cropCanvas(this.buffer, R);
-    const read = (c: HTMLCanvasElement) => ctx2d(c, true).getImageData(0, 0, R.w, R.h).data;
-    const img = ctx2d(C, true).getImageData(0, 0, R.w, R.h);
-    const c = img.data, bc = read(blurred(C)), bd = read(blurred(D)), m = read(M);
-    for (let i = 0; i < c.length; i += 4) {
-      const k = (m[i + 3] / 255) * this.o.opacity;
-      if (k <= 0 || c[i + 3] === 0) continue;
-      for (let j = 0; j < 3; j++) c[i + j] = c[i + j] + (bd[i + j] - bc[i + j]) * k;
+    const { dx, dy } = this.o.clone!;
+    const C = cropCanvas(this.src, R);
+    let D: HTMLCanvasElement, S: HTMLCanvasElement;
+    if (this.o.sample) {
+      D = this.sampleRegion(R);
+      S = newCanvas(R.w, R.h);
+      const x = ctx2d(S);
+      setT(x, mul(mul([1, 0, 0, 1, -R.x, -R.y], this.inv), [1, 0, 0, 1, -dx, -dy]));
+      x.imageSmoothingEnabled = true;
+      x.drawImage(this.o.sample, 0, 0);
+    } else {
+      D = cropCanvas(this.backup, R);
+      // The clone offset in this layer's own pixels.
+      const a = apply(this.inv, 0, 0), b = apply(this.inv, dx, dy);
+      S = newCanvas(R.w, R.h);
+      ctx2d(S).drawImage(this.backup, -(R.x + b.x - a.x), -(R.y + b.y - a.y));
     }
-    ctx2d(this.src).putImageData(img, R.x, R.y);
-    return R;
+    const res = glops.heal(C, around(S), around(D), cov, this.o.opacity);
+    if (!res) return;
+    const s = ctx2d(this.src);
+    s.save();
+    s.beginPath(); s.rect(rr.x, rr.y, rr.w, rr.h); s.clip();
+    s.globalCompositeOperation = 'copy';
+    s.drawImage(res, R.x, R.y);
+    s.restore();
+  }
+
+  /** Redraws `rr` of the layer as it was before the stroke with the stroke so far on top. */
+  private compose(rr: Rect) {
+    const s = ctx2d(this.src);
+    s.save();
+    s.beginPath(); s.rect(rr.x, rr.y, rr.w, rr.h); s.clip();
+    s.globalCompositeOperation = 'copy';
+    s.drawImage(this.backup, 0, 0);
+    s.globalCompositeOperation = this.o.erase ? 'destination-out' : 'source-over';
+    s.globalAlpha = this.o.opacity;
+    s.drawImage(this.buffer, 0, 0);
+    s.restore();
   }
 
   add(p: StrokePoint) {
@@ -131,6 +212,18 @@ export class Stroke {
     const dab = (x: number, y: number, pr: number) => {
       const r = Math.max(0.5, (this.o.size / 2) * (this.o.pressure ? pr : 1));
       if (this.o.clone) { region = union(region, this.cloneDab(bctx, x, y, r)); return; }
+      if (this.o.aliased) {
+        // Whole pixels of the layer, centred on the pixel under the pointer.
+        const q = apply(this.inv, x, y);
+        const d = Math.max(1, Math.round((r * 2) / this.pxScale));
+        const ix = Math.floor(q.x - d / 2 + 0.5), iy = Math.floor(q.y - d / 2 + 0.5);
+        bctx.save();
+        bctx.setTransform(1, 0, 0, 1, 0, 0);
+        bctx.drawImage(pixelStamp(this.o.erase ? '#000000' : this.o.color, d, this.o.flow), ix, iy);
+        bctx.restore();
+        region = union(region, { x: ix, y: iy, w: d, h: d });
+        return;
+      }
       bctx.drawImage(this.stamp, x - r, y - r, r * 2, r * 2);
       const a = apply(this.inv, x - r, y - r), b = apply(this.inv, x + r, y - r);
       const c = apply(this.inv, x + r, y + r), d = apply(this.inv, x - r, y + r);
@@ -167,26 +260,17 @@ export class Stroke {
       bctx.drawImage(this.mask, 0, 0);
       bctx.restore();
     }
-    const s = ctx2d(this.src);
-    s.save();
-    s.beginPath(); s.rect(rr.x, rr.y, rr.w, rr.h); s.clip();
-    s.globalCompositeOperation = 'copy';
-    s.drawImage(this.backup, 0, 0);
-    s.globalCompositeOperation = this.o.erase ? 'destination-out' : 'source-over';
-    s.globalAlpha = this.o.opacity;
-    s.drawImage(this.buffer, 0, 0);
-    s.restore();
+    this.compose(rr);
+    if (this.o.heal) this.healRegion(rr);
     this.dirty = union(this.dirty, rr);
     this.doc.markPixels(this.layer.key, true, rr);
   }
 
   end(label: string) {
     if (!this.dirty) { this.doc.commit(label); return; }
-    let r = this.dirty;
-    if (this.o.heal) {
-      r = union(r, this.heal(r));
-      this.doc.markPixels(this.layer.key, false, r);
-    }
+    const r = this.dirty;
+    // One last pass over the whole stroke, so every part is healed against the same surroundings.
+    if (this.o.heal) { this.compose(r); this.healRegion(r); this.doc.markPixels(this.layer.key, true, r); }
     this.doc.commit(label, [{ key: this.layer.key, rect: r, before: cropCanvas(this.backup, r), after: null }]);
   }
 }

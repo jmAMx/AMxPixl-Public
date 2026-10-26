@@ -21,6 +21,12 @@ class ShapeTool implements Tool {
       checkbox('Stroke', o.stroke, (v) => { o.stroke = v; app.saveOpts(); }, 'Outline in the background colour (or foreground if there is no fill)'),
       numField('Width', o.strokeWidth, (v) => { o.strokeWidth = v; app.saveOpts(); }, { unit: 'px', min: 0, max: 500 }),
       numField('Radius', o.radius, (v) => { o.radius = v; app.saveOpts(); }, { unit: 'px', min: 0, max: 2000 }),
+      checkbox('Anti-alias', o.antiAlias, (v) => {
+        o.antiAlias = v; app.saveOpts();
+        // Also applies to the selected shape.
+        const doc = app.doc, a = doc?.active;
+        if (doc && a?.type === 'shape' && (a.shape.antiAlias !== false) !== v) { a.shape = { ...a.shape, antiAlias: v }; doc.touch('meta'); doc.commit(v ? 'Anti-alias on' : 'Anti-alias off'); }
+      }, 'Turn off for hard pixel edges (pixel art)'),
     );
   }
 
@@ -33,7 +39,7 @@ class ShapeTool implements Tool {
     const layer: ShapeLayer = {
       id: newId(), type: 'shape', name: `${NAMES[o.kind]} ${doc.counter++}`, visible: true, opacity: 1, blend: 'normal',
       t: { x: Math.round(p.x), y: Math.round(p.y), sx: 1, sy: 1, rot: 0 },
-      shape: { kind: o.kind, w: 0, h: 0, fill, stroke, strokeWidth: isLine ? Math.max(1, o.strokeWidth) : o.strokeWidth, radius: o.radius },
+      shape: { kind: o.kind, w: 0, h: 0, fill, stroke, strokeWidth: isLine ? Math.max(1, o.strokeWidth) : o.strokeWidth, radius: o.radius, ...(o.antiAlias ? {} : { antiAlias: false }) },
     };
     doc.insertLayer(layer);
     this.drawing = { layer, x: layer.t.x, y: layer.t.y };

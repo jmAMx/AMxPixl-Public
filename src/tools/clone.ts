@@ -1,6 +1,7 @@
 import { app } from '../app';
 import { Stroke } from '../core/brush';
 import type { Pt } from '../core/math';
+import { flatten } from '../core/render';
 import { view } from '../ui/canvasview';
 import { checkbox, slider, toast } from '../ui/widgets';
 import { paintableTarget } from './paint';
@@ -21,8 +22,8 @@ class CloneTool implements Tool {
 
   constructor(public id: 'clone' | 'heal', public name: string, public key: string, public icon: Tool['icon']) {
     this.hint = id === 'clone'
-      ? 'Alt+click to choose where to copy from, then paint · [ ] change size'
-      : 'Alt+click a clean area to copy from, then paint over the flaw · blends into its surroundings when you let go';
+      ? 'Alt+click to choose where to copy from, then paint · [ ] change size · tip: Sample all layers + an empty layer keeps the original safe'
+      : 'Alt+click a clean area to copy from, then paint over the flaw · it blends into the surrounding colour and light as you paint';
   }
 
   private get o() { return app.opts[this.id]; }
@@ -36,6 +37,7 @@ class CloneTool implements Tool {
       slider({ label: 'Hardness', min: 0, max: 1, display: 100, value: o.hardness, unit: '%', compact: true, onInput: (v) => { o.hardness = v; }, onChange: () => app.saveOpts() }),
       slider({ label: 'Opacity', min: 0.01, max: 1, display: 100, value: o.opacity, unit: '%', compact: true, onInput: (v) => { o.opacity = v; }, onChange: () => app.saveOpts() }),
       checkbox('Aligned', o.aligned, (v) => { o.aligned = v; this.offset = null; app.saveOpts(); }, 'Keep the same source offset from stroke to stroke'),
+      checkbox('Sample all layers', o.sampleAll, (v) => { o.sampleAll = v; app.saveOpts(); }, 'Copy from everything you see, so you can retouch on an empty layer and keep the original untouched'),
       checkbox('Pen pressure', o.pressure, (v) => { o.pressure = v; app.saveOpts(); }),
     );
   }
@@ -56,7 +58,7 @@ class CloneTool implements Tool {
     this.onMask = pt.isMask;
     this.stroke = new Stroke(doc, pt.target, {
       color: '#ffffff', size: o.size, hardness: o.hardness, opacity: o.opacity, flow: o.flow, erase: false, pressure: o.pressure,
-      clone: this.offset, heal: this.id === 'heal',
+      clone: this.offset, heal: this.id === 'heal', sample: o.sampleAll && !pt.isMask ? flatten(doc) : null,
     });
     this.stroke.add({ x: p.x, y: p.y, pressure: p.pressure });
   }

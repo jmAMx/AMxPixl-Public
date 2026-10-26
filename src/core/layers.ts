@@ -1,7 +1,8 @@
+import { glops } from './glops';
 import { decompose, invert, matScale, mul, setT, xformMatrix, type Mat, type Rect, type Xform } from './math';
 import { displaySource } from './pyramid';
 import { drawText, layoutText } from './text';
-import type { PlacedLayer, ShapeProps } from './types';
+import type { PlacedLayer, ShapeLayer, ShapeProps, TextLayer } from './types';
 import { warpBounds, warpGL } from './warp';
 
 export type Pool = Map<string, HTMLCanvasElement>;
@@ -68,25 +69,51 @@ export function drawShape(ctx: CanvasRenderingContext2D, s: ShapeProps) {
  * Draws one placed layer through `view` (document -> target pixels). Raster layers are always sampled from their
  * full-resolution originals, so any amount of scaling or rotating costs nothing in quality.
  */
-export function drawPlaced(ctx: CanvasRenderingContext2D, l: PlacedLayer, pool: Pool, view: Mat) {
+export function drawPlaced(ctx: CanvasRenderingContext2D, l: PlacedLayer, pool: Pool, view: Mat, nearest = false, screen = false) {
   const m = mul(view, layerMatrix(l));
   setT(ctx, m);
   if (l.type === 'raster') {
     const c = pool.get(l.key);
     if (!c) return;
     const s = matScale(m);
-    // Past 200% show crisp pixels (like Photoshop's pixel view); otherwise smooth, high-quality resampling.
-    ctx.imageSmoothingEnabled = s < 2;
+    // On screen past 200%, show crisp pixels (like Photoshop's pixel view); otherwise smooth, high-quality
+    // resampling. Nearest neighbour (pixel art) is always crisp and reads the original pixels directly.
+    ctx.imageSmoothingEnabled = !nearest && !(screen && s >= 2);
     ctx.imageSmoothingQuality = 'high';
-    const { img, f } = displaySource(c, s);
+    const { img, f } = nearest ? { img: c, f: 1 } : displaySource(c, s);
     if (l.warp) warpGL.draw(ctx, img, f, c.width, c.height, l.warp, m);
     else if (f === 1) ctx.drawImage(c, 0, 0);
     else ctx.drawImage(img, 0, 0, img.width * f, img.height * f);
+  } else if ((l.type === 'text' ? l.text : l.shape).antiAlias === false) {
+    // Hard pixel edges: draw it once at 1:1 with edges snapped on/off, then show those pixels unsmoothed.
+    const b = localBounds(l, pool);
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(hardPixels(l), Math.floor(b.x), Math.floor(b.y));
   } else if (l.type === 'text') {
     drawText(ctx, l.text);
   } else {
     drawShape(ctx, l.shape);
   }
+}
+
+const hardCache = new Map<string, HTMLCanvasElement>();
+
+/** A text or shape layer with anti-aliasing off, rendered in its own pixels (cached by content). */
+function hardPixels(l: TextLayer | ShapeLayer): HTMLCanvasElement {
+  const key = JSON.stringify(l.type === 'text' ? l.text : l.shape);
+  const hit = hardCache.get(key);
+  if (hit) return hit;
+  const b = localBounds(l, new Map());
+  const x0 = Math.floor(b.x), y0 = Math.floor(b.y);
+  const c = newCanvas(Math.ceil(b.x + b.w) - x0, Math.ceil(b.y + b.h) - y0);
+  const x = ctx2d(c);
+  x.translate(-x0, -y0);
+  if (l.type === 'text') drawText(x, l.text); else drawShape(x, l.shape);
+  const hard = glops.hardEdge(c);
+  const out = hard ? cropCanvas(hard, { x: 0, y: 0, w: c.width, h: c.height }) : c;
+  if (hardCache.size > 48) hardCache.clear();
+  hardCache.set(key, out);
+  return out;
 }
 
 export function newCanvas(w: number, h: number) {

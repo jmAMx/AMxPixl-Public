@@ -5,14 +5,19 @@ import { cloneTool, healTool } from './tools/clone';
 import { cropTool } from './tools/crop';
 import { moveTool } from './tools/move';
 import { brushTool, eraserTool, fillTool, gradientTool, pickerTool } from './tools/paint';
-import { ellipseSelectTool, lassoTool, rectSelectTool } from './tools/select';
+import { ellipseSelectTool, lassoTool, rectSelectTool, wandTool } from './tools/select';
 import { handTool, shapeTool, zoomTool } from './tools/shape';
 import { textTool } from './tools/text';
+import type { Doc } from './core/document';
+import { fileName, isDesktop, onOpenFiles, readPath, takeLaunchFiles } from './core/platform';
+import { autosave, clearRecovery, listRecovery, restoreRecovery } from './core/recovery';
+import { dueForCheck } from './core/update';
 import { view } from './ui/canvasview';
+import { updateDialog } from './ui/dialogs';
 import { mountShell } from './ui/shell';
-import { ask } from './ui/widgets';
+import { ask, toast } from './ui/widgets';
 
-app.tools = [moveTool, rectSelectTool, ellipseSelectTool, lassoTool, cropTool, pickerTool, brushTool, eraserTool, cloneTool, healTool, gradientTool, fillTool, textTool, shapeTool, handTool, zoomTool];
+app.tools = [moveTool, rectSelectTool, ellipseSelectTool, lassoTool, wandTool, cropTool, pickerTool, brushTool, eraserTool, cloneTool, healTool, gradientTool, fillTool, textTool, shapeTool, handTool, zoomTool];
 app.tool = brushTool;
 app.applyPrefs();
 mountShell(document.getElementById('app')!);
@@ -41,7 +46,7 @@ window.addEventListener('drop', (e) => {
   if (!files.length) return;
   const overCanvas = view.el.contains(e.target as Node);
   if (app.doc && overCanvas) A.placeFiles(files);
-  else A.openFiles(files.map((f) => ({ file: f, handle: null })));
+  else A.openFiles(files.map((f) => ({ file: f, ref: { name: f.name } })));
 });
 
 window.addEventListener('paste', (e) => {
@@ -52,7 +57,56 @@ window.addEventListener('paste', (e) => {
   A.pasteBlob(item?.getAsFile() ?? null);
 });
 
-const isDesktop = '__TAURI_INTERNALS__' in window;
+// ---------- crash recovery, autosave, files from Explorer ----------
+
+/** Offers to bring back documents left unsaved when the app last closed unexpectedly. */
+async function offerRecovery() {
+  let list = await listRecovery().catch(() => []);
+  // In a browser another tab may be editing these right now; its autosaves are recent, so leave them alone.
+  if (!isDesktop) list = list.filter((r) => Date.now() - r.savedAt > 3 * 60_000);
+  if (!list.length) return;
+  const names = list.length === 1 ? `"${list[0].name}"` : `${list.length} images (${list.map((r) => r.name).join(', ')})`;
+  const r = await ask('Recover unsaved work?', `AMxPixl didn't close normally last time. ${names} had unsaved changes that can be restored.`, [
+    { id: 'discard', label: 'Discard', danger: true }, { id: 'recover', label: 'Recover', primary: true },
+  ]);
+  for (const it of list) {
+    if (r === 'recover') {
+      try { const doc = await restoreRecovery(it.uid); if (doc) { app.addDoc(doc); changed.add(doc); } } catch (err) { toast(`Couldn't recover ${it.name}: ${(err as Error).message}`, 'error'); }
+    } else if (r === 'discard') await clearRecovery(it.uid);
+  }
+}
+
+// Every minute, copy documents that changed since the last pass (and still have unsaved work) to the recovery store.
+const changed = new Set<Doc>();
+app.on('change', ({ doc }) => changed.add(doc));
+let autosaving = false;
+setInterval(async () => {
+  if (autosaving || app.busy || view.busy) return;
+  autosaving = true;
+  try {
+    for (const doc of [...changed]) {
+      changed.delete(doc);
+      if (!app.docs.includes(doc)) continue;
+      if (doc.dirty) await autosave(doc);
+      // Also catches a save that landed while the autosave above was writing.
+      if (!doc.dirty) await clearRecovery(doc);
+    }
+  } catch { /* storage full or blocked: recovery is best-effort */ } finally { autosaving = false; }
+}, 60_000);
+
+const openPaths = async (paths: string[]) => {
+  const files = [];
+  for (const p of paths) {
+    try { files.push({ file: await readPath(p), ref: { name: fileName(p), path: p } }); } catch (err) { toast(`Couldn't open ${fileName(p)}: ${err}`, 'error'); }
+  }
+  if (files.length) await A.openFiles(files);
+};
+
+offerRecovery().then(async () => {
+  await openPaths(await takeLaunchFiles().catch(() => []));
+  onOpenFiles(openPaths);
+  if (isDesktop && dueForCheck()) setTimeout(() => updateDialog(true), 8000);
+});
 
 if (isDesktop) {
   // Desktop app: ask before closing with unsaved work.
@@ -66,7 +120,8 @@ if (isDesktop) {
       const r = await ask('Unsaved changes', `${what} unsaved changes. Close AMxPixl anyway?`, [
         { id: 'cancel', label: 'Cancel', primary: true }, { id: 'close', label: 'Close without saving', danger: true },
       ]);
-      if (r === 'close') win.destroy();
+      // Choosing not to save is deliberate, so don't offer that work back next time.
+      if (r === 'close') { await Promise.all(dirty.map((d) => clearRecovery(d).catch(() => {}))); win.destroy(); }
     });
   });
   // Keep browser-engine shortcuts (reload, print, find, view source) from firing inside the app. This runs after

@@ -7,7 +7,7 @@ import { identity, mapRect, matScale, mul, setT, xformMatrix, type Mat, type Rec
 import { displaySource } from './pyramid';
 import { acquire, composite, gco as gcoOf, like, release } from './scratch';
 import { applyStyles, hasStyles } from './styles';
-import type { BlendIf, FilterLayer, Layer, LayerStyles, Mask } from './types';
+import type { BlendIf, BlendMode, FilterLayer, Layer, LayerStyles, Mask } from './types';
 import { isFilter, isPlaced } from './types';
 
 export { gco } from './scratch';
@@ -21,6 +21,10 @@ export interface RenderOpts {
   clip?: boolean;
   /** Stop just before this layer and leave what it would receive in the output (for adjustment histograms). */
   stopAt?: string;
+  /** Override the document's resampling (export can choose). */
+  nearest?: boolean;
+  /** Drawing the on-screen view (zoomed-in pixels show crisp). */
+  screen?: boolean;
 }
 
 interface Env {
@@ -35,6 +39,9 @@ interface Env {
   out: HTMLCanvasElement;
   /** Set once `stopAt` is reached: everything else stops drawing. */
   done: boolean;
+  /** Nearest-neighbour resampling (blocky pixel art). */
+  nearest: boolean;
+  screen: boolean;
 }
 
 // ---------- masks ----------
@@ -52,8 +59,8 @@ function maskInTarget(m: Mask, like: HTMLCanvasElement, env: Env): HTMLCanvasEle
   x.save();
   setT(x, mm);
   if (m.feather > 0) x.filter = `blur(${m.feather * env.scale}px)`;
-  x.imageSmoothingEnabled = true;
-  const { img, f } = displaySource(src, s);
+  x.imageSmoothingEnabled = !env.nearest;
+  const { img, f } = env.nearest ? { img: src, f: 1 } : displaySource(src, s);
   x.drawImage(img, 0, 0, img.width * f, img.height * f);
   x.restore();
   if (m.density < 1) {
@@ -127,15 +134,17 @@ function finish(l: Layer, iso: HTMLCanvasElement, target: HTMLCanvasElement, env
     if (r) composite(iso, r, 'normal', 1, 'copy');
   }
   const blend = l.blend === 'pass-through' ? 'normal' : l.blend;
-  if (st) {
-    const styled = applyStyles(iso, st, env.scale);
-    composite(target, styled, blend, l.opacity);
-    release(styled);
-  } else {
-    composite(target, iso, blend, l.opacity);
-  }
+  const out = st ? applyStyles(iso, st, env.scale) : iso;
+  const lm = l.linear ? LINEAR_MODES[blend] : undefined;
+  const res = lm !== undefined ? glops.linearOver(target, out, lm, l.opacity) : null;
+  if (res) composite(target, res, 'normal', 1, 'copy');
+  else composite(target, out, blend, l.opacity);
+  if (out !== iso) release(out);
   release(iso);
 }
+
+/** Blend modes that can be done GIMP-style (in linear light), by shader mode number. */
+const LINEAR_MODES: Partial<Record<BlendMode, number>> = { normal: 0, multiply: 1, screen: 2, darken: 3, lighten: 4, difference: 5 };
 
 function drawLayer(l: Layer, target: HTMLCanvasElement, env: Env) {
   if (env.done) return;
@@ -143,6 +152,7 @@ function drawLayer(l: Layer, target: HTMLCanvasElement, env: Env) {
   const m = maskOn(l);
   const st = hasStyles(l.styles) ? l.styles : null;
   const bi = l.blendIf?.on ? l.blendIf : null;
+  const lin = !!l.linear && LINEAR_MODES[l.blend === 'pass-through' ? 'normal' : l.blend] !== undefined;
   if (l.type === 'group') {
     if (l.blend === 'pass-through' && l.opacity >= 1 && !m && !st && !bi) { renderList(l.children, target, env); return; }
     const iso = like(target);
@@ -152,17 +162,17 @@ function drawLayer(l: Layer, target: HTMLCanvasElement, env: Env) {
     return;
   }
   if (!isPlaced(l)) return;
-  if (!m && !st && !bi) {
+  if (!m && !st && !bi && !lin) {
     const x = ctx2d(target);
     x.save();
     x.globalAlpha = l.opacity;
     x.globalCompositeOperation = gcoOf(l.blend);
-    drawPlaced(x, l, env.doc.pool, env.view);
+    drawPlaced(x, l, env.doc.pool, env.view, env.nearest, env.screen);
     x.restore();
     return;
   }
   const iso = like(target);
-  drawPlaced(ctx2d(iso), l, env.doc.pool, env.view);
+  drawPlaced(ctx2d(iso), l, env.doc.pool, env.view, env.nearest, env.screen);
   ctx2d(iso).setTransform(1, 0, 0, 1, 0, 0);
   finish(l, iso, target, env, m, st, bi);
 }
@@ -246,6 +256,7 @@ export function renderDoc(doc: Doc, out: HTMLCanvasElement, view: Mat, opts: Ren
   const env: Env = {
     doc, view, scale: matScale(view), docRect: mapRect(view, { x: 0, y: 0, w: doc.width, h: doc.height }),
     includeHidden: !!opts.includeHidden, stopAt: opts.stopAt, out, done: false,
+    nearest: opts.nearest ?? doc.resample === 'nearest', screen: !!opts.screen,
   };
   renderList(opts.layers ?? doc.layers, out, env);
   ctx.restore();

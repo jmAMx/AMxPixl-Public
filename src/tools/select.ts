@@ -1,8 +1,13 @@
+import { selectSimilar } from '../actions';
 import { app } from '../app';
+import { glops } from '../core/glops';
+import { ctx2d, newCanvas } from '../core/layers';
 import { opPath } from '../core/selection';
+import { combine } from '../core/selops';
 import type { SelOp } from '../core/types';
 import { view } from '../ui/canvasview';
 import { h } from '../ui/dom';
+import { checkbox, slider } from '../ui/widgets';
 import { clearSnapLines, snapPoint } from '../ui/snap';
 import type { PInfo, Tool } from './tool';
 
@@ -20,7 +25,11 @@ abstract class SelectTool implements Tool {
   cursor() { return 'crosshair'; }
 
   options(bar: HTMLElement) {
-    bar.append(h('span', { class: 'opt-note' }, 'Shift: add to selection · Alt: subtract · Select menu: All / Invert / Deselect'));
+    const o = app.opts.select;
+    bar.append(
+      checkbox('Anti-alias', o.antiAlias, (v) => { o.antiAlias = v; app.saveOpts(); }, 'Turn off for hard-edged selections that take whole pixels only (pixel art)'),
+      h('span', { class: 'opt-note' }, 'Shift: add to selection · Alt: subtract · Select menu: All / Invert / Deselect'),
+    );
   }
 
   down(p: PInfo) {
@@ -40,7 +49,16 @@ abstract class SelectTool implements Tool {
     }
     const base = this.mode === 'replace' ? [] : doc.selection?.ops ?? [];
     if (this.mode === 'sub' && !base.length) return;
-    doc.setSelection({ ops: [...base, op] });
+    if (!app.opts.select.antiAlias && op.shape !== 'rect') {
+      // Curved edges with whole pixels only: rasterize the shape and snap its edge pixels on or off.
+      const c = newCanvas(doc.width, doc.height);
+      const x = ctx2d(c);
+      x.fillStyle = '#fff';
+      x.fill(opPath(op));
+      const hard = glops.hardEdge(c);
+      if (hard) { x.globalCompositeOperation = 'copy'; x.drawImage(hard, 0, 0); }
+      doc.setSelection(combine(doc, c, this.mode));
+    } else doc.setSelection({ ops: [...base, op] });
     doc.commit(this.mode === 'replace' ? 'Select' : this.mode === 'add' ? 'Add to selection' : 'Subtract from selection');
   }
 
@@ -109,6 +127,31 @@ class LassoTool extends SelectTool {
   }
 }
 
-export const rectSelectTool = new MarqueeTool('marquee', 'Rectangle Select', 'M', 'marquee', 'rect');
+/** Magic Wand: click to select similar colours. Shift adds, Alt subtracts. */
+class WandTool implements Tool {
+  id = 'wand'; name = 'Magic Wand'; key = 'W'; icon = 'wand' as const;
+  hint = 'Click to select similar colour · Shift adds · Alt subtracts · higher Tolerance takes in more';
+
+  cursor() { return 'crosshair'; }
+
+  options(bar: HTMLElement) {
+    const o = app.opts.wand;
+    bar.append(
+      slider({ label: 'Tolerance', min: 0, max: 255, value: o.tolerance, compact: true, onInput: (v) => { o.tolerance = v; }, onChange: () => app.saveOpts() }),
+      checkbox('Contiguous', o.contiguous, (v) => { o.contiguous = v; app.saveOpts(); }, 'Only connected areas; turn off to take matching colour from the whole image'),
+      checkbox('Sample all layers', o.sampleAll, (v) => { o.sampleAll = v; app.saveOpts(); }, 'Look at everything you see instead of just the active layer'),
+      checkbox('Anti-alias', o.antiAlias, (v) => { o.antiAlias = v; app.saveOpts(); }, 'Soften the selection edge slightly'),
+    );
+  }
+
+  down(p: PInfo) {
+    const doc = app.doc!;
+    if (p.x < 0 || p.y < 0 || p.x >= doc.width || p.y >= doc.height) return;
+    selectSimilar(Math.floor(p.x), Math.floor(p.y), p.shift ? 'add' : p.alt ? 'sub' : 'replace');
+  }
+}
+
+export const wandTool = new WandTool();
+export const rectSelectTool =new MarqueeTool('marquee', 'Rectangle Select', 'M', 'marquee', 'rect');
 export const ellipseSelectTool = new MarqueeTool('ellipse', 'Ellipse Select', 'M', 'ellipse', 'ellipse');
 export const lassoTool = new LassoTool();

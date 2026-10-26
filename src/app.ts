@@ -9,11 +9,12 @@ type Events = {
   colors: void;
   options: void;
   prefs: void;
+  recent: void;
 };
 
 type Handler<T> = (v: T) => void;
 
-export interface Prefs { theme: 'dark' | 'light'; glow: boolean; dock: Record<string, boolean>; rulers: boolean; guides: boolean; snap: boolean }
+export interface Prefs { theme: 'dark' | 'light'; glow: boolean; dock: Record<string, boolean>; rulers: boolean; guides: boolean; snap: boolean; pixelGrid: boolean }
 
 const load = <T>(k: string, d: T): T => {
   try { const v = localStorage.getItem(k); return v ? { ...d, ...JSON.parse(v) } : d; } catch { return d; }
@@ -21,14 +22,16 @@ const load = <T>(k: string, d: T): T => {
 const store = (k: string, v: unknown) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* storage unavailable */ } };
 
 export const DEFAULT_OPTS = {
-  brush: { size: 24, hardness: 0.8, opacity: 1, flow: 1, pressure: true },
-  eraser: { size: 40, hardness: 0.8, opacity: 1, flow: 1, pressure: false },
-  clone: { size: 40, hardness: 0.6, opacity: 1, flow: 1, pressure: false, aligned: true },
-  heal: { size: 40, hardness: 0.5, opacity: 1, flow: 1, pressure: false, aligned: true },
+  brush: { size: 24, hardness: 0.8, opacity: 1, flow: 1, pressure: true, antiAlias: true },
+  eraser: { size: 40, hardness: 0.8, opacity: 1, flow: 1, pressure: false, antiAlias: true },
+  select: { antiAlias: true },
+  clone: { size: 40, hardness: 0.6, opacity: 1, flow: 1, pressure: false, aligned: true, sampleAll: false },
+  heal: { size: 40, hardness: 0.5, opacity: 1, flow: 1, pressure: false, aligned: true, sampleAll: false },
+  wand: { tolerance: 32, contiguous: true, sampleAll: true, antiAlias: true },
   fill: { tolerance: 32, contiguous: true, opacity: 1 },
   gradient: { kind: 'linear' as 'linear' | 'radial', toTransparent: false, opacity: 1 },
-  text: { font: 'Segoe UI', size: 64, weight: 400, italic: false, align: 'left' as 'left' | 'center' | 'right' },
-  shape: { kind: 'rect' as 'rect' | 'ellipse' | 'line', fill: true, stroke: false, strokeWidth: 4, radius: 0 },
+  text: { font: 'Segoe UI', size: 64, weight: 400, italic: false, align: 'left' as 'left' | 'center' | 'right', antiAlias: true },
+  shape: { kind: 'rect' as 'rect' | 'ellipse' | 'line', fill: true, stroke: false, strokeWidth: 4, radius: 0, antiAlias: true },
   move: { autoSelect: false, mode: 'transform' as 'transform' | 'perspective' | 'warp' },
   picker: { sample: 1 },
 };
@@ -43,7 +46,7 @@ class App {
   tool!: Tool;
   tools: Tool[] = [];
   opts: ToolOpts = structuredClone(DEFAULT_OPTS);
-  prefs: Prefs = load<Prefs>('amxpixl.prefs', { theme: 'dark', glow: false, dock: { color: true, properties: true, layers: true, history: false }, rulers: false, guides: true, snap: true });
+  prefs: Prefs = load<Prefs>('amxpixl.prefs', { theme: 'dark', glow: false, dock: { color: true, properties: true, layers: true, history: false }, rulers: false, guides: true, snap: true, pixelGrid: true });
   /** Set while a modal filter preview or text edit owns the canvas. */
   busy = false;
 

@@ -6,7 +6,7 @@ import type { TextLayer, TextProps } from '../core/types';
 import { view } from '../ui/canvasview';
 import { h } from '../ui/dom';
 import { allFontsLoaded, fontList, loadInstalledFonts } from '../ui/fonts';
-import { numField, seg } from '../ui/widgets';
+import { checkbox, numField, seg } from '../ui/widgets';
 import { layerAt } from './move';
 import type { PInfo, Tool } from './tool';
 
@@ -60,6 +60,7 @@ class TextTool implements Tool {
       seg([{ v: 'left', icon: 'alignL', title: 'Align left' }, { v: 'center', icon: 'alignC', title: 'Centre' }, { v: 'right', icon: 'alignR', title: 'Align right' }], cur?.align ?? o.align, (v) => this.style({ align: v })),
       h('button', { class: 'btn small', type: 'button', title: 'Use the foreground colour for this text', onclick: () => this.style({ color: app.fg }) },
         h('span', { class: 'chip-swatch', style: `background:${app.fg}` }), 'Apply colour'),
+      checkbox('Anti-alias', cur ? cur.antiAlias !== false : o.antiAlias, (v) => this.style({ antiAlias: v }), 'Turn off for hard pixel edges (pixel art and pixel fonts)'),
     );
   }
 
@@ -77,7 +78,7 @@ class TextTool implements Tool {
     const l: TextLayer = {
       id: newId(), type: 'text', name: 'Text', visible: true, opacity: 1, blend: 'normal',
       t: { x: Math.round(p.x), y: Math.round(p.y - o.size * 0.8), sx: 1, sy: 1, rot: 0 },
-      text: { content: '', font: o.font, size: o.size, weight: o.weight, italic: o.italic, color: app.fg, align: o.align, lineHeight: 1.2, tracking: 0 },
+      text: { content: '', font: o.font, size: o.size, weight: o.weight, italic: o.italic, color: app.fg, align: o.align, lineHeight: 1.2, tracking: 0, ...(o.antiAlias ? {} : { antiAlias: false }) },
     };
     doc.insertLayer(l);
     doc.touch('meta');

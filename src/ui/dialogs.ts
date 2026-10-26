@@ -1,6 +1,9 @@
 import { app } from '../app';
-import { addGuide, createDoc, deleteLook, exportImage, lookSourceLayers, nextUntitled, resizeCanvas, resizeImage, saveLook } from '../actions';
+import { addGuide, colorRangeSelection, createDoc, deleteLook, exportImage, lookSourceLayers, modifySelection, nextUntitled, resizeCanvas, resizeImage, saveLook } from '../actions';
 import { savedLooks } from '../core/looks';
+import { colorRangeMask, sampleSource, type Modify, type SelMode } from '../core/selops';
+import { checkForUpdate, openReleasePage, type UpdateInfo } from '../core/update';
+import { view } from './canvasview';
 import { cloneCanvas, ctx2d } from '../core/layers';
 import { FILTERS, maskedMerge, type FilterDef, type Params } from '../core/filters';
 import { h } from './dom';
@@ -57,7 +60,7 @@ export function newDocDialog() {
 export function imageSizeDialog() {
   const doc = app.doc; if (!doc) return;
   const W = doc.width, H = doc.height;
-  let w = W, hh = H, link = true;
+  let w = W, hh = H, link = true, resample = doc.resample;
   const wf = numField('Width', w, (v) => { w = Math.round(v); if (link) { hh = Math.max(1, Math.round((w * H) / W)); hf.set(hh); } pct(); }, { unit: 'px', min: 1, max: 30000 });
   const hf = numField('Height', hh, (v) => { hh = Math.round(v); if (link) { w = Math.max(1, Math.round((hh * W) / H)); wf.set(w); } pct(); }, { unit: 'px', min: 1, max: 30000 });
   const pctF = numField('Scale', 100, (v) => { w = Math.max(1, Math.round((W * v) / 100)); hh = Math.max(1, Math.round((H * v) / 100)); wf.set(w); hf.set(hh); }, { unit: '%', min: 1, max: 1000, decimals: 1 });
@@ -68,10 +71,17 @@ export function imageSizeDialog() {
       h('p', { class: 'dialog-msg' }, `Currently ${W} × ${H} px.`),
       h('div', { class: 'row' }, wf, hf),
       h('div', { class: 'row' }, pctF, checkbox('Keep proportions', link, (v) => { link = v; })),
-      h('p', { class: 'dialog-note' }, 'Lossless: every layer keeps its original pixels, so you can resize down and back up with no quality loss. Pixels are only resampled once, when you export.'),
+      resampleField(resample, (v) => { resample = v; }),
+      h('p', { class: 'dialog-note' }, 'Lossless: every layer keeps its original pixels, so you can resize down and back up with no quality loss. Pixels are only resampled once, when you export. Nearest neighbour keeps pixel art blocky (best at 200%, 300%, 400%…).'),
     ],
-    buttons: [{ label: 'Cancel' }, { label: 'Resize', primary: true, onClick: () => { if (w !== W || hh !== H) resizeImage(w, hh); } }],
+    buttons: [{ label: 'Cancel' }, { label: 'Resize', primary: true, onClick: () => { if (w !== W || hh !== H || resample !== doc.resample) resizeImage(w, hh, resample); } }],
   });
+}
+
+/** Smooth vs nearest-neighbour resampling (Image Size and Export). */
+function resampleField(value: 'smooth' | 'nearest', onChange: (v: 'smooth' | 'nearest') => void) {
+  return h('div', { class: 'field wide' }, h('span', null, 'Resample'),
+    seg([{ v: 'smooth', label: 'Smooth', title: 'Best for photos and artwork' }, { v: 'nearest', label: 'Nearest neighbour', title: 'Hard, blocky pixels for pixel art' }], value, onChange));
 }
 
 export function canvasSizeDialog() {
@@ -98,7 +108,7 @@ export function canvasSizeDialog() {
 
 export function exportDialog() {
   const doc = app.doc; if (!doc) return;
-  let format: 'png' | 'jpeg' | 'webp' = 'png', quality = 0.92, scale = 1;
+  let format: 'png' | 'jpeg' | 'webp' = 'png', quality = 0.92, scale = 1, resample = doc.resample;
   const info = h('p', { class: 'dialog-msg' });
   const q = slider({ label: 'Quality', min: 0.1, max: 1, step: 1, display: 100, value: quality, unit: '%', onInput: (v) => { quality = v; } });
   const upd = () => {
@@ -112,10 +122,10 @@ export function exportDialog() {
     body: [
       h('div', { class: 'field wide' }, h('span', null, 'Format'),
         seg([{ v: 'png', label: 'PNG' }, { v: 'jpeg', label: 'JPEG' }, { v: 'webp', label: 'WebP' }], format, (v) => { format = v; upd(); })),
-      q, sc, info,
+      q, sc, resampleField(resample, (v) => { resample = v; }), info,
       h('p', { class: 'dialog-note' }, 'Exports are resampled straight from each layer\'s originals for the sharpest result. Save as .pixl to keep layers.'),
     ],
-    buttons: [{ label: 'Cancel' }, { label: 'Export', primary: true, onClick: () => { exportImage(doc, { format, quality, scale }).catch((e) => toast(`Export failed: ${e.message}`, 'error')); } }],
+    buttons: [{ label: 'Cancel' }, { label: 'Export', primary: true, onClick: () => { exportImage(doc, { format, quality, scale, nearest: resample === 'nearest' }).catch((e) => toast(`Export failed: ${e.message}`, 'error')); } }],
   });
 }
 
@@ -215,11 +225,112 @@ export function newGuideDialog() {
   });
 }
 
+/** Select › Colour Range: click the image (or use the foreground colour) and tune how far the match reaches. */
+export function colorRangeDialog() {
+  const doc = app.doc; if (!doc) return;
+  const src = sampleSource(doc, true, null);
+  const hexRgb = (hex: string): [number, number, number] => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255) as [number, number, number];
+  let mode = 0, fuzz = 40, rgb = hexRgb(app.fg), how: SelMode = 'replace', pending = 0;
+  // Live preview of the mask: white is selected.
+  const scale = Math.min(1, 300 / Math.max(doc.width, doc.height));
+  const thumb = h('canvas', { class: 'range-preview', width: Math.max(1, Math.round(doc.width * scale)), height: Math.max(1, Math.round(doc.height * scale)) });
+  const swatch = h('span', { class: 'range-swatch' });
+  const draw = () => {
+    cancelAnimationFrame(pending);
+    pending = requestAnimationFrame(() => {
+      swatch.style.background = `rgb(${rgb.map((v) => Math.round(v * 255)).join(',')})`;
+      const m = colorRangeMask(src, mode, fuzz, rgb);
+      const x = ctx2d(thumb);
+      x.globalCompositeOperation = 'source-over';
+      x.fillStyle = '#000';
+      x.fillRect(0, 0, thumb.width, thumb.height);
+      x.drawImage(m, 0, 0, thumb.width, thumb.height);
+    });
+  };
+  // While open, a click on the image samples its colour.
+  const sample = (e: PointerEvent) => {
+    if (e.button !== 0 || mode !== 0) return;
+    const r = view.clientRect();
+    const p = view.toDoc(e.clientX - r.left, e.clientY - r.top);
+    if (p.x < 0 || p.y < 0 || p.x >= doc.width || p.y >= doc.height) return;
+    e.preventDefault(); e.stopPropagation();
+    const d = ctx2d(src).getImageData(Math.floor(p.x), Math.floor(p.y), 1, 1).data;
+    rgb = [d[0] / 255, d[1] / 255, d[2] / 255];
+    draw();
+  };
+  view.el.addEventListener('pointerdown', sample, true);
+  const done = () => { cancelAnimationFrame(pending); view.el.removeEventListener('pointerdown', sample, true); };
+  const fuzzSlider = slider({ label: 'Fuzziness', min: 0, max: 200, value: fuzz, onInput: (v) => { fuzz = v; draw(); } });
+  draw();
+  dialog({
+    title: 'Colour Range', width: 380, modeless: true,
+    body: [
+      h('div', { class: 'field wide' }, h('span', null, 'Select'), seg([{ v: '0', label: 'Colour' }, { v: '1', label: 'Highlights' }, { v: '2', label: 'Midtones' }, { v: '3', label: 'Shadows' }], '0', (v) => {
+        mode = +v; fuzzSlider.hidden = mode !== 0; draw();
+      })),
+      h('div', { class: 'field wide' }, h('span', null, 'Colour'), h('div', { class: 'range-pick' }, swatch,
+        h('button', { class: 'btn small', type: 'button', onclick: () => { rgb = hexRgb(app.fg); draw(); } }, 'Use foreground'))),
+      fuzzSlider,
+      thumb,
+      h('div', { class: 'field wide' }, h('span', null, 'Result'), seg([{ v: 'replace', label: 'New' }, { v: 'add', label: 'Add' }, { v: 'sub', label: 'Subtract' }], how, (v) => { how = v as SelMode; })),
+      h('p', { class: 'dialog-note' }, 'Click the image to pick the colour. White in the preview is what gets selected.'),
+    ],
+    onCancel: done,
+    buttons: [
+      { label: 'Cancel', onClick: done },
+      { label: 'OK', primary: true, onClick: () => { done(); colorRangeSelection(src, mode, fuzz, rgb, how); } },
+    ],
+  });
+}
+
+const MODIFY: { v: Modify; label: string; note: string; max: number; def: number }[] = [
+  { v: 'feather', label: 'Feather', note: 'Softens the edge over this many pixels.', max: 250, def: 5 },
+  { v: 'grow', label: 'Expand', note: 'Pushes the edge outward.', max: 100, def: 4 },
+  { v: 'shrink', label: 'Contract', note: 'Pulls the edge inward.', max: 100, def: 4 },
+  { v: 'smooth', label: 'Smooth', note: 'Rounds off corners and removes specks.', max: 100, def: 4 },
+  { v: 'border', label: 'Border', note: 'Keeps only a band this wide along the edge.', max: 200, def: 8 },
+];
+
+/** Select › Modify: feather, expand, contract, smooth or border. */
+export function modifySelectionDialog(kind: Modify) {
+  if (!app.doc?.selection) { toast('Make a selection first.'); return; }
+  const m = MODIFY.find((x) => x.v === kind)!;
+  let r = m.def;
+  dialog({
+    title: `${m.label} selection`, width: 360,
+    body: [
+      slider({ label: 'Radius', min: 1, max: m.max, value: r, unit: 'px', onInput: (v) => { r = v; } }),
+      h('p', { class: 'dialog-note' }, m.note),
+    ],
+    buttons: [{ label: 'Cancel' }, { label: 'OK', primary: true, onClick: () => modifySelection(kind, r) }],
+  });
+}
+
 export function shortcutsDialog(rows: [string, string][]) {
   dialog({
     title: 'Keyboard shortcuts', width: 560,
     body: h('div', { class: 'shortcut-list' }, ...rows.map(([k, l]) => h('div', { class: 'shortcut' }, h('span', null, l), h('kbd', null, k)))),
     buttons: [{ label: 'Close', primary: true }],
+  });
+}
+
+/** Help › Check for Updates (or `quiet` at startup: only speaks up when there is something new). */
+export async function updateDialog(quiet = false) {
+  let info: UpdateInfo | null;
+  try { info = await checkForUpdate(); } catch (err) {
+    if (!quiet) toast(`Couldn't check for updates: ${(err as Error).message}`, 'error');
+    return;
+  }
+  if (!info) { if (!quiet) toast(`You're up to date (version ${__APP_VERSION__}).`); return; }
+  const notes = info.notes.trim().split('\n').slice(0, 12).join('\n');
+  dialog({
+    title: 'Update available', width: 440,
+    body: [
+      h('p', { class: 'dialog-msg' }, `AMxPixl ${info.version} is available. You have ${__APP_VERSION__}.`),
+      notes ? h('pre', { class: 'update-notes' }, notes) : null,
+      h('p', { class: 'dialog-note' }, 'Download the installer and run it: it replaces this version and keeps your settings.'),
+    ].filter(Boolean) as HTMLElement[],
+    buttons: [{ label: 'Later' }, { label: 'Open download page', primary: true, onClick: () => { openReleasePage(info!.url).catch(() => {}); } }],
   });
 }
 

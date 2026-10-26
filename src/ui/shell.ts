@@ -1,11 +1,12 @@
 import { app } from '../app';
 import * as A from '../actions';
 import { pickFiles } from '../core/fileio';
+import { clearRecent, recentList } from '../core/recent';
 import { FILTERS } from '../core/filters';
 import { glfx } from '../core/glfx';
 import { view } from './canvasview';
 import { colorPanel } from './colorpanel';
-import { aboutDialog, canvasSizeDialog, exportDialog, filterDialog, imageSizeDialog, newDocDialog, newGuideDialog, shortcutsDialog } from './dialogs';
+import { aboutDialog, canvasSizeDialog, colorRangeDialog, exportDialog, filterDialog, imageSizeDialog, modifySelectionDialog, newDocDialog, newGuideDialog, shortcutsDialog, updateDialog } from './dialogs';
 import { h, isTyping } from './dom';
 import { historyPanel } from './historypanel';
 import { adjustmentMenuItems, effectMenuItems, layersPanel, looksMenuItems, maskMenuItems } from './layerspanel';
@@ -40,6 +41,7 @@ const MENUS: MenuDef[] = [
     title: 'File', items: [
       { label: 'New…', accel: 'Ctrl+N', run: newDocDialog },
       { label: 'Open…', accel: 'Ctrl+O', run: open },
+      { label: 'Open Recent', sub: recentMenuItems },
       { label: 'Place Image as Layer…', accel: 'Ctrl+Shift+O', run: place, enabled: hasDoc },
       'sep',
       { label: 'Save', accel: 'Ctrl+S', run: () => A.saveDoc(), enabled: hasDoc },
@@ -125,6 +127,18 @@ const MENUS: MenuDef[] = [
       { label: 'All', accel: 'Ctrl+A', run: A.selectAll, enabled: hasDoc },
       { label: 'Deselect', accel: 'Ctrl+D', run: A.deselect, enabled: hasSel },
       { label: 'Inverse', accel: 'Ctrl+Shift+I', run: A.invertSelection, enabled: hasDoc },
+      'sep',
+      { label: 'Colour Range…', run: colorRangeDialog, enabled: hasDoc },
+      { label: 'Layer Shape', run: () => A.selectLayerShape(app.doc!.active!.id), enabled: () => !!app.doc?.active && !['adjust', 'effect'].includes(app.doc.active.type) },
+      { label: 'Modify', sub: () => [
+        { label: 'Feather…', accel: 'Shift+F6', onClick: () => modifySelectionDialog('feather'), disabled: !hasSel() },
+        { label: 'Expand…', onClick: () => modifySelectionDialog('grow'), disabled: !hasSel() },
+        { label: 'Contract…', onClick: () => modifySelectionDialog('shrink'), disabled: !hasSel() },
+        { label: 'Smooth…', onClick: () => modifySelectionDialog('smooth'), disabled: !hasSel() },
+        { label: 'Border…', onClick: () => modifySelectionDialog('border'), disabled: !hasSel() },
+      ] },
+      'sep',
+      { label: 'Quick Mask', accel: 'Q', run: A.toggleQuickMask, enabled: hasDoc, checked: () => !!app.doc?.quickMask },
     ],
   },
   {
@@ -146,6 +160,7 @@ const MENUS: MenuDef[] = [
       { label: 'Rulers', accel: 'Ctrl+R', run: () => app.setPrefs({ rulers: !app.prefs.rulers }), checked: () => app.prefs.rulers },
       { label: 'Guides', accel: 'Ctrl+;', run: () => app.setPrefs({ guides: !app.prefs.guides }), checked: () => app.prefs.guides },
       { label: 'Snap', accel: 'Ctrl+Shift+;', run: () => app.setPrefs({ snap: !app.prefs.snap }), checked: () => app.prefs.snap },
+      { label: 'Pixel Grid (600% and up)', accel: "Ctrl+'", run: () => app.setPrefs({ pixelGrid: !app.prefs.pixelGrid }), checked: () => app.prefs.pixelGrid },
       { label: 'New Guide…', run: newGuideDialog, enabled: hasDoc },
       { label: 'Clear Guides', run: A.clearGuides, enabled: () => !!app.doc?.guides.length },
       'sep',
@@ -156,13 +171,14 @@ const MENUS: MenuDef[] = [
   {
     title: 'Help', items: [
       { label: 'Keyboard Shortcuts', accel: 'F1', run: showShortcuts },
+      { label: 'Check for Updates…', run: () => updateDialog() },
       { label: 'About AMxPixl', run: aboutDialog },
     ],
   },
 ];
 
 const extraShortcuts: [string, string][] = [
-  ['V', 'Move & transform'], ['M', 'Rectangle / ellipse select'], ['L', 'Lasso'], ['C', 'Crop'], ['I', 'Eyedropper'],
+  ['V', 'Move & transform'], ['M', 'Rectangle / ellipse select'], ['L', 'Lasso'], ['W', 'Magic wand'],['Ctrl + click layer thumbnail', 'Select layer shape'], ['C', 'Crop'], ['I', 'Eyedropper'],
   ['B', 'Brush'], ['E', 'Eraser'], ['S', 'Clone stamp (Alt+click sets the source)'], ['J', 'Healing brush'], ['G', 'Gradient / paint bucket'], ['T', 'Text'], ['U', 'Shape'], ['H', 'Hand'], ['Z', 'Zoom'],
   ['X', 'Swap colours'], ['D', 'Default colours'], ['[ / ]', 'Brush size'], ['Space (hold)', 'Pan'], ['Ctrl + wheel', 'Zoom at cursor'],
   ['Alt + click (brush)', 'Pick colour'], ['Shift + drag', 'Add to selection / constrain'], ['Alt + drag', 'Subtract from selection'],
@@ -192,9 +208,10 @@ const arrangeKeys: Record<string, () => void> = {
   'Ctrl+]': () => A.arrange('up'), 'Ctrl+[': () => A.arrange('down'),
   'Ctrl+Shift+]': () => A.arrange('top'), 'Ctrl+Shift+[': () => A.arrange('bottom'),
   'Ctrl+Shift+=': () => view.zoomStep(1),
+  'Shift+F6': () => modifySelectionDialog('feather'),
 };
 
-const CODE_KEYS: Record<string, string> = { BracketLeft: '[', BracketRight: ']', Equal: '=', Minus: '-', NumpadAdd: '=', NumpadSubtract: '-', Backquote: '`', Semicolon: ';' };
+const CODE_KEYS: Record<string, string> = { BracketLeft: '[', BracketRight: ']', Equal: '=', Minus: '-', NumpadAdd: '=', NumpadSubtract: '-', Backquote: '`', Semicolon: ';', Quote: "'" };
 
 /** Switches the Move tool into perspective or warp editing for the active image layer. */
 function startWarp(mode: 'perspective' | 'warp') {
@@ -364,11 +381,48 @@ function welcome() {
       h('div', { class: 'welcome-actions' },
         h('button', { class: 'btn primary', type: 'button', onclick: newDocDialog }, icon('plus'), 'New image'),
         h('button', { class: 'btn', type: 'button', onclick: open }, icon('folder'), 'Open…')),
-      h('p', { class: 'dim small' }, 'or drop images here · Ctrl+V pastes from the clipboard')));
+      h('p', { class: 'dim small' }, 'or drop images here · Ctrl+V pastes from the clipboard'),
+      recentGrid));
   const sync = () => { el.hidden = app.docs.length > 0; };
   app.on('docs', sync);
+  app.on('recent', drawRecentGrid);
   sync();
+  drawRecentGrid();
   return el;
+}
+
+const recentGrid = h('div', { class: 'recent-grid' });
+
+function drawRecentGrid() {
+  const list = recentList().slice(0, 8);
+  recentGrid.hidden = !list.length;
+  recentGrid.replaceChildren(
+    h('div', { class: 'recent-head' }, h('span', null, 'Recent'),
+      h('button', { class: 'link-btn', type: 'button', onclick: () => { clearRecent(); drawRecentGrid(); } }, 'Clear')),
+    ...list.map((e) => h('button', { class: 'recent-item', type: 'button', title: e.path ?? e.name, onclick: () => A.openRecentEntry(e) },
+      e.thumb ? h('img', { src: e.thumb, alt: '' }) : h('span', { class: 'recent-blank' }, icon('image')),
+      h('span', { class: 'recent-name' }, e.name),
+      h('span', { class: 'recent-time dim' }, ago(e.time)))));
+}
+
+function ago(t: number) {
+  const m = Math.round((Date.now() - t) / 60000);
+  if (m < 1) return 'just now';
+  if (m < 60) return `${m} min ago`;
+  const hr = Math.round(m / 60);
+  if (hr < 24) return `${hr} h ago`;
+  const d = Math.round(hr / 24);
+  return d === 1 ? 'yesterday' : d < 30 ? `${d} days ago` : new Date(t).toLocaleDateString();
+}
+
+function recentMenuItems(): MenuItem[] {
+  const list = recentList();
+  if (!list.length) return [{ label: 'No recent files', disabled: true }];
+  return [
+    ...list.map((e) => ({ label: e.name, onClick: () => A.openRecentEntry(e) })),
+    { sep: true },
+    { label: 'Clear Recent Files', onClick: () => { clearRecent(); app.emit('recent'); } },
+  ];
 }
 
 function statusbar() {

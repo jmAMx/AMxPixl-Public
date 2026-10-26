@@ -2,13 +2,18 @@ import { app } from './app';
 import { defaultAdj, ADJ_LABELS } from './core/adjustments';
 import { Doc, flatLayers, newId } from './core/document';
 import { defaultFx, fxDef } from './core/effects';
-import { baseName, canvasBlob, decodeImage, decodePixl, docFromCanvas, encodePixl, extOf, PIXL_ACCEPT, saveBlob } from './core/fileio';
+import { baseName, canvasBlob, decodeImage, decodePixl, docFromCanvas, encodePixl, extOf, PIXL_ACCEPT, saveBlob, type Picked } from './core/fileio';
+import { importPsd } from './core/import/psd';
+import { importXcf } from './core/import/xcf';
+import { addRecent, openRecent, removeRecent, type RecentEntry } from './core/recent';
+import { clearRecovery } from './core/recovery';
 import { cloneCanvas, ctx2d, drawPlaced, follow, layerMatrix, localBounds, newCanvas } from './core/layers';
 import { savedLooks, storeLooks, type Look, type LookItem } from './core/looks';
 import { parseCube } from './core/lut';
 import { apply, decompose, invert, matScale, mul, roundOut, setT, tidy, union, xformMatrix, type Mat, type Pt, type Rect, type Xform } from './core/math';
 import { flatten, renderDoc } from './core/render';
-import { invertSel, mapSel, selBounds } from './core/selection';
+import { invertSel, mapSel, maskSelection, selBounds } from './core/selection';
+import { colorRangeMask, combine, layerAlphaMask, modifyMask, sampleSource, wandMask, type Modify, type SelMode } from './core/selops';
 import { defaultStyles } from './core/styles';
 import type { AdjKind, AdjParams, BlendIf, GroupLayer, Guide, Layer, LayerStyles, Mask, PlacedLayer, RasterLayer, Warp } from './core/types';
 import { initWarp, warpBounds } from './core/warp';
@@ -33,32 +38,57 @@ export function createDoc(name: string, w: number, h: number, bg: string | null)
 let untitled = 1;
 export const nextUntitled = () => `Untitled-${untitled++}`;
 
-export async function openFiles(files: { file: File; handle: FileSystemFileHandle | null }[]) {
-  for (const { file, handle } of files) {
+/** A small JPEG preview of a document for the Recent Files list. */
+export function thumbOf(doc: Doc): string | undefined {
+  try {
+    const s = 160 / Math.max(doc.width, doc.height);
+    return flatten(doc, Math.min(1, s)).toDataURL('image/jpeg', 0.7);
+  } catch { return undefined; }
+}
+
+export async function openFiles(files: Picked[]) {
+  for (const { file, ref } of files) {
     try {
-      if (extOf(file.name) === 'pixl') {
-        const doc = await decodePixl(file, baseName(file.name));
+      const ext = extOf(file.name);
+      let doc: Doc;
+      if (ext === 'pixl') {
+        doc = await decodePixl(file, baseName(file.name));
         doc.name = file.name;
-        doc.fileHandle = handle;
-        app.addDoc(doc);
+        doc.file = ref.path || ref.handle ? ref : null;
+      } else if (ext === 'psd' || ext === 'psb') {
+        doc = await importPsd(await file.arrayBuffer(), file.name);
+      } else if (ext === 'xcf') {
+        doc = await importXcf(await file.arrayBuffer(), file.name);
       } else {
-        const c = await decodeImage(file);
-        app.addDoc(docFromCanvas(file.name, c));
+        doc = docFromCanvas(file.name, await decodeImage(file));
       }
+      app.addDoc(doc);
+      if (doc.importNotes.length) toast(`Imported ${file.name}. ${doc.importNotes.join(' ')}`);
+      addRecent(ref, thumbOf(doc));
     } catch (e) {
       console.error(e);
       toast(`Couldn't open ${file.name}: ${(e as Error).message || 'unsupported file'}`, 'error');
     }
+  }
+  app.emit('recent');
+}
+
+export async function openRecentEntry(e: RecentEntry) {
+  try {
+    await openFiles([await openRecent(e)]);
+  } catch (err) {
+    const r = await ask('Can\'t open file', `${e.name}: ${(err as Error).message} Remove it from Recent Files?`, [{ id: 'keep', label: 'Keep' }, { id: 'remove', label: 'Remove', primary: true }]);
+    if (r === 'remove') { removeRecent(e.id); app.emit('recent'); }
   }
 }
 
 /** Adds images to the current document as new layers, centred (scaled down to fit if larger). */
 export async function placeFiles(files: File[]) {
   const doc = need();
-  if (!doc) return openFiles(files.map((f) => ({ file: f, handle: null })));
+  if (!doc) return openFiles(files.map((f) => ({ file: f, ref: { name: f.name } })));
   for (const f of files) {
     try {
-      if (extOf(f.name) === 'pixl') { await openFiles([{ file: f, handle: null }]); continue; }
+      if (['pixl', 'psd', 'xcf'].includes(extOf(f.name))) { await openFiles([{ file: f, ref: { name: f.name } }]); continue; }
       placeCanvas(await decodeImage(f), baseName(f.name), null, true);
     } catch (e) {
       toast(`Couldn't place ${f.name}: ${(e as Error).message}`, 'error');
@@ -80,17 +110,19 @@ export function placeCanvas(c: HTMLCanvasElement, name: string, at: Pt | null, f
 export async function saveDoc(doc: Doc | null = app.doc, saveAs = false) {
   if (!doc) return false;
   const isPixl = doc.name.toLowerCase().endsWith('.pixl');
-  const handle = !saveAs && isPixl ? doc.fileHandle : null;
+  const existing = !saveAs && isPixl ? doc.file : null;
   try {
     const blob = await encodePixl(doc);
-    const h = await saveBlob(blob, `${baseName(doc.name)}.pixl`, handle, PIXL_ACCEPT);
-    if (h === undefined) return false;
-    doc.fileHandle = h;
-    if (h) doc.name = h.name;
-    else if (!isPixl) doc.name = `${baseName(doc.name)}.pixl`;
+    const ref = await saveBlob(blob, `${baseName(doc.name)}.pixl`, existing, PIXL_ACCEPT);
+    if (ref === undefined) return false;
+    const stored = ref.path || ref.handle;
+    doc.file = stored ? ref : null;
+    doc.name = stored ? ref.name : `${baseName(doc.name)}.pixl`;
     doc.savedIndex = doc.index;
     app.emit('docs');
     toast(`Saved ${doc.name}`);
+    if (stored) { addRecent(ref, thumbOf(doc)); app.emit('recent'); }
+    clearRecovery(doc).catch(() => {});
     return true;
   } catch (e) {
     toast(`Save failed: ${(e as Error).message}`, 'error');
@@ -98,8 +130,8 @@ export async function saveDoc(doc: Doc | null = app.doc, saveAs = false) {
   }
 }
 
-export async function exportImage(doc: Doc, o: { format: 'png' | 'jpeg' | 'webp'; quality: number; scale: number }) {
-  let c = flatten(doc, o.scale);
+export async function exportImage(doc: Doc, o: { format: 'png' | 'jpeg' | 'webp'; quality: number; scale: number; nearest?: boolean }) {
+  let c = flatten(doc, o.scale, { nearest: o.nearest });
   if (o.format === 'jpeg') {
     const bgc = newCanvas(c.width, c.height);
     const x = ctx2d(bgc);
@@ -111,8 +143,8 @@ export async function exportImage(doc: Doc, o: { format: 'png' | 'jpeg' | 'webp'
   const blob = await canvasBlob(c, `image/${o.format}`, o.format === 'png' ? undefined : o.quality);
   const ext = o.format === 'jpeg' ? 'jpg' : o.format;
   const accept = { [`image/${o.format}`]: [`.${ext}`] };
-  const h = await saveBlob(blob, `${baseName(doc.name)}.${ext}`, null, accept);
-  if (h !== undefined) toast(`Exported ${c.width} × ${c.height} ${ext.toUpperCase()} (${(blob.size / 1024 / 1024).toFixed(2)} MB)`);
+  const ref = await saveBlob(blob, `${baseName(doc.name)}.${ext}`, null, accept);
+  if (ref !== undefined) toast(`Exported ${c.width} × ${c.height} ${ext.toUpperCase()} (${(blob.size / 1024 / 1024).toFixed(2)} MB)`);
 }
 
 export async function closeDoc(doc: Doc | null = app.doc) {
@@ -124,6 +156,7 @@ export async function closeDoc(doc: Doc | null = app.doc) {
     if (r === 'cancel') return;
     if (r === 'save' && !(await saveDoc(doc))) return;
   }
+  clearRecovery(doc).catch(() => {});
   app.removeDoc(doc);
 }
 
@@ -324,7 +357,17 @@ export function transformDoc(label: string, g: Mat, w: number, h: number, scaleS
     }
     l.t = decompose(mul(g, xformMatrix(l.t)));
   }
-  doc.setSelection(mapSel(doc.selection, (x, y) => { const p = apply(g, x, y); return [p.x, p.y]; }));
+  // Pixel-based selections and Quick Mask are images: redraw them through the transform at the new size.
+  const remap = (c: HTMLCanvasElement) => {
+    const out = newCanvas(w, h);
+    const x = ctx2d(out);
+    setT(x, g);
+    x.drawImage(c, 0, 0);
+    return out;
+  };
+  if (doc.selection?.ops.some((o) => o.shape === 'mask')) doc.setSelection(maskSelection(remap(doc.selectionMask()!), (c) => doc.addCanvas(c)));
+  else doc.setSelection(mapSel(doc.selection, (x, y) => { const p = apply(g, x, y); return [p.x, p.y]; }));
+  if (doc.quickMask) doc.quickMask = doc.addCanvas(remap(doc.pool.get(doc.quickMask)!));
   // Guides are lines: map two points on each; a rotation can turn vertical guides horizontal.
   doc.guides = doc.guides.map((gd) => {
     const a = gd.axis === 'x' ? apply(g, gd.pos, 0) : apply(g, 0, gd.pos);
@@ -349,8 +392,10 @@ export function cropToSelection() {
   cropTo(b);
 }
 
-export function resizeImage(w: number, h: number) {
+export function resizeImage(w: number, h: number, resample?: Doc['resample']) {
   const doc = need(); if (!doc) return;
+  // Part of the same undo step: the document remembers how its layers are resampled from now on.
+  if (resample) doc.resample = resample;
   const kx = w / doc.width, ky = h / doc.height;
   transformDoc('Image size', [kx, 0, 0, ky, 0, 0], w, h, [kx, ky]);
 }
@@ -461,6 +506,64 @@ export function invertSelection() {
   const doc = need(); if (!doc) return;
   doc.setSelection(invertSel(doc.selection, doc.width, doc.height));
   doc.commit('Invert selection');
+}
+
+const MODIFY_LABEL: Record<Modify, string> = { feather: 'Feather', grow: 'Expand', shrink: 'Contract', smooth: 'Smooth', border: 'Border' };
+
+/** Select › Modify (feather, expand, contract, smooth, border) by `r` pixels. */
+export function modifySelection(kind: Modify, r: number) {
+  const doc = need(); const m = doc?.selectionMask();
+  if (!doc || !m) { toast('Make a selection first.'); return; }
+  const sel = maskSelection(modifyMask(m, kind, r), (c) => doc.addCanvas(c));
+  if (!sel) { toast('Nothing would be left selected.'); return; }
+  doc.setSelection(sel);
+  doc.commit(`${MODIFY_LABEL[kind]} selection`);
+}
+
+/** Magic wand at a document point. */
+export function selectSimilar(x: number, y: number, mode: SelMode) {
+  const doc = need(); if (!doc) return;
+  const o = app.opts.wand;
+  const m = wandMask(sampleSource(doc, o.sampleAll, doc.active), x, y, o.tolerance, o.contiguous, o.antiAlias);
+  if (!m) return;
+  doc.setSelection(combine(doc, m, mode));
+  doc.commit(mode === 'replace' ? 'Magic Wand' : mode === 'add' ? 'Add to selection' : 'Subtract from selection');
+}
+
+/** Colour Range: preview mask (not committed) or apply it. */
+export function colorRangeSelection(src: HTMLCanvasElement, mode: number, fuzz: number, rgb: [number, number, number], how: SelMode) {
+  const doc = need(); if (!doc) return;
+  doc.setSelection(combine(doc, colorRangeMask(src, mode, fuzz, rgb), how));
+  doc.commit('Colour Range');
+}
+
+/** Ctrl+click a layer thumbnail: select that layer's shape. */
+export function selectLayerShape(id: string, mode: SelMode = 'replace') {
+  const doc = need(); const l = doc?.layer(id); if (!doc || !l) return;
+  if (isFilter(l)) { toast('Adjustment and effect layers have no shape to select.'); return; }
+  doc.setSelection(combine(doc, layerAlphaMask(doc, l), mode));
+  doc.commit('Select layer shape');
+}
+
+/**
+ * Quick Mask (Q): turns the selection into a red-tinted overlay you can paint with any brush (white adds, black
+ * removes), then back into a selection.
+ */
+export function toggleQuickMask() {
+  const doc = need(); if (!doc) return;
+  if (doc.quickMask) {
+    const c = doc.pool.get(doc.quickMask)!;
+    doc.quickMask = null;
+    doc.setSelection(maskSelection(cloneCanvas(c), (k) => doc.addCanvas(k)));
+    doc.commit('Exit Quick Mask');
+  } else {
+    const m = doc.selectionMask();
+    doc.quickMask = doc.addCanvas(m ? cloneCanvas(m) : newCanvas(doc.width, doc.height));
+    doc.setSelection(null);
+    doc.commit('Quick Mask');
+    toast('Quick Mask: paint white to select, black to deselect. Press Q again to finish.');
+  }
+  app.emit('tool');
 }
 
 function needTarget(doc: Doc, verb: string) {

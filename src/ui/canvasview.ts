@@ -2,7 +2,6 @@ import { app } from '../app';
 import { ctx2d } from '../core/layers';
 import { intersect, invert, type Mat, type Pt } from '../core/math';
 import { renderDoc } from '../core/render';
-import { opPath } from '../core/selection';
 import type { PInfo, Tool } from '../tools/tool';
 import { addGuide } from '../actions';
 import { h } from './dom';
@@ -14,6 +13,7 @@ class CanvasView {
   readonly el = h('div', { class: 'workspace' });
   readonly canvas = h('canvas', { class: 'view' });
   private composite = document.createElement('canvas');
+  private qmTint = document.createElement('canvas');
   private compRect = { x: 0, y: 0, w: 0, h: 0 };
   private compScale = 1;
   /** A pointer/slider drag is in progress somewhere in the app. */
@@ -85,6 +85,8 @@ class CanvasView {
   }
 
   get size() { return { w: this.cssW, h: this.cssH }; }
+  /** A drag is in progress (background work like autosave waits for it to finish). */
+  get busy() { return this.interacting || this.down; }
 
   requestRender() { this.dirty = true; this.schedule(); }
   requestOverlay() { this.schedule(); }
@@ -195,7 +197,7 @@ class CanvasView {
           this.composite.height = ch;
         }
         const t0 = performance.now();
-        renderDoc(d, this.composite, [z * k, 0, 0, z * k, (dx - vr.x) * k, (dy - vr.y) * k]);
+        renderDoc(d, this.composite, [z * k, 0, 0, z * k, (dx - vr.x) * k, (dy - vr.y) * k], { screen: true });
         this.noteFrame(performance.now() - t0, k);
         this.compRect = vr;
         this.compScale = k;
@@ -204,24 +206,48 @@ class CanvasView {
       ctx.imageSmoothingEnabled = true;
       if (k === 1) ctx.drawImage(this.composite, vr.x, vr.y);
       else ctx.drawImage(this.composite, vr.x, vr.y, vr.w, vr.h);
+      // Pixel grid: one line per image pixel once each pixel is big enough to see (600% and up).
+      if (app.prefs.pixelGrid && d.zoom >= 6) {
+        const i0 = Math.max(0, Math.floor((vr.x - dx) / z)), i1 = Math.min(d.width, Math.ceil((vr.x + vr.w - dx) / z));
+        const j0 = Math.max(0, Math.floor((vr.y - dy) / z)), j1 = Math.min(d.height, Math.ceil((vr.y + vr.h - dy) / z));
+        ctx.beginPath();
+        for (let i = i0; i <= i1; i++) { const x = Math.round(dx + i * z) + 0.5; ctx.moveTo(x, vr.y); ctx.lineTo(x, vr.y + vr.h); }
+        for (let j = j0; j <= j1; j++) { const y = Math.round(dy + j * z) + 0.5; ctx.moveTo(vr.x, y); ctx.lineTo(vr.x + vr.w, y); }
+        ctx.lineWidth = 1;
+        ctx.strokeStyle = 'rgba(128, 128, 128, 0.45)';
+        ctx.stroke();
+      }
       ctx.restore();
     }
 
+    // Quick Mask: everything not selected is tinted red, like Photoshop.
+    const qm = d.quickMask ? d.pool.get(d.quickMask) : null;
+    if (qm) {
+      if (this.qmTint.width !== this.canvas.width || this.qmTint.height !== this.canvas.height) { this.qmTint.width = this.canvas.width; this.qmTint.height = this.canvas.height; }
+      const t = ctx2d(this.qmTint);
+      t.setTransform(1, 0, 0, 1, 0, 0);
+      t.globalCompositeOperation = 'copy';
+      t.fillStyle = 'rgba(255, 30, 30, 0.5)';
+      t.fillRect(docR.x, docR.y, docR.w, docR.h);
+      t.globalCompositeOperation = 'destination-out';
+      t.setTransform(z, 0, 0, z, dx, dy);
+      t.drawImage(qm, 0, 0);
+      ctx.drawImage(this.qmTint, 0, 0);
+    }
+
     // Selection outline ("marching ants").
-    if (d.selection) {
+    const outline = d.selectionOutline();
+    if (outline) {
       ctx.save();
       ctx.setTransform(z, 0, 0, z, dx, dy);
       ctx.lineWidth = 1 / d.zoom;
-      for (const op of d.selection.ops) {
-        const path = opPath(op);
-        ctx.setLineDash([]);
-        ctx.strokeStyle = '#000';
-        ctx.stroke(path);
-        ctx.setLineDash([4 / d.zoom, 4 / d.zoom]);
-        ctx.lineDashOffset = -this.antsOffset / d.zoom;
-        ctx.strokeStyle = '#fff';
-        ctx.stroke(path);
-      }
+      ctx.setLineDash([]);
+      ctx.strokeStyle = '#000';
+      ctx.stroke(outline);
+      ctx.setLineDash([4 / d.zoom, 4 / d.zoom]);
+      ctx.lineDashOffset = -this.antsOffset / d.zoom;
+      ctx.strokeStyle = '#fff';
+      ctx.stroke(outline);
       ctx.restore();
     }
 

@@ -37,6 +37,15 @@
     "shortDescription": "Pixl Editor",
     "longDescription": "AMxPixl (Pixl Editor): a lightweight, non-destructive image editor.",
     "category": "GraphicsAndDesign",
+    "fileAssociations": [
+      {
+        "ext": ["pixl"],
+        "name": "AMxPixl Project",
+        "description": "AMxPixl layered image",
+        "role": "Editor",
+        "mimeType": "application/x-amxpixl"
+      }
+    ],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
