@@ -53,9 +53,13 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "resources": {
+      "icons/pixl-file.ico": "pixl-file.ico"
+    },
     "windows": {
       "nsis": {
-        "installMode": "currentUser"
+        "installMode": "currentUser",
+        "installerHooks": "./windows/hooks.nsh"
       }
     }
   }

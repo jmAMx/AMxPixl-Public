@@ -74,20 +74,12 @@ button, select, input, textarea { font: inherit; color: inherit; }
   display: flex; align-items: center; gap: 4px; height: 36px; padding: 0 8px 0 4px;
   background: var(--panel); border-bottom: 1px solid var(--border);
 }
-.brand { display: flex; align-items: center; gap: 2px; margin-right: 10px; }
-.mono { height: 30px; width: auto; display: none; }
+.brand { display: flex; align-items: center; gap: 7px; margin-right: 10px; padding-left: 4px; }
+.mono { height: 26px; width: auto; display: none; }
 html[data-theme="dark"] .mono.for-dark, html[data-theme="light"] .mono.for-light { display: block; }
 .wordmark { font: 700 19px/1 'Rajdhani', sans-serif; letter-spacing: .4px; filter: var(--engrave); white-space: nowrap; }
-/* Like FileShift's arrows: "Pixl" carries a small pixel grid in the accent colour. */
-.px-name::after {
-  content: ''; display: inline-block; width: .62em; height: .62em; margin-left: .14em; vertical-align: baseline;
-  background:
-    linear-gradient(var(--accent), var(--accent)) 0 0 / 45% 45% no-repeat,
-    linear-gradient(var(--accent), var(--accent)) 100% 100% / 45% 45% no-repeat,
-    linear-gradient(color-mix(in srgb, var(--accent) 40%, transparent), color-mix(in srgb, var(--accent) 40%, transparent)) 100% 0 / 45% 45% no-repeat,
-    linear-gradient(color-mix(in srgb, var(--accent) 40%, transparent), color-mix(in srgb, var(--accent) 40%, transparent)) 0 100% / 45% 45% no-repeat;
-  border-radius: 1px;
-}
+.amx-credit { position: absolute; left: 0; right: 0; bottom: 14px; display: flex; justify-content: center; align-items: center; gap: 6px; font: 600 12px/1 'Rajdhani', sans-serif; letter-spacing: .08em; color: var(--text-dim); opacity: .7; }
+.amx-credit .mono { height: 14px; }
 .app-version {
   align-self: center; margin-left: 6px; padding: 1px 5px 0; border: 1px solid var(--border-strong); border-radius: 3px;
   font: 600 11px/1.3 'Rajdhani', sans-serif; letter-spacing: .04em; color: var(--text-dim);
@@ -250,7 +242,7 @@ input[type="range"]:focus-visible::-webkit-slider-thumb { background: var(--acce
 
 .welcome { position: absolute; inset: 0; display: grid; place-items: center; background: var(--canvas-area); }
 .welcome-card { display: flex; flex-direction: column; align-items: center; gap: 10px; text-align: center; padding: 24px; }
-.welcome-card .mono { height: 76px; margin-bottom: -4px; }
+.welcome-card .mono { height: 84px; margin-bottom: 6px; }
 .wordmark.big { font-size: 40px; margin: 0; }
 .welcome-card p { margin: 0; font-size: 14px; }
 .welcome-actions { display: flex; gap: 10px; margin: 12px 0 4px; }

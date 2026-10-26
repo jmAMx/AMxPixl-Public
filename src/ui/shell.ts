@@ -298,8 +298,8 @@ function menubar() {
   app.on('change', syncUndo); app.on('docs', syncUndo); syncUndo();
   return h('header', { class: 'menubar' },
     h('div', { class: 'brand', title: 'AMxPixl' },
-      h('img', { class: 'mono for-dark', src: 'brand/monogram-dark.png', alt: '' }),
-      h('img', { class: 'mono for-light', src: 'brand/monogram-light.png', alt: '' }),
+      h('img', { class: 'mono for-dark', src: 'brand/pixl-dark-32.svg', alt: '' }),
+      h('img', { class: 'mono for-light', src: 'brand/pixl-light-32.svg', alt: '' }),
       h('span', { class: 'wordmark' }, h('span', { class: 'px-name' }, 'Pixl')),
       h('span', { class: 'app-version', title: `AMxPixl version ${__APP_VERSION__}` }, `v${__APP_VERSION__}`)),
     h('nav', { class: 'menus' }, ...buttons),
@@ -374,15 +374,20 @@ function tabs() {
 function welcome() {
   const el = h('div', { class: 'welcome' },
     h('div', { class: 'welcome-card' },
-      h('img', { class: 'mono for-dark', src: 'brand/monogram-dark.png', alt: '' }),
-      h('img', { class: 'mono for-light', src: 'brand/monogram-light.png', alt: '' }),
+      h('img', { class: 'mono for-dark', src: 'brand/pixl-dark.svg', alt: '' }),
+      h('img', { class: 'mono for-light', src: 'brand/pixl-light.svg', alt: '' }),
       h('h1', { class: 'wordmark big' }, h('span', { class: 'px-name' }, 'Pixl'), h('span', { class: 'dim' }, ' Editor')),
       h('p', { class: 'dim' }, 'Lossless layers, GPU adjustments, everything on this PC.'),
       h('div', { class: 'welcome-actions' },
         h('button', { class: 'btn primary', type: 'button', onclick: newDocDialog }, icon('plus'), 'New image'),
         h('button', { class: 'btn', type: 'button', onclick: open }, icon('folder'), 'Open…')),
       h('p', { class: 'dim small' }, 'or drop images here · Ctrl+V pastes from the clipboard'),
-      recentGrid));
+      recentGrid),
+    // The AMx family tie, kept quiet.
+    h('div', { class: 'amx-credit' },
+      h('img', { class: 'mono for-dark', src: 'brand/monogram-dark.png', alt: '' }),
+      h('img', { class: 'mono for-light', src: 'brand/monogram-light.png', alt: '' }),
+      h('span', null, 'An AMx app')));
   const sync = () => { el.hidden = app.docs.length > 0; };
   app.on('docs', sync);
   app.on('recent', drawRecentGrid);

@@ -339,8 +339,8 @@ export function aboutDialog() {
     title: 'About AMxPixl', width: 420,
     body: [
       h('div', { class: 'about' },
-        h('img', { src: 'brand/icon.png', alt: '', width: 64, height: 64 }),
-        h('div', null, h('strong', null, 'Pixl Editor'), h('div', { class: 'dim' }, `AMxPixl · version ${__APP_VERSION__}`))),
+        h('img', { src: `brand/pixl-${app.prefs.theme === 'dark' ? 'dark' : 'light'}.svg`, alt: '', width: 64, height: 64 }),
+        h('div', null, h('strong', null, 'Pixl Editor'), h('div', { class: 'dim' }, `AMxPixl · version ${__APP_VERSION__} · an AMx app`))),
       h('p', { class: 'dialog-msg' }, 'A lightweight, non-destructive image editor. Layers keep their original pixels, adjustments run on the GPU, and everything stays on this PC.'),
     ],
     buttons: [{ label: 'Close', primary: true }],
