@@ -4,7 +4,9 @@ import { intersect, invert, type Mat, type Pt } from '../core/math';
 import { renderDoc } from '../core/render';
 import { opPath } from '../core/selection';
 import type { PInfo, Tool } from '../tools/tool';
+import { addGuide } from '../actions';
 import { h } from './dom';
+import { clearSnapLines, snapLines, snapPoint } from './snap';
 
 const ZOOM_STEPS = [0.02, 0.03, 0.05, 0.0667, 0.0833, 0.125, 0.1667, 0.25, 0.3333, 0.5, 0.6667, 1, 1.5, 2, 3, 4, 5, 6, 8, 12, 16, 24, 32];
 
@@ -13,6 +15,12 @@ class CanvasView {
   readonly canvas = h('canvas', { class: 'view' });
   private composite = document.createElement('canvas');
   private compRect = { x: 0, y: 0, w: 0, h: 0 };
+  private compScale = 1;
+  /** A pointer/slider drag is in progress somewhere in the app. */
+  private interacting = false;
+  /** Recent full-quality frames took too long (measured as the gap between redraws while dragging). */
+  private slowFrames = false;
+  private lastPaint = 0;
   private dirty = true;
   private raf = 0;
   private dpr = 1;
@@ -43,6 +51,14 @@ class CanvasView {
     });
     window.addEventListener('keyup', (e) => { if (e.code === 'Space') { this.spaceHeld = false; this.updateCursor(); } });
     window.addEventListener('blur', () => { this.spaceHeld = false; });
+    window.addEventListener('pointerdown', () => { this.interacting = true; this.lastPaint = 0; }, true);
+    const release = () => {
+      if (!this.interacting) return;
+      this.interacting = false;
+      if (this.compScale !== 1) this.requestRender();
+    };
+    window.addEventListener('pointerup', release, true);
+    window.addEventListener('pointercancel', release, true);
     app.on('change', ({ doc }) => { if (doc === app.doc) { this.requestRender(); this.syncAnts(); } });
     app.on('docs', () => { this.ensureFitted(); this.requestRender(); this.syncAnts(); });
     app.on('tool', () => { this.updateCursor(); this.requestOverlay(); });
@@ -170,16 +186,24 @@ class CanvasView {
       ctx.clip();
       ctx.fillStyle = this.checkerPattern(ctx);
       ctx.fillRect(vr.x, vr.y, vr.w, vr.h);
-      if (this.dirty || vr.x !== this.compRect.x || vr.y !== this.compRect.y || vr.w !== this.compRect.w || vr.h !== this.compRect.h) {
-        if (this.composite.width !== vr.w || this.composite.height !== vr.h) {
-          this.composite.width = vr.w;
-          this.composite.height = vr.h;
+      // While dragging something, drop to half resolution if full-quality frames are too slow; sharpen on release.
+      const k = this.interacting && this.slowFrames ? 0.5 : 1;
+      if (this.dirty || k !== this.compScale || vr.x !== this.compRect.x || vr.y !== this.compRect.y || vr.w !== this.compRect.w || vr.h !== this.compRect.h) {
+        const cw = Math.max(1, Math.ceil(vr.w * k)), ch = Math.max(1, Math.ceil(vr.h * k));
+        if (this.composite.width !== cw || this.composite.height !== ch) {
+          this.composite.width = cw;
+          this.composite.height = ch;
         }
-        renderDoc(d, this.composite, [z, 0, 0, z, dx - vr.x, dy - vr.y]);
+        const t0 = performance.now();
+        renderDoc(d, this.composite, [z * k, 0, 0, z * k, (dx - vr.x) * k, (dy - vr.y) * k]);
+        this.noteFrame(performance.now() - t0, k);
         this.compRect = vr;
+        this.compScale = k;
         this.dirty = false;
       }
-      ctx.drawImage(this.composite, vr.x, vr.y);
+      ctx.imageSmoothingEnabled = true;
+      if (k === 1) ctx.drawImage(this.composite, vr.x, vr.y);
+      else ctx.drawImage(this.composite, vr.x, vr.y, vr.w, vr.h);
       ctx.restore();
     }
 
@@ -202,7 +226,163 @@ class CanvasView {
     }
 
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    this.paintGuides(ctx);
     app.tool?.overlay?.(ctx);
+    if (app.prefs.rulers) this.paintRulers(ctx);
+  }
+
+  // ---------- guides & rulers ----------
+
+  private guideDrag: { axis: 'x' | 'y'; index: number; pos: number; fromRuler: boolean } | null = null;
+
+  private paintGuides(ctx: CanvasRenderingContext2D) {
+    const d = this.doc!;
+    const line = (axis: 'x' | 'y', pos: number, color: string) => {
+      const s = this.toScreen(axis === 'x' ? pos : 0, axis === 'y' ? pos : 0);
+      ctx.beginPath();
+      if (axis === 'x') { ctx.moveTo(Math.round(s.x) + 0.5, 0); ctx.lineTo(Math.round(s.x) + 0.5, this.cssH); }
+      else { ctx.moveTo(0, Math.round(s.y) + 0.5); ctx.lineTo(this.cssW, Math.round(s.y) + 0.5); }
+      ctx.strokeStyle = color;
+      ctx.stroke();
+    };
+    ctx.save();
+    ctx.lineWidth = 1;
+    if (app.prefs.guides) d.guides.forEach((g, i) => { if (!(this.guideDrag && this.guideDrag.index === i)) line(g.axis, g.pos, '#22c7f5'); });
+    if (this.guideDrag) line(this.guideDrag.axis, this.guideDrag.pos, '#22c7f5');
+    ctx.setLineDash([4, 3]);
+    for (const x of snapLines.x) line('x', x, '#ff3dbb');
+    for (const y of snapLines.y) line('y', y, '#ff3dbb');
+    ctx.restore();
+  }
+
+  private paintRulers(ctx: CanvasRenderingContext2D) {
+    const d = this.doc!;
+    const R = RULER;
+    const css = getComputedStyle(document.documentElement);
+    const bg = css.getPropertyValue('--panel').trim() || '#171c1b';
+    const fg = css.getPropertyValue('--text-dim').trim() || '#8b9a95';
+    const border = css.getPropertyValue('--border').trim() || '#29312f';
+    ctx.save();
+    ctx.fillStyle = bg;
+    ctx.fillRect(0, 0, this.cssW, R);
+    ctx.fillRect(0, 0, R, this.cssH);
+    ctx.strokeStyle = border;
+    ctx.beginPath(); ctx.moveTo(0, R - 0.5); ctx.lineTo(this.cssW, R - 0.5); ctx.moveTo(R - 0.5, 0); ctx.lineTo(R - 0.5, this.cssH); ctx.stroke();
+    // Label every `step` document pixels, with steps at least ~60 screen pixels apart.
+    const steps = [1, 2, 5, 10, 20, 25, 50, 100, 200, 250, 500, 1000, 2000, 2500, 5000, 10000];
+    const step = steps.find((s) => s * d.zoom >= 60) ?? 20000;
+    const minor = step * d.zoom >= 100 ? step / 10 : step / 5;
+    ctx.fillStyle = fg;
+    ctx.strokeStyle = fg;
+    ctx.font = '10px "Segoe UI", sans-serif';
+    ctx.textBaseline = 'top';
+    const x0 = this.toDoc(R, 0).x, x1 = this.toDoc(this.cssW, 0).x;
+    ctx.beginPath();
+    for (let v = Math.floor(x0 / minor) * minor; v <= x1; v += minor) {
+      const sx = Math.round(this.toScreen(v, 0).x) + 0.5;
+      if (sx < R) continue;
+      const major = Math.abs(v / step - Math.round(v / step)) < 1e-6;
+      ctx.moveTo(sx, major ? 2 : R - 5); ctx.lineTo(sx, R);
+      if (major) ctx.fillText(String(Math.round(v)), sx + 3, 2);
+    }
+    const y0 = this.toDoc(0, R).y, y1 = this.toDoc(0, this.cssH).y;
+    for (let v = Math.floor(y0 / minor) * minor; v <= y1; v += minor) {
+      const sy = Math.round(this.toScreen(0, v).y) + 0.5;
+      if (sy < R) continue;
+      const major = Math.abs(v / step - Math.round(v / step)) < 1e-6;
+      ctx.moveTo(major ? 2 : R - 5, sy); ctx.lineTo(R, sy);
+      if (major) {
+        ctx.save();
+        ctx.translate(2, sy + 3);
+        ctx.rotate(Math.PI / 2);
+        ctx.fillText(String(Math.round(v)), 0, -9);
+        ctx.restore();
+      }
+    }
+    ctx.stroke();
+    // Mark the cursor position on both rulers.
+    if (this.hover) {
+      ctx.strokeStyle = css.getPropertyValue('--accent').trim() || '#2ee6be';
+      ctx.beginPath();
+      ctx.moveTo(Math.round(this.hover.sx) + 0.5, 0); ctx.lineTo(Math.round(this.hover.sx) + 0.5, R);
+      ctx.moveTo(0, Math.round(this.hover.sy) + 0.5); ctx.lineTo(R, Math.round(this.hover.sy) + 0.5);
+      ctx.stroke();
+    }
+    ctx.fillStyle = bg;
+    ctx.fillRect(0, 0, R, R);
+    ctx.restore();
+  }
+
+  private overRuler(sx: number, sy: number): 'x' | 'y' | null {
+    if (!app.prefs.rulers) return null;
+    if (sy < RULER && sx >= RULER) return 'y';
+    if (sx < RULER && sy >= RULER) return 'x';
+    return null;
+  }
+
+  /** Index of the guide under a screen point (Move tool only), or -1. */
+  private guideAt(sx: number, sy: number): number {
+    const d = this.doc;
+    if (!d || !app.prefs.guides || app.tool?.id !== 'move') return -1;
+    return d.guides.findIndex((g) => {
+      const s = this.toScreen(g.axis === 'x' ? g.pos : 0, g.axis === 'y' ? g.pos : 0);
+      return g.axis === 'x' ? Math.abs(s.x - sx) <= 4 : Math.abs(s.y - sy) <= 4;
+    });
+  }
+
+  private startGuide(p: PInfo): boolean {
+    const r = this.overRuler(p.sx, p.sy);
+    if (r) {
+      this.guideDrag = { axis: r, index: -1, pos: r === 'x' ? p.x : p.y, fromRuler: true };
+      return true;
+    }
+    const i = this.guideAt(p.sx, p.sy);
+    if (i >= 0) {
+      const g = this.doc!.guides[i];
+      this.guideDrag = { axis: g.axis, index: i, pos: g.pos, fromRuler: false };
+      return true;
+    }
+    return false;
+  }
+
+  private moveGuide(p: PInfo) {
+    const g = this.guideDrag!;
+    const s = snapPoint(p.x, p.y);
+    g.pos = g.axis === 'x' ? (p.ctrl ? p.x : s.x) : (p.ctrl ? p.y : s.y);
+    clearSnapLines();
+    this.requestOverlay();
+  }
+
+  private endGuide(p: PInfo) {
+    const g = this.guideDrag!;
+    this.guideDrag = null;
+    const d = this.doc!;
+    const dropped = this.overRuler(p.sx, p.sy) || p.sx < 0 || p.sy < 0 || p.sx > this.cssW || p.sy > this.cssH;
+    if (g.index < 0) {
+      if (!dropped) addGuide(g.axis, g.pos);
+    } else if (dropped) {
+      d.guides = d.guides.filter((_, i) => i !== g.index);
+      d.commit('Remove guide');
+    } else {
+      d.guides = d.guides.map((x, i) => (i === g.index ? { ...x, pos: Math.round(g.pos) } : x));
+      d.commit('Move guide');
+    }
+    this.requestOverlay();
+  }
+
+  /**
+   * Tracks whether full-quality redraws keep up while dragging. CPU time alone misses GPU work, so the gap between
+   * consecutive redraws counts too.
+   */
+  private noteFrame(cpuMs: number, k: number) {
+    const now = performance.now();
+    if (this.interacting && k === 1) {
+      const gap = this.lastPaint ? now - this.lastPaint : 0;
+      if (Math.max(cpuMs, gap > 200 ? 0 : gap) > 34) this.slowFrames = true;
+    } else if (!this.interacting && k === 1 && cpuMs < 12) {
+      this.slowFrames = false;
+    }
+    this.lastPaint = now;
   }
 
   private checkerPattern(ctx: CanvasRenderingContext2D) {
@@ -260,6 +440,7 @@ class CanvasView {
       return;
     }
     if (e.button !== 0 || app.busy) return;
+    if (this.startGuide(p)) { this.updateCursor(); return; }
     this.down = true;
     this.activeTool = app.tool;
     app.tool.down?.(p);
@@ -277,6 +458,7 @@ class CanvasView {
       this.changed();
       return;
     }
+    if (this.guideDrag) { this.moveGuide(p); return; }
     if (this.down && this.activeTool) {
       const evs = typeof e.getCoalescedEvents === 'function' ? e.getCoalescedEvents() : [];
       if (evs.length > 1) for (const ce of evs) this.activeTool.move?.(this.info(ce));
@@ -290,6 +472,7 @@ class CanvasView {
 
   private onUp(e: PointerEvent) {
     if (this.panning) { this.panning = null; this.updateCursor(); return; }
+    if (this.guideDrag) { this.endGuide(this.info(e)); this.updateCursor(); return; }
     if (!this.down) return;
     this.down = false;
     const t = this.activeTool;
@@ -317,7 +500,10 @@ class CanvasView {
 
   updateCursor() {
     let c = 'default';
+    const hv = this.hover;
+    const g = this.guideDrag ? this.guideDrag.axis : hv ? (this.overRuler(hv.sx, hv.sy) ?? (this.guideAt(hv.sx, hv.sy) >= 0 ? this.doc!.guides[this.guideAt(hv.sx, hv.sy)].axis : null)) : null;
     if (this.panning) c = 'grabbing';
+    else if (g) c = g === 'x' ? 'col-resize' : 'row-resize';
     else if (this.spaceHeld || app.tool?.id === 'hand') c = 'grab';
     else if (app.tool?.ownCursor && this.hover) c = 'none';
     else if (app.tool?.cursor) c = app.tool.cursor(this.hover);
@@ -329,6 +515,9 @@ class CanvasView {
 
   invView(): Mat { return invert(this.viewMatrix); }
 }
+
+/** Ruler thickness in CSS pixels. */
+const RULER = 18;
 
 const isField = (t: EventTarget | null) => {
   const el = t as HTMLElement | null;

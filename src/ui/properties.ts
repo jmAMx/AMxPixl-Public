@@ -1,11 +1,15 @@
 import { app } from '../app';
-import { applyMask, deleteMask, flipLayer, invertMask, rasterizeLayer, resetTransform, setMaskProp, setPlacedTransform } from '../actions';
+import {
+  applyMask, applyWarp, clearStyles, deleteMask, editBlendIf, editStyles, flipLayer, invertMask, loadLut, rasterizeLayer, removeWarp,
+  resetTransform, setMaskProp, setPlacedTransform,
+} from '../actions';
+import { defaultStyles } from '../core/styles';
 import { ADJ_LABELS, HSL_BANDS, curveTable, histogram, type Histogram } from '../core/adjustments';
-import { flatLayers, type Doc } from '../core/document';
+import type { Doc } from '../core/document';
 import { fxDef } from '../core/effects';
 import { ctx2d, localBounds, newCanvas } from '../core/layers';
 import { renderDoc } from '../core/render';
-import type { AdjParams, AdjustLayer, Channel, CurvePts, EffectLayer, GradeWheel, Layer, LevelsCh, PlacedLayer, ShapeLayer, TextLayer } from '../core/types';
+import type { AdjParams, AdjustLayer, Channel, CurvePts, EffectLayer, GradeWheel, Layer, LayerStyles, LevelsCh, PlacedLayer, ShapeLayer, TextLayer } from '../core/types';
 import { isPlaced } from '../core/types';
 import { h } from './dom';
 import { allFontsLoaded, fontList, loadInstalledFonts } from './fonts';
@@ -15,12 +19,10 @@ const deg = (r: number) => (r * 180) / Math.PI;
 
 /** Histogram of everything beneath a layer (what an adjustment layer receives), at a cheap preview size. */
 function histBelow(doc: Doc, layer: Layer): Histogram {
-  const flat = flatLayers(doc.layers);
-  const i = flat.findIndex((l) => l.id === layer.id);
   const s = Math.min(1, 320 / Math.max(doc.width, doc.height));
   const c = newCanvas(Math.max(1, doc.width * s), Math.max(1, doc.height * s));
-  // Approximation for layers inside groups: everything drawn before it, ignoring group blending.
-  renderDoc(doc, c, [s, 0, 0, s, 0, 0], { layers: flat.slice(0, i).filter((l) => l.type !== 'group') });
+  // Exactly what the layer receives, inside groups and clipping too.
+  renderDoc(doc, c, [s, 0, 0, s, 0, 0], { stopAt: layer.id });
   return histogram(ctx2d(c, true).getImageData(0, 0, c.width, c.height));
 }
 
@@ -86,7 +88,12 @@ export function propertiesPanel() {
     if (l.type === 'raster') {
       const c = doc.canvasOf(l);
       const pct = Math.round(Math.abs(l.t.sx) * 100);
-      note = h('p', { class: 'props-note' }, `Original pixels: ${c.width} × ${c.height}${pct !== 100 ? ` · shown at ${pct}%` : ''}. Scaling never touches the original.`);
+      note = h('div', null,
+        h('p', { class: 'props-note' }, `Original pixels: ${c.width} × ${c.height}${pct !== 100 ? ` · shown at ${pct}%` : ''}. Scaling never touches the original.`),
+        l.warp ? h('div', { class: 'btn-row' }, h('span', { class: 'dim' }, `${l.warp.kind === 'mesh' ? 'Warped' : 'Perspective'} (lossless)`),
+          h('button', { class: 'btn small', type: 'button', onclick: () => { app.setTool('move'); app.opts.move.mode = l.warp!.kind === 'mesh' ? 'warp' : 'perspective'; app.emit('tool'); } }, 'Edit'),
+          h('button', { class: 'btn small', type: 'button', onclick: applyWarp }, 'Apply'),
+          h('button', { class: 'btn small', type: 'button', onclick: removeWarp }, 'Remove')) : null);
     }
     return section('Transform',
       h('div', { class: 'grid2' }, x, y, w, hh),
@@ -264,6 +271,14 @@ export function propertiesPanel() {
           checkbox('Monochrome (uses the Red output mix)', a.mono, (v) => upd<typeof a>((x) => ({ ...x, mono: v }), true)));
         break;
       }
+      case 'lut':
+        kids.push(
+          h('div', { class: 'btn-row' },
+            h('button', { class: 'btn small primary', type: 'button', onclick: () => loadLut(l.id) }, a.key ? 'Load another .cube…' : 'Load .cube file…'),
+            a.key ? h('span', { class: 'dim' }, `${a.name} (${a.size}³)`) : null),
+          sl('Intensity', 0, 100, a.intensity, (v) => upd<typeof a>((x) => ({ ...x, intensity: v })), 1, '%'),
+          h('p', { class: 'props-note' }, 'Colour lookup tables (.cube) are the standard format for film emulation and grading presets.'));
+        break;
       case 'photofilter': {
         const PRESETS: [string, string][] = [['Warming (85)', '#ec8a00'], ['Warming (LBA)', '#fa9600'], ['Cooling (80)', '#006dff'], ['Cooling (LBB)', '#005dff'], ['Sepia', '#ac7a33'], ['Underwater', '#00c1b1'], ['Deep red', '#ff0000'], ['Deep emerald', '#008c00']];
         const pick = h('select', { onchange: () => { if (pick.value) { upd<typeof a>((x) => ({ ...x, color: pick.value }), true); build(true); } } },
@@ -316,6 +331,84 @@ export function propertiesPanel() {
         l.type === 'raster' ? h('button', { class: 'btn small', type: 'button', title: 'Bake the mask into the pixels', onclick: applyMask }, 'Apply') : null,
         h('button', { class: 'btn small danger', type: 'button', onclick: deleteMask }, 'Delete')),
       h('p', { class: 'props-note' }, 'White reveals, black hides: paint with the brush (press D for default colours, X to swap). Feather softens edges live.'));
+  };
+
+  /** One collapsible row per layer style: a checkbox to turn it on, its settings shown when on. */
+  const stylesSection = (l: Layer) => {
+    const s = l.styles ?? defaultStyles();
+    const live = (f: (x: LayerStyles) => void) => editStyles(f);
+    const done = (label: string) => commitSelf(label);
+    const row = (key: keyof LayerStyles, label: string, body: () => (HTMLElement | null)[]) => {
+      const on = s[key].on;
+      return h('div', { class: 'style-row' + (on ? ' on' : '') },
+        checkbox(label, on, (v) => { live((x) => { x[key].on = v; }); done(v ? `Add ${label.toLowerCase()}` : `Remove ${label.toLowerCase()}`); build(true); }),
+        on ? h('div', { class: 'style-body' }, ...body()) : null);
+    };
+    const color = (key: keyof LayerStyles, label = 'Colour') => h('div', { class: 'prop-line' }, h('span', { class: 'dim' }, label),
+      colorInput(s[key].color, (v) => live((x) => { x[key].color = v; }), () => done('Style colour')));
+    const sl = (key: keyof LayerStyles, prop: string, label: string, min: number, max: number, unit?: string, display?: number) =>
+      slider({ label, min, max, display, step: 1, unit, value: (s[key] as unknown as Record<string, number>)[prop],
+        onInput: (v) => live((x) => { (x[key] as unknown as Record<string, number>)[prop] = v; }), onChange: () => done('Style setting') });
+    return section('Layer Styles',
+      row('shadow', 'Drop Shadow', () => [color('shadow'), sl('shadow', 'opacity', 'Opacity', 0, 1, '%', 100), sl('shadow', 'angle', 'Angle', -180, 180, '°'),
+        sl('shadow', 'distance', 'Distance', 0, 300, 'px'), sl('shadow', 'size', 'Softness', 0, 250, 'px')]),
+      row('glow', 'Outer Glow', () => [color('glow'), sl('glow', 'opacity', 'Opacity', 0, 1, '%', 100), sl('glow', 'size', 'Size', 1, 250, 'px')]),
+      row('innerGlow', 'Inner Glow', () => [color('innerGlow'), sl('innerGlow', 'opacity', 'Opacity', 0, 1, '%', 100), sl('innerGlow', 'size', 'Size', 1, 250, 'px')]),
+      row('stroke', 'Stroke', () => [color('stroke'), sl('stroke', 'size', 'Size', 1, 100, 'px'), sl('stroke', 'opacity', 'Opacity', 0, 1, '%', 100),
+        h('label', { class: 'field wide' }, h('span', null, 'Position'), seg([{ v: 'outside', label: 'Outside' }, { v: 'center', label: 'Centre' }, { v: 'inside', label: 'Inside' }], s.stroke.position,
+          (v) => { live((x) => { x.stroke.position = v; }); done('Stroke position'); }))]),
+      row('overlay', 'Colour Overlay', () => [color('overlay'), sl('overlay', 'opacity', 'Opacity', 0, 1, '%', 100)]),
+      l.styles ? h('button', { class: 'btn small', type: 'button', onclick: clearStyles }, 'Clear styles') : null);
+  };
+
+  /** Two four-handle brightness ranges, like Photoshop's Blend If: drag a handle; Alt-drag splits a pair to feather. */
+  const rangeBar = (vals: [number, number, number, number], label: string, onInput: (v: [number, number, number, number]) => void, onDone: () => void) => {
+    const bar = h('div', { class: 'bif-bar' });
+    const nums = h('div', { class: 'bif-nums' });
+    let cur = [...vals] as [number, number, number, number];
+    const handles = cur.map((_, i) => h('span', { class: `bif-h ${i < 2 ? 'lo' : 'hi'}` }));
+    const draw = () => {
+      handles.forEach((hd, i) => { hd.style.left = `${(cur[i] / 255) * 100}%`; });
+      nums.textContent = `${cur[0]}${cur[1] !== cur[0] ? ' / ' + cur[1] : ''}   ·   ${cur[2]}${cur[3] !== cur[2] ? ' / ' + cur[3] : ''}`;
+    };
+    handles.forEach((hd, i) => {
+      hd.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        hd.setPointerCapture(e.pointerId);
+        const pair = i < 2 ? [0, 1] : [2, 3];
+        const together = !e.altKey && cur[pair[0]] === cur[pair[1]];
+        const mv = (ev: PointerEvent) => {
+          const r = bar.getBoundingClientRect();
+          let v = Math.round(Math.max(0, Math.min(1, (ev.clientX - r.left) / r.width)) * 255);
+          const next = [...cur] as [number, number, number, number];
+          if (together) { next[pair[0]] = v; next[pair[1]] = v; } else next[i] = v;
+          // Keep black handles below white ones, and each pair in order.
+          if (i < 2) { v = Math.min(v, next[2]); next[0] = Math.min(next[0], next[1]); } else { next[3] = Math.max(next[3], next[2]); }
+          for (let k = 0; k < 2; k++) next[k] = Math.min(next[k], next[2]);
+          cur = next;
+          draw();
+          onInput(cur);
+        };
+        hd.addEventListener('pointermove', mv);
+        hd.addEventListener('pointerup', () => { hd.removeEventListener('pointermove', mv); onDone(); }, { once: true });
+      });
+    });
+    bar.append(...handles);
+    draw();
+    return h('div', { class: 'bif' }, h('span', { class: 'dim' }, label), bar, nums);
+  };
+
+  const blendIfSection = (l: Layer) => {
+    const b = l.blendIf ?? { on: false, self: [0, 0, 255, 255] as [number, number, number, number], under: [0, 0, 255, 255] as [number, number, number, number] };
+    const done = (label: string) => commitSelf(label);
+    return section('Blend If',
+      checkbox('Fade by brightness', b.on, (v) => { editBlendIf((x) => { x.on = v; }); done(v ? 'Blend If on' : 'Blend If off'); build(true); }),
+      b.on ? rangeBar(b.self, 'This layer', (v) => editBlendIf((x) => { x.self = v; }), () => done('Blend If')) : null,
+      b.on ? rangeBar(b.under, 'Underlying layers', (v) => editBlendIf((x) => { x.under = v; }), () => done('Blend If')) : null,
+      b.on ? h('button', { class: 'btn small', type: 'button', onclick: () => { editBlendIf((x) => { x.self = [0, 0, 255, 255]; x.under = [0, 0, 255, 255]; }); done('Reset Blend If'); build(true); } }, 'Reset') : null,
+      h('p', { class: 'props-note' }, b.on
+        ? 'Pixels outside a range disappear. Alt+drag a handle to split it and fade smoothly. Great for dropping a texture out of the shadows or highlights.'
+        : 'Hide parts of this layer by how bright they are, or by how bright the layers underneath are.'));
   };
 
   const levelsUI = (l: AdjustLayer, e: ReturnType<typeof edit>) => {
@@ -453,6 +546,7 @@ export function propertiesPanel() {
       `${l.children.length} layer${l.children.length === 1 ? '' : 's'}. With "Pass Through" blending, adjustments and effects inside the group also affect layers below it; pick any other blend mode in the Layers panel to keep them inside the group.`)));
     if (l.mask) kids.push(maskSection(l));
     if (isPlaced(l)) kids.push(transformSection(l));
+    if (isPlaced(l) || l.type === 'group') kids.push(stylesSection(l), blendIfSection(l));
     body.replaceChildren(...kids.filter(Boolean) as HTMLElement[]);
   };
 

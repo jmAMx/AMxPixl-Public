@@ -1,6 +1,7 @@
 import './styles.css';
 import { app } from './app';
 import * as A from './actions';
+import { cloneTool, healTool } from './tools/clone';
 import { cropTool } from './tools/crop';
 import { moveTool } from './tools/move';
 import { brushTool, eraserTool, fillTool, gradientTool, pickerTool } from './tools/paint';
@@ -11,7 +12,7 @@ import { view } from './ui/canvasview';
 import { mountShell } from './ui/shell';
 import { ask } from './ui/widgets';
 
-app.tools = [moveTool, rectSelectTool, ellipseSelectTool, lassoTool, cropTool, pickerTool, brushTool, eraserTool, gradientTool, fillTool, textTool, shapeTool, handTool, zoomTool];
+app.tools = [moveTool, rectSelectTool, ellipseSelectTool, lassoTool, cropTool, pickerTool, brushTool, eraserTool, cloneTool, healTool, gradientTool, fillTool, textTool, shapeTool, handTool, zoomTool];
 app.tool = brushTool;
 app.applyPrefs();
 mountShell(document.getElementById('app')!);
@@ -68,11 +69,12 @@ if (isDesktop) {
       if (r === 'close') win.destroy();
     });
   });
-  // Keep browser-engine shortcuts (reload, print, find, view source) from firing inside the app.
+  // Keep browser-engine shortcuts (reload, print, find, view source) from firing inside the app. This runs after
+  // the app's own shortcut handler (registered first), so keys the app uses, like Ctrl+G and Ctrl+R, still work.
   window.addEventListener('keydown', (e) => {
     const k = e.key.toLowerCase();
     if (e.key === 'F5' || e.key === 'F3' || e.key === 'F7' || ((e.ctrlKey || e.metaKey) && ['r', 'p', 'f', 'g', 'u'].includes(k))) e.preventDefault();
-  }, true);
+  });
   window.addEventListener('contextmenu', (e) => {
     const t = e.target as HTMLElement;
     if (t.tagName !== 'INPUT' && t.tagName !== 'TEXTAREA') e.preventDefault();

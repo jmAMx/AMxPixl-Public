@@ -21,7 +21,8 @@ export function paintableTarget(doc: Doc): { target: PixelTarget; isMask: boolea
     if (!a.visible) { toast('That layer is hidden. Show it before painting.'); return null; }
     return pt;
   }
-  if (a.type === 'text' || a.type === 'shape') toast(`"${a.name}" is a ${a.type} layer. Rasterize it first (Layer › Rasterize), or add a new layer to paint on.`);
+  if (a.type === 'raster' && a.warp) toast('This layer is warped. Apply the warp first (Layer › Transform › Apply Warp) to paint on it.');
+  else if (a.type === 'text' || a.type === 'shape') toast(`"${a.name}" is a ${a.type} layer. Rasterize it first (Layer › Rasterize), or add a new layer to paint on.`);
   else toast(`${a.type === 'group' ? 'Groups' : a.type === 'effect' ? 'Effect layers' : 'Adjustment layers'} have no pixels. Add a mask (Layer › Add Layer Mask) to paint where it applies.`);
   return null;
 }

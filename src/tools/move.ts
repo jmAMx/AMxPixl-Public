@@ -1,12 +1,14 @@
 import { app } from '../app';
 import { visiblePlaced } from '../core/document';
 import { follow, layerMatrix, localBounds, ctx2d } from '../core/layers';
-import { apply, corners, invert, pointInPoly, xformMatrix, type Mat, type Pt, type Rect, type Xform } from '../core/math';
-import type { PlacedLayer, ShapeProps } from '../core/types';
-import { flipLayer, resetTransform, rotateLayer90, setPlacedTransform } from '../actions';
+import { apply, corners, invert, mapRect, pointInPoly, xformMatrix, type Mat, type Pt, type Rect, type Xform } from '../core/math';
+import type { PlacedLayer, RasterLayer, ShapeProps } from '../core/types';
+import { warpHandles, warpPoint } from '../core/warp';
+import { applyWarp, ensureWarp, flipLayer, removeWarp, resetTransform, rotateLayer90, setPlacedTransform } from '../actions';
 import { view } from '../ui/canvasview';
 import { h } from '../ui/dom';
-import { checkbox, icon } from '../ui/widgets';
+import { clearSnapLines, snapDelta, snapLines, snapTargets } from '../ui/snap';
+import { checkbox, icon, seg } from '../ui/widgets';
 import type { PInfo, Tool } from './tool';
 
 type Handle = { u: number; v: number };
@@ -60,8 +62,33 @@ export function layerAt(x: number, y: number): PlacedLayer | null {
 
 class MoveTool implements Tool {
   id = 'move'; name = 'Move & Transform'; key = 'V'; icon = 'move' as const;
-  hint = 'Drag to move · corner handles scale (Shift = free) · outside a corner rotates · arrows nudge';
   private drag: Drag | null = null;
+  private wdrag: { layer: RasterLayer; i: number; moved: boolean } | null = null;
+
+  get hint() {
+    const m = app.opts.move.mode;
+    return m === 'perspective' ? 'Drag the corners to fit the layer into a perspective · Enter when done · lossless until you Apply'
+      : m === 'warp' ? 'Drag the grid points to bend the layer · Enter when done · lossless until you Apply'
+        : 'Drag to move · corner handles scale (Shift = free) · outside a corner rotates · arrows nudge · Ctrl while dragging turns snapping off';
+  }
+
+  private get mode() { return app.opts.move.mode; }
+
+  activate() { app.opts.move.mode = 'transform'; }
+  deactivate() { app.opts.move.mode = 'transform'; clearSnapLines(); }
+
+  private setMode(m: 'transform' | 'perspective' | 'warp') {
+    if (m !== 'transform' && !ensureWarp(m === 'warp' ? 'mesh' : 'perspective')) { app.emit('tool'); return; }
+    app.opts.move.mode = m;
+    app.emit('tool');
+    view.requestOverlay();
+  }
+
+  /** The active layer's warp handles in screen space. */
+  private warpHandlesScreen(l: RasterLayer) {
+    const m = layerMatrix(l);
+    return warpHandles(l.warp!).map((hd) => { const d = apply(m, hd.x, hd.y); return { i: hd.i, ...view.toScreen(d.x, d.y) }; });
+  }
 
   private hit(p: PInfo): Hit {
     const l = app.doc?.activePlaced;
@@ -82,6 +109,12 @@ class MoveTool implements Tool {
   }
 
   cursor(p: PInfo | null) {
+    if (this.mode !== 'transform') {
+      const l = app.doc?.activeRaster;
+      if (this.wdrag) return 'grabbing';
+      if (p && l?.warp && this.warpHandlesScreen(l).some((s) => Math.hypot(s.x - p.sx, s.y - p.sy) <= 8)) return 'grab';
+      return 'default';
+    }
     if (this.drag) return this.drag.kind === 'rotate' ? ROTATE_CURSOR : this.drag.kind === 'move' ? 'move' : 'crosshair';
     if (!p) return 'default';
     const hit = this.hit(p);
@@ -97,8 +130,19 @@ class MoveTool implements Tool {
 
   options(bar: HTMLElement) {
     const o = app.opts.move;
+    const modes = seg([{ v: 'transform', label: 'Transform' }, { v: 'perspective', label: 'Perspective', icon: undefined }, { v: 'warp', label: 'Warp' }], o.mode, (v) => this.setMode(v));
+    if (o.mode !== 'transform') {
+      bar.append(modes,
+        h('button', { class: 'btn small primary', type: 'button', onclick: () => this.setMode('transform') }, 'Done'),
+        h('button', { class: 'btn small', type: 'button', title: 'Bake the warp into the pixels (needed before painting on the layer)', onclick: () => { applyWarp(); this.setMode('transform'); } }, 'Apply warp'),
+        h('button', { class: 'btn small', type: 'button', onclick: () => { removeWarp(); this.setMode('transform'); } }, 'Remove warp'),
+        h('span', { class: 'opt-note' }, 'The original pixels are kept: you can re-edit or remove the warp any time.'));
+      return;
+    }
     bar.append(
+      modes,
       checkbox('Auto-select layer', o.autoSelect, (v) => { o.autoSelect = v; app.saveOpts(); }, 'Click picks the layer under the cursor (Ctrl+click does this any time)'),
+      checkbox('Snap', app.prefs.snap, (v) => app.setPrefs({ snap: v }), 'Snap to guides, the canvas edges and centre, and other layers'),
       h('span', { class: 'opt-sep' }),
       h('button', { class: 'btn small', type: 'button', title: 'Flip layer horizontally', onclick: () => flipLayer('h') }, icon('flipH'), 'Flip H'),
       h('button', { class: 'btn small', type: 'button', title: 'Flip layer vertically', onclick: () => flipLayer('v') }, icon('flipV'), 'Flip V'),
@@ -110,6 +154,13 @@ class MoveTool implements Tool {
 
   down(p: PInfo) {
     const doc = app.doc!;
+    if (this.mode !== 'transform') {
+      const l = ensureWarp(this.mode === 'warp' ? 'mesh' : 'perspective');
+      if (!l) return;
+      const near = this.warpHandlesScreen(l).find((s) => Math.hypot(s.x - p.sx, s.y - p.sy) <= 8);
+      if (near) this.wdrag = { layer: l, i: near.i, moved: false };
+      return;
+    }
     let hit = this.hit(p);
     if ((app.opts.move.autoSelect || p.ctrl) && hit.kind !== 'scale' && hit.kind !== 'rotate') {
       const l = layerAt(p.x, p.y);
@@ -127,6 +178,17 @@ class MoveTool implements Tool {
   }
 
   move(p: PInfo) {
+    if (this.wdrag) {
+      const w = this.wdrag;
+      const lp = apply(invert(layerMatrix(w.layer)), p.x, p.y);
+      const pts = [...w.layer.warp!.pts];
+      pts[w.i * 2] = lp.x;
+      pts[w.i * 2 + 1] = lp.y;
+      w.layer.warp = { ...w.layer.warp!, pts };
+      w.moved = true;
+      app.doc!.touch('meta');
+      return;
+    }
     const d = this.drag;
     if (!d) return;
     const l = d.layer;
@@ -135,6 +197,17 @@ class MoveTool implements Tool {
       let dx = p.x - d.p0.x, dy = p.y - d.p0.y;
       if (p.shift) { if (Math.abs(dx) > Math.abs(dy)) dy = 0; else dx = 0; }
       l.t = { ...d.t0, x: d.t0.x + dx, y: d.t0.y + dy };
+      clearSnapLines();
+      if (app.prefs.snap && !p.ctrl) {
+        // Line the layer's edges or centre up with guides, the canvas and other layers.
+        const b = mapRect(xformMatrix(l.t), d.box);
+        const { xs, ys } = snapTargets(l.id);
+        const tol = 6 / app.doc!.zoom;
+        const sx = p.shift && dx === 0 ? null : snapDelta([b.x, b.x + b.w / 2, b.x + b.w], xs, tol);
+        const sy = p.shift && dy === 0 ? null : snapDelta([b.y, b.y + b.h / 2, b.y + b.h], ys, tol);
+        if (sx) { l.t = { ...l.t, x: l.t.x + sx.d }; snapLines.x = [sx.at]; }
+        if (sy) { l.t = { ...l.t, y: l.t.y + sy.d }; snapLines.y = [sy.at]; }
+      }
     } else if (d.kind === 'scale') {
       const hd = d.h!;
       const corner = hd.u !== 0.5 && hd.v !== 0.5;
@@ -174,6 +247,13 @@ class MoveTool implements Tool {
   }
 
   up() {
+    clearSnapLines();
+    if (this.wdrag) {
+      const w = this.wdrag;
+      this.wdrag = null;
+      if (w.moved) app.doc!.commit(this.mode === 'warp' ? 'Warp' : 'Perspective');
+      return;
+    }
     const d = this.drag;
     this.drag = null;
     if (!d || !d.moved) return;
@@ -181,6 +261,7 @@ class MoveTool implements Tool {
   }
 
   keydown(e: KeyboardEvent) {
+    if (this.mode !== 'transform' && (e.key === 'Enter' || e.key === 'Escape')) { this.setMode('transform'); return true; }
     const l = app.doc?.activePlaced;
     if (!l) return false;
     const step = e.shiftKey ? 10 : 1;
@@ -191,7 +272,42 @@ class MoveTool implements Tool {
     return true;
   }
 
+  /** Warp/perspective editing: the bent grid (sampled from the warp itself) and its control points. */
+  private warpOverlay(ctx: CanvasRenderingContext2D, l: RasterLayer, accent: string) {
+    const w = l.warp!;
+    const m = layerMatrix(l);
+    const sp = (u: number, v: number) => { const q = warpPoint(w, u, v); const d = apply(m, q.x, q.y); return view.toScreen(d.x, d.y); };
+    ctx.save();
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = accent;
+    const lines = w.kind === 'perspective' ? 2 : w.n;
+    const N = 32;
+    for (let k = 0; k < lines; k++) {
+      const t = k / (lines - 1);
+      for (const along of [0, 1]) {
+        ctx.beginPath();
+        for (let i = 0; i <= N; i++) {
+          const s = i / N;
+          const pt = along ? sp(t, s) : sp(s, t);
+          if (i) ctx.lineTo(pt.x, pt.y); else ctx.moveTo(pt.x, pt.y);
+        }
+        ctx.stroke();
+      }
+    }
+    for (const hd of this.warpHandlesScreen(l)) {
+      ctx.fillStyle = '#fff';
+      ctx.beginPath(); ctx.arc(hd.x, hd.y, 5, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    }
+    ctx.restore();
+  }
+
   overlay(ctx: CanvasRenderingContext2D) {
+    const accentNow = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#2EE6BE';
+    if (this.mode !== 'transform') {
+      const r = app.doc?.activeRaster;
+      if (r?.warp && r.visible) this.warpOverlay(ctx, r, accentNow);
+      return;
+    }
     const l = app.doc?.activePlaced;
     if (!l || !l.visible) return;
     const doc = app.doc!;

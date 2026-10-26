@@ -55,7 +55,9 @@ export async function encodePixl(doc: Doc): Promise<Blob> {
   const index: Record<string, [number, number]> = {};
   let offset = 0;
   // Every pixel buffer in use: raster layers anywhere in the tree, plus layer masks.
-  const keys = flatLayers(meta.layers).flatMap((l) => [l.type === 'raster' ? l.key : null, l.mask?.key ?? null]);
+  const keys = flatLayers(meta.layers).flatMap((l) => [
+    l.type === 'raster' ? l.key : null, l.mask?.key ?? null, l.type === 'adjust' && l.adj.kind === 'lut' ? l.adj.key : null,
+  ]);
   for (const key of keys) {
     if (!key || index[key]) continue;
     const b = await canvasBlob(doc.pool.get(key)!);
@@ -90,6 +92,7 @@ export async function decodePixl(blob: Blob, fallbackName: string): Promise<Doc>
   doc.activeId = m.activeId;
   doc.selection = null;
   doc.counter = m.counter || doc.layers.length + 1;
+  doc.guides = m.guides ?? [];
   doc.resetHistory('Open');
   return doc;
 }

@@ -1,13 +1,16 @@
 import type { Doc } from './document';
 import { fxEngine } from './fx';
 import { glfx } from './glfx';
+import { glops } from './glops';
 import { ctx2d, drawPlaced, newCanvas } from './layers';
 import { identity, mapRect, matScale, mul, setT, xformMatrix, type Mat, type Rect } from './math';
 import { displaySource } from './pyramid';
-import type { BlendMode, FilterLayer, Layer, Mask } from './types';
+import { acquire, composite, gco as gcoOf, like, release } from './scratch';
+import { applyStyles, hasStyles } from './styles';
+import type { BlendIf, FilterLayer, Layer, LayerStyles, Mask } from './types';
 import { isFilter, isPlaced } from './types';
 
-export const gco = (b: BlendMode): GlobalCompositeOperation => (b === 'normal' || b === 'pass-through' ? 'source-over' : b);
+export { gco } from './scratch';
 
 export interface RenderOpts {
   /** Only these layers (bottom to top); defaults to all of the document's. */
@@ -16,6 +19,8 @@ export interface RenderOpts {
   includeHidden?: boolean;
   /** Clip to the document's canvas. */
   clip?: boolean;
+  /** Stop just before this layer and leave what it would receive in the output (for adjustment histograms). */
+  stopAt?: string;
 }
 
 interface Env {
@@ -26,44 +31,10 @@ interface Env {
   /** The document's rectangle in target pixels (for effects). */
   docRect: Rect;
   includeHidden: boolean;
-}
-
-// ---------- scratch canvases (isolated groups, masks, clipping need temporary buffers) ----------
-
-const scratch: { c: HTMLCanvasElement; busy: boolean }[] = [];
-
-function acquire(w: number, h: number): HTMLCanvasElement {
-  let s = scratch.find((x) => !x.busy && x.c.width === w && x.c.height === h);
-  if (!s) {
-    // Drop idle buffers of other sizes (the view was resized) before making a new one.
-    for (let i = scratch.length - 1; i >= 0; i--) if (!scratch[i].busy && (scratch[i].c.width !== w || scratch[i].c.height !== h)) scratch.splice(i, 1);
-    s = { c: newCanvas(w, h), busy: false };
-    scratch.push(s);
-  }
-  s.busy = true;
-  const x = ctx2d(s.c);
-  x.setTransform(1, 0, 0, 1, 0, 0);
-  x.globalAlpha = 1;
-  x.globalCompositeOperation = 'source-over';
-  x.filter = 'none';
-  x.clearRect(0, 0, w, h);
-  return s.c;
-}
-
-function release(...cs: HTMLCanvasElement[]) {
-  for (const c of cs) { const s = scratch.find((x) => x.c === c); if (s) s.busy = false; }
-}
-
-const like = (c: HTMLCanvasElement) => acquire(c.width, c.height);
-
-function composite(target: HTMLCanvasElement, src: HTMLCanvasElement, blend: BlendMode, opacity: number, op?: GlobalCompositeOperation) {
-  const x = ctx2d(target);
-  x.save();
-  x.setTransform(1, 0, 0, 1, 0, 0);
-  x.globalAlpha = opacity;
-  x.globalCompositeOperation = op ?? gco(blend);
-  x.drawImage(src, 0, 0);
-  x.restore();
+  stopAt?: string;
+  out: HTMLCanvasElement;
+  /** Set once `stopAt` is reached: everything else stops drawing. */
+  done: boolean;
 }
 
 // ---------- masks ----------
@@ -101,7 +72,7 @@ function applyMask(c: HTMLCanvasElement, m: Mask, env: Env) {
 // ---------- filter layers (adjustments + effects) ----------
 
 function filterResult(l: FilterLayer, target: HTMLCanvasElement, env: Env): HTMLCanvasElement | null {
-  if (l.type === 'adjust') return glfx.apply(target, l.adj);
+  if (l.type === 'adjust') return glfx.apply(target, l.adj, (k) => env.doc.pool.get(k));
   return fxEngine.apply(target, l.fx, env.scale, env.docRect);
 }
 
@@ -145,24 +116,47 @@ function drawFilter(l: FilterLayer, target: HTMLCanvasElement, env: Env) {
 
 const shows = (l: Layer, env: Env) => (l.visible || env.includeHidden) && l.opacity > 0;
 
+/**
+ * Finishes an isolated layer buffer: mask, Blend If (against what's already in `target`), styles, then composites
+ * it onto `target` with the layer's blend mode and opacity. Releases `iso`.
+ */
+function finish(l: Layer, iso: HTMLCanvasElement, target: HTMLCanvasElement, env: Env, m: Mask | null, st: LayerStyles | null, bi: BlendIf | null) {
+  if (m) applyMask(iso, m, env);
+  if (bi) {
+    const r = glops.blendIf(iso, target, bi);
+    if (r) composite(iso, r, 'normal', 1, 'copy');
+  }
+  const blend = l.blend === 'pass-through' ? 'normal' : l.blend;
+  if (st) {
+    const styled = applyStyles(iso, st, env.scale);
+    composite(target, styled, blend, l.opacity);
+    release(styled);
+  } else {
+    composite(target, iso, blend, l.opacity);
+  }
+  release(iso);
+}
+
 function drawLayer(l: Layer, target: HTMLCanvasElement, env: Env) {
+  if (env.done) return;
   if (isFilter(l)) { drawFilter(l, target, env); return; }
   const m = maskOn(l);
+  const st = hasStyles(l.styles) ? l.styles : null;
+  const bi = l.blendIf?.on ? l.blendIf : null;
   if (l.type === 'group') {
-    if (l.blend === 'pass-through' && l.opacity >= 1 && !m) { renderList(l.children, target, env); return; }
+    if (l.blend === 'pass-through' && l.opacity >= 1 && !m && !st && !bi) { renderList(l.children, target, env); return; }
     const iso = like(target);
     renderList(l.children, iso, env);
-    if (m) applyMask(iso, m, env);
-    composite(target, iso, l.blend, l.opacity);
-    release(iso);
+    if (env.done) { release(iso); return; }
+    finish(l, iso, target, env, m, st, bi);
     return;
   }
   if (!isPlaced(l)) return;
-  if (!m) {
+  if (!m && !st && !bi) {
     const x = ctx2d(target);
     x.save();
     x.globalAlpha = l.opacity;
-    x.globalCompositeOperation = gco(l.blend);
+    x.globalCompositeOperation = gcoOf(l.blend);
     drawPlaced(x, l, env.doc.pool, env.view);
     x.restore();
     return;
@@ -170,9 +164,20 @@ function drawLayer(l: Layer, target: HTMLCanvasElement, env: Env) {
   const iso = like(target);
   drawPlaced(ctx2d(iso), l, env.doc.pool, env.view);
   ctx2d(iso).setTransform(1, 0, 0, 1, 0, 0);
-  applyMask(iso, m, env);
-  composite(target, iso, l.blend, l.opacity);
-  release(iso);
+  finish(l, iso, target, env, m, st, bi);
+}
+
+/** Leaves a copy of `target` in the output and stops all further drawing (used for histograms). */
+function capture(target: HTMLCanvasElement, env: Env) {
+  if (target !== env.out) {
+    const x = ctx2d(env.out);
+    x.save();
+    x.setTransform(1, 0, 0, 1, 0, 0);
+    x.globalCompositeOperation = 'copy';
+    x.drawImage(target, 0, 0);
+    x.restore();
+  }
+  env.done = true;
 }
 
 /** A layer clipped to `base` (whose own alpha is `baseAlpha`): it only shows where the base has pixels. */
@@ -195,7 +200,9 @@ function drawClipped(l: Layer, base: HTMLCanvasElement, baseAlpha: HTMLCanvasEle
 
 function renderList(list: Layer[], target: HTMLCanvasElement, env: Env) {
   for (let i = 0; i < list.length; i++) {
+    if (env.done) return;
     const l = list[i];
+    if (l.id === env.stopAt) { capture(target, env); return; }
     let j = i + 1;
     const clipped: Layer[] = [];
     if (!isFilter(l)) while (j < list.length && list[j].clip) clipped.push(list[j++]);
@@ -203,13 +210,17 @@ function renderList(list: Layer[], target: HTMLCanvasElement, env: Env) {
     // A hidden base hides everything clipped to it, as in Photoshop.
     if (!shows(l, env)) continue;
     const live = clipped.filter((c) => shows(c, env));
-    if (!live.length) { drawLayer(l, target, env); continue; }
+    if (!live.length && !clipped.some((c) => c.id === env.stopAt)) { drawLayer(l, target, env); continue; }
     const iso = like(target);
     drawLayer({ ...l, opacity: 1, blend: 'normal' } as Layer, iso, env);
     const baseAlpha = like(target);
     composite(baseAlpha, iso, 'normal', 1);
-    for (const c of live) drawClipped(c, iso, baseAlpha, env);
-    composite(target, iso, l.blend, l.opacity);
+    for (const c of live) {
+      if (env.done) break;
+      if (c.id === env.stopAt) { capture(iso, env); break; }
+      drawClipped(c, iso, baseAlpha, env);
+    }
+    if (!env.done) composite(target, iso, l.blend, l.opacity);
     release(iso, baseAlpha);
   }
 }
@@ -232,7 +243,10 @@ export function renderDoc(doc: Doc, out: HTMLCanvasElement, view: Mat, opts: Ren
     ctx.clip();
     ctx.setTransform(1, 0, 0, 1, 0, 0);
   }
-  const env: Env = { doc, view, scale: matScale(view), docRect: mapRect(view, { x: 0, y: 0, w: doc.width, h: doc.height }), includeHidden: !!opts.includeHidden };
+  const env: Env = {
+    doc, view, scale: matScale(view), docRect: mapRect(view, { x: 0, y: 0, w: doc.width, h: doc.height }),
+    includeHidden: !!opts.includeHidden, stopAt: opts.stopAt, out, done: false,
+  };
   renderList(opts.layers ?? doc.layers, out, env);
   ctx.restore();
 }

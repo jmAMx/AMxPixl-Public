@@ -11,6 +11,10 @@ export interface BrushOpts {
   flow: number;
   erase: boolean;
   pressure: boolean;
+  /** Clone stamp: copy pixels from `offset` (document pixels) away instead of painting a colour. */
+  clone?: { dx: number; dy: number };
+  /** Healing brush: after cloning, match the surrounding colour and light (texture from the source, tone from here). */
+  heal?: boolean;
 }
 
 export interface StrokePoint { x: number; y: number; pressure: number }
@@ -54,6 +58,8 @@ export class Stroke {
   private last: StrokePoint | null = null;
   private carry = 0;
   private dirty: Rect | null = null;
+  private pxScale: number;
+  private dabC = newCanvas(2, 2);
 
   constructor(private doc: Doc, private layer: PixelTarget, private o: BrushOpts) {
     if (!o.erase) doc.ensureCovers(layer);
@@ -63,8 +69,58 @@ export class Stroke {
     this.mask = doc.maskForLayer(layer);
     const m = xformMatrix(layer.t);
     this.inv = invert(m);
+    this.pxScale = Math.max(0.05, matScale(m));
     // Build the dab at the resolution it'll land at in the layer's own pixels.
-    this.stamp = makeStamp(o.erase ? '#000000' : o.color, o.size / Math.max(0.05, matScale(m)), o.hardness, o.flow);
+    this.stamp = makeStamp(o.erase ? '#000000' : o.clone ? '#ffffff' : o.color, o.size / this.pxScale, o.hardness, o.flow);
+  }
+
+  /** One clone dab: a brush-shaped piece of the layer (as it was before this stroke) from the source point. */
+  private cloneDab(bctx: CanvasRenderingContext2D, x: number, y: number, r: number): Rect {
+    const { dx, dy } = this.o.clone!;
+    const q = apply(this.inv, x, y), qs = apply(this.inv, x + dx, y + dy);
+    const rr = r / this.pxScale;
+    const size = Math.ceil(rr * 2) + 2;
+    if (this.dabC.width < size || this.dabC.height < size) { this.dabC.width = size; this.dabC.height = size; }
+    const d = ctx2d(this.dabC);
+    d.globalCompositeOperation = 'copy';
+    d.drawImage(this.backup, -(qs.x - rr - 1), -(qs.y - rr - 1));
+    d.globalCompositeOperation = 'destination-in';
+    d.drawImage(this.stamp, 1, 1, rr * 2, rr * 2);
+    d.globalCompositeOperation = 'source-over';
+    bctx.save();
+    bctx.setTransform(1, 0, 0, 1, 0, 0);
+    bctx.drawImage(this.dabC, 0, 0, size, size, q.x - rr - 1, q.y - rr - 1, size, size);
+    bctx.restore();
+    return { x: q.x - rr - 1, y: q.y - rr - 1, w: size, h: size };
+  }
+
+  /**
+   * Healing: keep the cloned texture but take the broad colour and light from the destination. Each pixel becomes
+   * clone + (blur(original) - blur(clone)), weighted by how much was cloned there. Runs once, when the stroke ends.
+   */
+  private heal(r: Rect) {
+    const br = Math.max(2, (this.o.size / this.pxScale) * 0.45);
+    const pad = Math.ceil(br * 2.5);
+    const R = intersect({ x: r.x - pad, y: r.y - pad, w: r.w + pad * 2, h: r.h + pad * 2 }, { x: 0, y: 0, w: this.src.width, h: this.src.height });
+    if (!R) return r;
+    const blurred = (c: HTMLCanvasElement) => {
+      const out = newCanvas(c.width, c.height);
+      const x = ctx2d(out);
+      x.filter = `blur(${br}px)`;
+      x.drawImage(c, 0, 0);
+      return out;
+    };
+    const C = cropCanvas(this.src, R), D = cropCanvas(this.backup, R), M = cropCanvas(this.buffer, R);
+    const read = (c: HTMLCanvasElement) => ctx2d(c, true).getImageData(0, 0, R.w, R.h).data;
+    const img = ctx2d(C, true).getImageData(0, 0, R.w, R.h);
+    const c = img.data, bc = read(blurred(C)), bd = read(blurred(D)), m = read(M);
+    for (let i = 0; i < c.length; i += 4) {
+      const k = (m[i + 3] / 255) * this.o.opacity;
+      if (k <= 0 || c[i + 3] === 0) continue;
+      for (let j = 0; j < 3; j++) c[i + j] = c[i + j] + (bd[i + j] - bc[i + j]) * k;
+    }
+    ctx2d(this.src).putImageData(img, R.x, R.y);
+    return R;
   }
 
   add(p: StrokePoint) {
@@ -74,6 +130,7 @@ export class Stroke {
     let region: Rect | null = null;
     const dab = (x: number, y: number, pr: number) => {
       const r = Math.max(0.5, (this.o.size / 2) * (this.o.pressure ? pr : 1));
+      if (this.o.clone) { region = union(region, this.cloneDab(bctx, x, y, r)); return; }
       bctx.drawImage(this.stamp, x - r, y - r, r * 2, r * 2);
       const a = apply(this.inv, x - r, y - r), b = apply(this.inv, x + r, y - r);
       const c = apply(this.inv, x + r, y + r), d = apply(this.inv, x - r, y + r);
@@ -125,7 +182,11 @@ export class Stroke {
 
   end(label: string) {
     if (!this.dirty) { this.doc.commit(label); return; }
-    const r = this.dirty;
+    let r = this.dirty;
+    if (this.o.heal) {
+      r = union(r, this.heal(r));
+      this.doc.markPixels(this.layer.key, false, r);
+    }
     this.doc.commit(label, [{ key: this.layer.key, rect: r, before: cropCanvas(this.backup, r), after: null }]);
   }
 }

@@ -1,9 +1,13 @@
 import { app } from '../app';
 import {
-  addMask, applyMask, deleteLayer, deleteMask, duplicateLayer, groupLayer, invertMask, mergeDown, moveLayer, newAdjustment,
-  newEffect, newGroup, newLayer, rasterizeLayer, setLayerProp, setMaskProp, toggleClip, ungroup,
+  addMask, applyLook, applyMask, clearStyles, deleteLayer, deleteMask, duplicateLayer, groupLayer, invertMask, lookSourceLayers, mergeDown,
+  moveLayer, newAdjustment, newEffect, newGroup, newLayer, newLut, rasterizeLayer, setLayerProp, setMaskProp, toggleClip, ungroup,
 } from '../actions';
+import { BUILTIN_LOOKS, savedLooks } from '../core/looks';
+import { hasStyles } from '../core/styles';
+import { manageLooksDialog, saveLookDialog } from './dialogs';
 import { ADJ_LABELS, ADJ_ORDER } from '../core/adjustments';
+
 import { FX_DEFS, FX_GROUPS } from '../core/effects';
 import { ctx2d } from '../core/layers';
 import { mul, setT, xformMatrix, type Mat } from '../core/math';
@@ -15,15 +19,29 @@ import { icon, popupMenu, slider, type MenuItem } from './widgets';
 
 const THUMB = 40;
 
-export function adjustmentMenu(x: number, y: number) {
-  popupMenu(ADJ_ORDER.map((k) => ({ label: ADJ_LABELS[k], onClick: () => newAdjustment(k) })), x, y);
-}
+export const adjustmentMenuItems = (): MenuItem[] => ADJ_ORDER.map((k) => ({
+  label: k === 'lut' ? `${ADJ_LABELS[k]}…` : ADJ_LABELS[k], disabled: !app.doc, onClick: () => (k === 'lut' ? newLut() : newAdjustment(k)),
+}));
+
+export function adjustmentMenu(x: number, y: number) { popupMenu(adjustmentMenuItems(), x, y); }
 
 export const effectMenuItems = (): MenuItem[] => FX_GROUPS.map((g) => ({
   label: g, sub: FX_DEFS.filter((d) => d.group === g).map((d) => ({ label: d.label, disabled: !app.doc, onClick: () => newEffect(d.kind) })),
 }));
 
-export function effectMenu(x: number, y: number) { popupMenu(effectMenuItems(), x, y); }
+/** Built-in and saved looks, plus saving the current effect stack as a new one. */
+export function looksMenuItems(): MenuItem[] {
+  const mine = savedLooks();
+  return [
+    ...BUILTIN_LOOKS.map((l) => ({ label: l.name, disabled: !app.doc, onClick: () => { applyLook(l); } })),
+    ...(mine.length ? [{ sep: true } as MenuItem, ...mine.map((l) => ({ label: l.name, disabled: !app.doc, onClick: () => { applyLook(l); } }))] : []),
+    { sep: true },
+    { label: 'Save Current Effects as Look…', disabled: !lookSourceLayers().length, onClick: saveLookDialog },
+    { label: 'Manage Looks…', onClick: manageLooksDialog },
+  ];
+}
+
+export function effectMenu(x: number, y: number) { popupMenu([{ label: 'Looks', sub: looksMenuItems() }, { sep: true }, ...effectMenuItems()], x, y); }
 
 export function maskMenuItems(): MenuItem[] {
   const l = app.doc?.active;
@@ -58,6 +76,9 @@ function layerContextMenu(l: Layer, x: number, y: number) {
     { sep: true },
     { label: 'Merge Down', accel: 'Ctrl+E', disabled: !at?.index, onClick: mergeDown },
     { label: l.type === 'group' ? 'Merge Group' : 'Rasterize', disabled: l.type === 'raster' || isFilter(l), onClick: rasterizeLayer },
+    { label: 'Clear Layer Style', disabled: !l.styles, onClick: clearStyles },
+    { sep: true },
+    { label: 'Save Effects as Look…', disabled: !lookSourceLayers().length, onClick: saveLookDialog },
   ], x, y);
 }
 
@@ -189,6 +210,9 @@ export function layersPanel() {
     l.clip ? h('span', { class: 'clip-arrow', title: 'Clipped to the layer below' }, icon('clip')) : null,
     main, maskEl, name,
     ti ? h('span', { class: 'layer-type', title: l.type }, icon(ti)) : null,
+    hasStyles(l.styles) ? h('span', { class: 'layer-fx', title: 'Has layer styles' }, 'fx') : null,
+    l.blendIf?.on ? h('span', { class: 'layer-fx', title: 'Blend If is on' }, 'BI') : null,
+    l.type === 'raster' && l.warp ? h('span', { class: 'layer-type', title: 'Warped (lossless)' }, icon('warp')) : null,
     l.blend !== 'normal' && l.blend !== 'pass-through' || l.opacity < 1 ? h('span', { class: 'layer-badge' }, l.opacity < 1 ? `${Math.round(l.opacity * 100)}%` : '', l.blend !== 'normal' && l.blend !== 'pass-through' ? ' fx' : '') : null);
 
     r.addEventListener('contextmenu', (e) => {
@@ -250,7 +274,8 @@ export function layersPanel() {
   const signature = () => {
     const d = app.doc;
     if (!d) return '';
-    const s = (ls: Layer[]): unknown => ls.map((l) => [l.id, l.name, l.visible, l.opacity, l.blend, l.type, !!l.clip, l.mask ? [l.mask.key, l.mask.enabled] : 0, l.type === 'group' ? [l.open, s(l.children)] : 0]);
+    const s = (ls: Layer[]): unknown => ls.map((l) => [l.id, l.name, l.visible, l.opacity, l.blend, l.type, !!l.clip, l.mask ? [l.mask.key, l.mask.enabled] : 0,
+      hasStyles(l.styles), !!l.blendIf?.on, l.type === 'raster' && !!l.warp, l.type === 'group' ? [l.open, s(l.children)] : 0]);
     return JSON.stringify([d.activeId, d.maskEdit, s(d.layers)]);
   };
 

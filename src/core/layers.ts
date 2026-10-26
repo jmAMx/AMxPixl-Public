@@ -2,6 +2,7 @@ import { decompose, invert, matScale, mul, setT, xformMatrix, type Mat, type Rec
 import { displaySource } from './pyramid';
 import { drawText, layoutText } from './text';
 import type { PlacedLayer, ShapeProps } from './types';
+import { warpBounds, warpGL } from './warp';
 
 export type Pool = Map<string, HTMLCanvasElement>;
 
@@ -19,6 +20,7 @@ export function follow(t0: Xform, from: Mat, to: Xform): Xform {
 export function localBounds(l: PlacedLayer, pool: Pool): Rect {
   switch (l.type) {
     case 'raster': {
+      if (l.warp) return warpBounds(l.warp);
       const c = pool.get(l.key);
       return { x: 0, y: 0, w: c?.width ?? 1, h: c?.height ?? 1 };
     }
@@ -77,7 +79,8 @@ export function drawPlaced(ctx: CanvasRenderingContext2D, l: PlacedLayer, pool: 
     ctx.imageSmoothingEnabled = s < 2;
     ctx.imageSmoothingQuality = 'high';
     const { img, f } = displaySource(c, s);
-    if (f === 1) ctx.drawImage(c, 0, 0);
+    if (l.warp) warpGL.draw(ctx, img, f, c.width, c.height, l.warp, m);
+    else if (f === 1) ctx.drawImage(c, 0, 0);
     else ctx.drawImage(img, 0, 0, img.width * f, img.height * f);
   } else if (l.type === 'text') {
     drawText(ctx, l.text);

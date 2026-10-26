@@ -9,7 +9,7 @@ const FS = `#version 300 es
 precision highp float;
 in vec2 vUv; out vec4 o;
 uniform sampler2D uSrc; uniform sampler2D uLut; uniform int uMode; uniform vec4 uP; uniform vec3 uTint;
-uniform vec3 uHsl[8]; uniform vec4 uGrade[3]; uniform mat3 uMix;
+uniform vec3 uHsl[8]; uniform vec4 uGrade[3]; uniform mat3 uMix; uniform sampler2D uLut3;
 float lum(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)); }
 vec3 rgb2hsl(vec3 c) {
   float mx = max(c.r, max(c.g, c.b)), mn = min(c.r, min(c.g, c.b)), l = (mx + mn) * 0.5, d = mx - mn;
@@ -83,6 +83,14 @@ void main() {
   } else if (uMode == 8) {
     c = uMix * c;
     if (uP.x > 0.5) c = vec3(c.r);
+  } else if (uMode == 10) {
+    // 3D LUT packed as N slices side by side (blue picks the slice): blend the two nearest slices.
+    float N = uP.x;
+    vec3 cc = clamp(c, 0.0, 1.0) * (N - 1.0);
+    float b0 = floor(cc.b), b1 = min(b0 + 1.0, N - 1.0), f = cc.b - b0;
+    vec2 uv0 = vec2((b0 * N + cc.r + 0.5) / (N * N), (cc.g + 0.5) / N);
+    vec2 uv1 = vec2((b1 * N + cc.r + 0.5) / (N * N), (cc.g + 0.5) / N);
+    c = mix(c, mix(texture(uLut3, uv0).rgb, texture(uLut3, uv1).rgb, f), uP.y);
   } else if (uMode == 9) {
     float l0 = lum(c);
     vec3 f = mix(c, c * uTint, uP.x);
@@ -148,13 +156,45 @@ export class GLFX {
     };
     this.srcTex = tex();
     this.lutTex = tex();
-    for (const n of ['uSrc', 'uLut', 'uMode', 'uP', 'uTint', 'uHsl', 'uGrade', 'uMix']) this.loc[n] = gl.getUniformLocation(this.prog, n);
+    for (const n of ['uSrc', 'uLut', 'uLut3', 'uMode', 'uP', 'uTint', 'uHsl', 'uGrade', 'uMix']) this.loc[n] = gl.getUniformLocation(this.prog, n);
+    this.lut3Tex = null;
+    this.lut3Src = null;
     this.maxSize = gl.getParameter(gl.MAX_TEXTURE_SIZE);
     this.ok = true;
   }
 
-  /** Returns a canvas holding `src` with the adjustment applied (same size), or null if the GPU path is unavailable. */
-  apply(src: HTMLCanvasElement, a: AdjParams): HTMLCanvasElement | null {
+  private lut3Tex: WebGLTexture | null = null;
+  private lut3Src: HTMLCanvasElement | null = null;
+
+  /** Uploads a packed 3D LUT image (only when it changes) and binds it to texture unit 2. */
+  private bindLut3(c: HTMLCanvasElement) {
+    const gl = this.gl;
+    // Select unit 2 first: creating the texture binds it, and on unit 0 that would replace the source image.
+    gl.activeTexture(gl.TEXTURE2);
+    if (!this.lut3Tex) {
+      this.lut3Tex = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, this.lut3Tex);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    }
+    gl.activeTexture(gl.TEXTURE2);
+    gl.bindTexture(gl.TEXTURE_2D, this.lut3Tex);
+    if (this.lut3Src !== c) {
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+      gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, c);
+      this.lut3Src = c;
+    }
+    gl.uniform1i(this.loc.uLut3, 2);
+  }
+
+  /**
+   * Returns a canvas holding `src` with the adjustment applied (same size), or null if the GPU path is unavailable.
+   * `pixels` resolves pool keys (for LUT adjustments).
+   */
+  apply(src: HTMLCanvasElement, a: AdjParams, pixels?: (key: string) => HTMLCanvasElement | undefined): HTMLCanvasElement | null {
     if (!this.ok || src.width > this.maxSize || src.height > this.maxSize) return null;
     const gl = this.gl;
     if (this.canvas.width !== src.width || this.canvas.height !== src.height) {
@@ -169,7 +209,9 @@ export class GLFX {
     gl.bindTexture(gl.TEXTURE_2D, this.srcTex);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, src);
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
-    const mode = adjMode(a);
+    const lutImg = a.kind === 'lut' && a.key ? pixels?.(a.key) : undefined;
+    const mode = a.kind === 'lut' ? (lutImg ? 10 : 0) : adjMode(a);
+    if (lutImg) this.bindLut3(lutImg);
     gl.activeTexture(gl.TEXTURE1);
     gl.bindTexture(gl.TEXTURE_2D, this.lutTex);
     if (mode === 0 || mode === 7) gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 256, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, buildLut(a));
@@ -198,6 +240,8 @@ export class GLFX {
     } else if (a.kind === 'photofilter') {
       p = [a.density / 100, a.preserve ? 1 : 0, 0, 0];
       tint = rgb(a.color);
+    } else if (a.kind === 'lut') {
+      p = [a.size, a.intensity / 100, 0, 0];
     }
     gl.uniform4f(this.loc.uP, ...p);
     gl.uniform3f(this.loc.uTint, ...tint);

@@ -17,11 +17,12 @@ export const ADJ_LABELS: Record<AdjKind, string> = {
   gradmap: 'Gradient Map',
   mixer: 'Channel Mixer',
   photofilter: 'Photo Filter',
+  lut: 'Colour Lookup (LUT)',
 };
 
 export const ADJ_ORDER: AdjKind[] = [
   'brightness', 'levels', 'curves', 'exposure', 'huesat', 'hsl', 'vibrance', 'colorbalance', 'grade', 'photofilter',
-  'mixer', 'gradmap', 'bw', 'invert', 'threshold', 'posterize',
+  'lut', 'mixer', 'gradmap', 'bw', 'invert', 'threshold', 'posterize',
 ];
 
 export const HSL_BANDS: [string, string][] = [
@@ -50,6 +51,7 @@ export function defaultAdj(kind: AdjKind): AdjParams {
     case 'gradmap': return { kind, dark: '#10141f', mid: '#a0525a', light: '#f6e7c8', useMid: false, reverse: false };
     case 'mixer': return { kind, r: [100, 0, 0], g: [0, 100, 0], b: [0, 0, 100], mono: false };
     case 'photofilter': return { kind, color: '#ec8a00', density: 25, preserve: true };
+    case 'lut': return { kind, key: null, name: '', size: 0, intensity: 100 };
   }
 }
 

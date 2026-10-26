@@ -3,6 +3,7 @@ import { opPath } from '../core/selection';
 import type { SelOp } from '../core/types';
 import { view } from '../ui/canvasview';
 import { h } from '../ui/dom';
+import { clearSnapLines, snapPoint } from '../ui/snap';
 import type { PInfo, Tool } from './tool';
 
 type Mode = 'replace' | 'add' | 'sub';
@@ -62,8 +63,19 @@ abstract class SelectTool implements Tool {
 class MarqueeTool extends SelectTool {
   constructor(public id: string, public name: string, public key: string, public icon: Tool['icon'], private shape: 'rect' | 'ellipse') { super(); }
 
+  down(p: PInfo) {
+    super.down(p);
+    this.start = snapPoint(p.x, p.y);
+  }
+
+  up() {
+    clearSnapLines();
+    super.up();
+  }
+
   move(p: PInfo) {
-    let w = p.x - this.start.x, h = p.y - this.start.y;
+    const sp = snapPoint(p.x, p.y);
+    let w = sp.x - this.start.x, h = sp.y - this.start.y;
     if (Math.abs(w) < 1 && Math.abs(h) < 1 && !this.moved) return;
     this.moved = true;
     // Shift during a fresh selection keeps it square/circular; Alt draws from the centre.

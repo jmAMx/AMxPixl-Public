@@ -2,7 +2,7 @@ import { apply, invert, mapRect, roundOut, union, xformMatrix, type Rect } from 
 import { cropCanvas, ctx2d, layerMatrix, localBounds, newCanvas, type Pool } from './layers';
 import { invalidate } from './pyramid';
 import { buildMask } from './selection';
-import type { GroupLayer, Layer, Meta, PixelTarget, PlacedLayer, RasterLayer, Selection } from './types';
+import type { GroupLayer, Guide, Layer, Meta, PixelTarget, PlacedLayer, RasterLayer, Selection } from './types';
 import { isPlaced } from './types';
 
 /**
@@ -52,6 +52,7 @@ export class Doc {
   activeId: string | null = null;
   selection: Selection | null = null;
   counter = 1;
+  guides: Guide[] = [];
 
   /** Painting goes to the active layer's mask instead of its pixels (UI state, not part of history). */
   maskEdit = false;
@@ -105,14 +106,14 @@ export class Doc {
   snapshot(): Meta {
     return structuredClone({
       width: this.width, height: this.height, layers: this.layers, activeId: this.activeId,
-      selection: this.selection, counter: this.counter,
+      selection: this.selection, counter: this.counter, guides: this.guides,
     });
   }
 
   private restore(m: Meta) {
     const c = structuredClone(m);
     this.width = c.width; this.height = c.height; this.layers = c.layers;
-    this.activeId = c.activeId; this.selection = c.selection; this.counter = c.counter;
+    this.activeId = c.activeId; this.selection = c.selection; this.counter = c.counter; this.guides = c.guides ?? [];
     if (!this.active?.mask) this.maskEdit = false;
   }
 
@@ -230,6 +231,7 @@ export class Doc {
     const scan = (ls: Layer[]) => flatLayers(ls).forEach((l) => {
       if (l.type === 'raster') live.add(l.key);
       if (l.mask) live.add(l.mask.key);
+      if (l.type === 'adjust' && l.adj.kind === 'lut' && l.adj.key) live.add(l.adj.key);
     });
     scan(this.layers);
     for (const e of this.entries) { scan(e.before.layers); scan(e.after.layers); e.pixels.forEach((p) => live.add(p.key)); }
@@ -251,7 +253,8 @@ export class Doc {
     const a = this.active;
     if (!a) return null;
     if (this.maskEdit && a.mask) return { target: a.mask, isMask: true, layer: a };
-    if (a.type === 'raster') return { target: a, isMask: false, layer: a };
+    // A warped layer's pixels don't line up with the canvas until the warp is applied.
+    if (a.type === 'raster' && !a.warp) return { target: a, isMask: false, layer: a };
     return null;
   }
 

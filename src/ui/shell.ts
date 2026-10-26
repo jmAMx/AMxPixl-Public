@@ -1,15 +1,14 @@
 import { app } from '../app';
 import * as A from '../actions';
-import { ADJ_LABELS, ADJ_ORDER } from '../core/adjustments';
 import { pickFiles } from '../core/fileio';
 import { FILTERS } from '../core/filters';
 import { glfx } from '../core/glfx';
 import { view } from './canvasview';
 import { colorPanel } from './colorpanel';
-import { aboutDialog, canvasSizeDialog, exportDialog, filterDialog, imageSizeDialog, newDocDialog, shortcutsDialog } from './dialogs';
+import { aboutDialog, canvasSizeDialog, exportDialog, filterDialog, imageSizeDialog, newDocDialog, newGuideDialog, shortcutsDialog } from './dialogs';
 import { h, isTyping } from './dom';
 import { historyPanel } from './historypanel';
-import { effectMenuItems, layersPanel, maskMenuItems } from './layerspanel';
+import { adjustmentMenuItems, effectMenuItems, layersPanel, looksMenuItems, maskMenuItems } from './layerspanel';
 import { propertiesPanel } from './properties';
 import { closePopups, dialogOpen, icon, popupMenu, toast, type MenuItem } from './widgets';
 
@@ -86,7 +85,7 @@ const MENUS: MenuDef[] = [
     title: 'Layer', items: [
       { label: 'New Layer', accel: 'Ctrl+Shift+N', run: A.newLayer, enabled: hasDoc },
       { label: 'New Group', run: A.newGroup, enabled: hasDoc },
-      { label: 'New Adjustment Layer', sub: () => ADJ_ORDER.map((k) => ({ label: ADJ_LABELS[k], disabled: !app.doc, onClick: () => A.newAdjustment(k) })) },
+      { label: 'New Adjustment Layer', sub: adjustmentMenuItems },
       { label: 'New Effect Layer', sub: effectMenuItems },
       { label: 'Duplicate Layer', accel: 'Ctrl+J', run: A.duplicateLayer, enabled: hasLayer },
       { label: 'Delete Layer', run: () => A.deleteLayer(), enabled: hasLayer },
@@ -95,6 +94,7 @@ const MENUS: MenuDef[] = [
       { label: 'Ungroup', accel: 'Ctrl+Shift+G', run: A.ungroup, enabled: hasLayer },
       { label: 'Create/Release Clipping Mask', accel: 'Ctrl+Alt+G', run: A.toggleClip, enabled: hasLayer },
       { label: 'Layer Mask', sub: () => (app.doc?.active ? maskMenuItems() : [{ label: 'Select a layer first', disabled: true }]) },
+      { label: 'Layer Style', sub: styleMenuItems },
       'sep',
       { label: 'Merge Down', accel: 'Ctrl+E', run: A.mergeDown, enabled: hasLayer },
       { label: 'Rasterize / Merge Group', run: A.rasterizeLayer, enabled: () => ['text', 'shape', 'group'].includes(app.doc?.active?.type ?? '') },
@@ -104,6 +104,11 @@ const MENUS: MenuDef[] = [
         { label: 'Flip Vertical', onClick: () => A.flipLayer('v'), disabled: !app.doc?.activePlaced },
         { label: 'Rotate 90° Clockwise', onClick: () => A.rotateLayer90(1), disabled: !app.doc?.activePlaced },
         { label: 'Rotate 90° Counter-clockwise', onClick: () => A.rotateLayer90(-1), disabled: !app.doc?.activePlaced },
+        { sep: true },
+        { label: 'Perspective', onClick: () => startWarp('perspective'), disabled: app.doc?.active?.type !== 'raster' },
+        { label: 'Warp', onClick: () => startWarp('warp'), disabled: app.doc?.active?.type !== 'raster' },
+        { label: 'Apply Warp', onClick: A.applyWarp, disabled: !app.doc?.activeRaster?.warp },
+        { label: 'Remove Warp', onClick: A.removeWarp, disabled: !app.doc?.activeRaster?.warp },
         { sep: true },
         { label: 'Reset Transform', onClick: () => A.resetTransform(), disabled: !app.doc?.activePlaced },
       ] },
@@ -124,8 +129,9 @@ const MENUS: MenuDef[] = [
   },
   {
     title: 'Filter', items: [
+      { label: 'Looks', sub: looksMenuItems },
       { label: 'Effect Layer (editable)', sub: effectMenuItems },
-      { label: 'Adjustment Layer (editable)', sub: () => ADJ_ORDER.map((k) => ({ label: ADJ_LABELS[k], disabled: !app.doc, onClick: () => A.newAdjustment(k) })) },
+      { label: 'Adjustment Layer (editable)', sub: adjustmentMenuItems },
       'sep',
       ...FILTERS.map((f) => ({ label: `${f.name}…`, run: () => filterDialog(f), enabled: hasLayer })),
     ],
@@ -136,6 +142,12 @@ const MENUS: MenuDef[] = [
       { label: 'Zoom Out', accel: 'Ctrl+-', run: () => view.zoomStep(-1), enabled: hasDoc },
       { label: 'Fit on Screen', accel: 'Ctrl+0', run: () => view.fit(), enabled: hasDoc },
       { label: 'Actual Pixels (100%)', accel: 'Ctrl+1', run: () => { view.setZoom(1); view.center(); }, enabled: hasDoc },
+      'sep',
+      { label: 'Rulers', accel: 'Ctrl+R', run: () => app.setPrefs({ rulers: !app.prefs.rulers }), checked: () => app.prefs.rulers },
+      { label: 'Guides', accel: 'Ctrl+;', run: () => app.setPrefs({ guides: !app.prefs.guides }), checked: () => app.prefs.guides },
+      { label: 'Snap', accel: 'Ctrl+Shift+;', run: () => app.setPrefs({ snap: !app.prefs.snap }), checked: () => app.prefs.snap },
+      { label: 'New Guide…', run: newGuideDialog, enabled: hasDoc },
+      { label: 'Clear Guides', run: A.clearGuides, enabled: () => !!app.doc?.guides.length },
       'sep',
       { label: 'Dark Theme', run: () => app.setPrefs({ theme: app.prefs.theme === 'dark' ? 'light' : 'dark' }), checked: () => app.prefs.theme === 'dark' },
       { label: 'Glow Effects', run: () => app.setPrefs({ glow: !app.prefs.glow }), checked: () => app.prefs.glow },
@@ -151,7 +163,7 @@ const MENUS: MenuDef[] = [
 
 const extraShortcuts: [string, string][] = [
   ['V', 'Move & transform'], ['M', 'Rectangle / ellipse select'], ['L', 'Lasso'], ['C', 'Crop'], ['I', 'Eyedropper'],
-  ['B', 'Brush'], ['E', 'Eraser'], ['G', 'Gradient / paint bucket'], ['T', 'Text'], ['U', 'Shape'], ['H', 'Hand'], ['Z', 'Zoom'],
+  ['B', 'Brush'], ['E', 'Eraser'], ['S', 'Clone stamp (Alt+click sets the source)'], ['J', 'Healing brush'], ['G', 'Gradient / paint bucket'], ['T', 'Text'], ['U', 'Shape'], ['H', 'Hand'], ['Z', 'Zoom'],
   ['X', 'Swap colours'], ['D', 'Default colours'], ['[ / ]', 'Brush size'], ['Space (hold)', 'Pan'], ['Ctrl + wheel', 'Zoom at cursor'],
   ['Alt + click (brush)', 'Pick colour'], ['Shift + drag', 'Add to selection / constrain'], ['Alt + drag', 'Subtract from selection'],
 ];
@@ -182,7 +194,30 @@ const arrangeKeys: Record<string, () => void> = {
   'Ctrl+Shift+=': () => view.zoomStep(1),
 };
 
-const CODE_KEYS: Record<string, string> = { BracketLeft: '[', BracketRight: ']', Equal: '=', Minus: '-', NumpadAdd: '=', NumpadSubtract: '-', Backquote: '`' };
+const CODE_KEYS: Record<string, string> = { BracketLeft: '[', BracketRight: ']', Equal: '=', Minus: '-', NumpadAdd: '=', NumpadSubtract: '-', Backquote: '`', Semicolon: ';' };
+
+/** Switches the Move tool into perspective or warp editing for the active image layer. */
+function startWarp(mode: 'perspective' | 'warp') {
+  if (!A.ensureWarp(mode === 'warp' ? 'mesh' : 'perspective')) return;
+  app.setTool('move');
+  app.opts.move.mode = mode;
+  app.emit('tool');
+}
+
+/** Layer › Layer Style: turn one on (and show its settings in Properties). */
+function styleMenuItems(): MenuItem[] {
+  const l = app.doc?.active;
+  const ok = !!l && l.type !== 'adjust' && l.type !== 'effect';
+  const add = (key: 'shadow' | 'glow' | 'innerGlow' | 'stroke' | 'overlay', label: string): MenuItem => ({
+    label, disabled: !ok, checked: !!l?.styles?.[key].on,
+    onClick: () => {
+      A.editStyles((s) => { s[key].on = !s[key].on; }, `Layer style: ${label}`);
+      if (!app.prefs.dock.properties) { app.prefs.dock.properties = true; app.setPrefs({}); }
+    },
+  });
+  return [add('shadow', 'Drop Shadow'), add('glow', 'Outer Glow'), add('innerGlow', 'Inner Glow'), add('stroke', 'Stroke'), add('overlay', 'Colour Overlay'),
+    { sep: true }, { label: 'Clear Layer Style', disabled: !l?.styles, onClick: A.clearStyles }];
+}
 
 function accelOf(e: KeyboardEvent) {
   let k = e.key;

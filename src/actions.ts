@@ -3,11 +3,15 @@ import { defaultAdj, ADJ_LABELS } from './core/adjustments';
 import { Doc, flatLayers, newId } from './core/document';
 import { defaultFx, fxDef } from './core/effects';
 import { baseName, canvasBlob, decodeImage, decodePixl, docFromCanvas, encodePixl, extOf, PIXL_ACCEPT, saveBlob } from './core/fileio';
-import { cloneCanvas, ctx2d, follow, layerMatrix, localBounds, newCanvas } from './core/layers';
+import { cloneCanvas, ctx2d, drawPlaced, follow, layerMatrix, localBounds, newCanvas } from './core/layers';
+import { savedLooks, storeLooks, type Look, type LookItem } from './core/looks';
+import { parseCube } from './core/lut';
 import { apply, decompose, invert, matScale, mul, roundOut, setT, tidy, union, xformMatrix, type Mat, type Pt, type Rect, type Xform } from './core/math';
 import { flatten, renderDoc } from './core/render';
 import { invertSel, mapSel, selBounds } from './core/selection';
-import type { AdjKind, GroupLayer, Layer, Mask, PlacedLayer, RasterLayer } from './core/types';
+import { defaultStyles } from './core/styles';
+import type { AdjKind, AdjParams, BlendIf, GroupLayer, Guide, Layer, LayerStyles, Mask, PlacedLayer, RasterLayer, Warp } from './core/types';
+import { initWarp, warpBounds } from './core/warp';
 import { isFilter, isPlaced } from './core/types';
 import { view } from './ui/canvasview';
 import { ask, toast } from './ui/widgets';
@@ -321,6 +325,12 @@ export function transformDoc(label: string, g: Mat, w: number, h: number, scaleS
     l.t = decompose(mul(g, xformMatrix(l.t)));
   }
   doc.setSelection(mapSel(doc.selection, (x, y) => { const p = apply(g, x, y); return [p.x, p.y]; }));
+  // Guides are lines: map two points on each; a rotation can turn vertical guides horizontal.
+  doc.guides = doc.guides.map((gd) => {
+    const a = gd.axis === 'x' ? apply(g, gd.pos, 0) : apply(g, 0, gd.pos);
+    const b = gd.axis === 'x' ? apply(g, gd.pos, 1) : apply(g, 1, gd.pos);
+    return Math.abs(a.x - b.x) < 1e-6 ? { axis: 'x' as const, pos: tidy(a.x) } : { axis: 'y' as const, pos: tidy(a.y) };
+  });
   doc.width = Math.max(1, Math.round(w));
   doc.height = Math.max(1, Math.round(h));
   doc.commit(label);
@@ -457,6 +467,7 @@ function needTarget(doc: Doc, verb: string) {
   const pt = doc.paintTarget();
   if (pt) return pt;
   const l = doc.active;
+  if (l?.type === 'raster' && l.warp) { toast('This layer is warped. Apply the warp first (Layer › Transform › Apply Warp).'); return null; }
   toast(!l ? 'Select a layer first.' : isFilter(l) || l.type === 'group'
     ? `Can't ${verb} a ${l.type === 'group' ? 'group' : l.type === 'effect' ? 'effect' : 'adjustment'} layer (add a mask to paint where it applies).`
     : `Can't ${verb} a ${l.type} layer (rasterize it first).`);
@@ -536,3 +547,177 @@ export async function pasteBlob(blob: Blob | null) {
 }
 
 export function hasInternalClip() { return !!clip; }
+
+// ---------- layer styles & Blend If ----------
+
+/** Edits the active layer's styles (creating them if needed). Without a label it's a live preview, not an undo step. */
+export function editStyles(f: (s: LayerStyles) => void, label?: string) {
+  const doc = need(); const l = doc?.active; if (!doc || !l || isFilter(l)) return;
+  const s = structuredClone(l.styles ?? defaultStyles());
+  f(s);
+  l.styles = s;
+  if (label) doc.commit(label); else doc.touch('meta');
+}
+
+export function clearStyles() {
+  const doc = need(); const l = doc?.active; if (!doc || !l?.styles) return;
+  l.styles = null;
+  doc.commit('Clear layer styles');
+}
+
+export function editBlendIf(f: (b: BlendIf) => void, label?: string) {
+  const doc = need(); const l = doc?.active; if (!doc || !l || isFilter(l)) return;
+  const b: BlendIf = structuredClone(l.blendIf ?? { on: true, self: [0, 0, 255, 255], under: [0, 0, 255, 255] });
+  f(b);
+  l.blendIf = b;
+  if (label) doc.commit(label); else doc.touch('meta');
+}
+
+// ---------- colour lookup (.cube) ----------
+
+function pickText(accept: string): Promise<File | null> {
+  return new Promise((res) => {
+    const inp = document.createElement('input');
+    inp.type = 'file';
+    inp.accept = accept;
+    inp.onchange = () => res(inp.files?.[0] ?? null);
+    inp.click();
+  });
+}
+
+/** Asks for a .cube file and loads it into the active LUT adjustment layer. */
+export async function loadLut(id = app.doc?.activeId) {
+  const doc = need(); const l = id ? doc?.layer(id) : null;
+  if (!doc || l?.type !== 'adjust' || l.adj.kind !== 'lut') return;
+  const f = await pickText('.cube,.CUBE');
+  if (!f) return;
+  try {
+    const p = parseCube(await f.text(), baseName(f.name));
+    l.adj = { ...l.adj, key: doc.addCanvas(p.canvas), name: p.name, size: p.size };
+    l.name = `LUT: ${p.name}`;
+    doc.commit('Load LUT');
+  } catch (e) {
+    toast(`Couldn't read ${f.name}: ${(e as Error).message}`, 'error');
+  }
+}
+
+export async function newLut() {
+  newAdjustment('lut');
+  await loadLut();
+}
+
+// ---------- warp & perspective ----------
+
+const rasterBox = (doc: Doc, l: RasterLayer): Rect => { const c = doc.canvasOf(l); return { x: 0, y: 0, w: c.width, h: c.height }; };
+
+/** Makes sure the active image layer has a warp of `kind` (keeping its current shape). Returns it, or null. */
+export function ensureWarp(kind: Warp['kind']): RasterLayer | null {
+  const doc = need(); const l = doc?.active;
+  if (!doc || !l) return null;
+  if (l.type !== 'raster') { toast(l.type === 'text' || l.type === 'shape' ? 'Rasterize this layer to warp it.' : 'Select an image layer to warp.'); return null; }
+  if (l.warp?.kind !== kind) { l.warp = initWarp(kind, rasterBox(doc, l), l.warp); doc.touch('meta'); }
+  return l;
+}
+
+/** Bakes the warp into the layer's pixels (needed before painting on it). Lossless until you do this. */
+export function applyWarp() {
+  const doc = need(); const l = doc?.active;
+  if (!doc || l?.type !== 'raster' || !l.warp) return;
+  const b = roundOut(warpBounds(l.warp));
+  const c = newCanvas(b.w, b.h);
+  const x = ctx2d(c);
+  drawPlaced(x, { ...l, t: { x: 0, y: 0, sx: 1, sy: 1, rot: 0 } }, doc.pool, [1, 0, 0, 1, -b.x, -b.y]);
+  const t = decompose(mul(layerMatrix(l), [1, 0, 0, 1, b.x, b.y]));
+  l.key = doc.addCanvas(c);
+  l.t = t;
+  l.warp = null;
+  doc.commit('Apply warp');
+}
+
+export function removeWarp() {
+  const doc = need(); const l = doc?.active;
+  if (!doc || l?.type !== 'raster' || !l.warp) return;
+  l.warp = null;
+  doc.commit('Remove warp');
+}
+
+// ---------- guides ----------
+
+export function addGuide(axis: Guide['axis'], pos: number) {
+  const doc = need(); if (!doc) return;
+  doc.guides = [...doc.guides, { axis, pos: Math.round(pos) }];
+  doc.commit('Add guide');
+}
+
+export function clearGuides() {
+  const doc = need(); if (!doc?.guides.length) return;
+  doc.guides = [];
+  doc.commit('Clear guides');
+}
+
+// ---------- looks (saved effect stacks) ----------
+
+/** Drops a look onto the image as a Pass Through group above the active layer, so it affects everything below. */
+export async function applyLook(look: Look) {
+  const doc = need(); if (!doc) return;
+  const children: Layer[] = [];
+  for (const it of look.items) {
+    if (it.type === 'effect') {
+      const def = fxDef(it.kind);
+      if (!def) continue;
+      const fx = defaultFx(it.kind);
+      children.push({ id: newId(), type: 'effect', name: it.name ?? def.label, visible: true, opacity: it.opacity ?? 1, blend: it.blend ?? 'normal',
+        fx: { ...fx, seed: it.seed ?? fx.seed, v: { ...fx.v, ...(it.v ?? {}) } } });
+    } else {
+      const kind = it.kind as AdjKind;
+      const adj = { ...defaultAdj(kind), ...(it.adj ?? {}) } as AdjParams;
+      if (adj.kind === 'lut' && it.lutData) {
+        const blob = await (await fetch(it.lutData)).blob();
+        adj.key = doc.addCanvas(await decodeImage(blob));
+      }
+      children.push({ id: newId(), type: 'adjust', name: it.name ?? ADJ_LABELS[kind], visible: true, opacity: it.opacity ?? 1, blend: it.blend ?? 'normal', adj });
+    }
+  }
+  if (!children.length) return;
+  doc.insertLayer({ id: newId(), type: 'group', name: `Look: ${look.name}`, visible: true, opacity: 1, blend: 'pass-through', children, open: false });
+  doc.commit(`Apply look: ${look.name}`);
+}
+
+/** The effect/adjustment layers a look would be saved from: the active group's, or the run around the active one. */
+export function lookSourceLayers(): Layer[] {
+  const doc = need(); const l = doc?.active; if (!doc || !l) return [];
+  if (l.type === 'group') return l.children.filter(isFilter);
+  if (!isFilter(l)) return [];
+  const at = doc.locate(l.id)!;
+  let a = at.index, b = at.index;
+  while (a > 0 && isFilter(at.list[a - 1])) a--;
+  while (b < at.list.length - 1 && isFilter(at.list[b + 1])) b++;
+  return at.list.slice(a, b + 1);
+}
+
+export async function saveLook(name: string) {
+  const doc = need(); if (!doc) return false;
+  const src = lookSourceLayers();
+  if (!src.length) { toast('Select an effect/adjustment layer, or a group of them, to save as a look.'); return false; }
+  const items: LookItem[] = [];
+  for (const l of src) {
+    if (l.type === 'effect') items.push({ type: 'effect', kind: l.fx.kind, name: l.name, v: { ...l.fx.v }, seed: l.fx.seed, opacity: l.opacity, blend: l.blend });
+    else if (l.type === 'adjust') {
+      const it: LookItem = { type: 'adjust', kind: l.adj.kind, name: l.name, adj: structuredClone(l.adj), opacity: l.opacity, blend: l.blend };
+      if (l.adj.kind === 'lut' && l.adj.key) {
+        it.lutData = doc.pool.get(l.adj.key)?.toDataURL('image/png');
+        it.adj = { ...l.adj, key: null };
+      }
+      items.push(it);
+    }
+  }
+  const list = savedLooks().filter((x) => x.name !== name);
+  list.push({ name, items });
+  if (!storeLooks(list)) { toast('Could not save the look (storage is full).', 'error'); return false; }
+  toast(`Saved look "${name}"`);
+  return true;
+}
+
+export function deleteLook(name: string) {
+  storeLooks(savedLooks().filter((x) => x.name !== name));
+}

@@ -1,5 +1,6 @@
 import { app } from '../app';
-import { createDoc, exportImage, nextUntitled, resizeCanvas, resizeImage } from '../actions';
+import { addGuide, createDoc, deleteLook, exportImage, lookSourceLayers, nextUntitled, resizeCanvas, resizeImage, saveLook } from '../actions';
+import { savedLooks } from '../core/looks';
 import { cloneCanvas, ctx2d } from '../core/layers';
 import { FILTERS, maskedMerge, type FilterDef, type Params } from '../core/filters';
 import { h } from './dom';
@@ -170,6 +171,49 @@ export function filterDialog(def: FilterDef) {
 }
 
 export const filterById = (id: string) => FILTERS.find((f) => f.id === id)!;
+
+export function saveLookDialog() {
+  const src = lookSourceLayers();
+  if (!src.length) { toast('Select an effect or adjustment layer (or a group of them) to save as a look.'); return; }
+  const name = h('input', { type: 'text', value: app.doc?.active?.type === 'group' ? app.doc.active.name.replace(/^Look: /, '') : 'My look', spellcheck: false });
+  dialog({
+    title: 'Save look', width: 420,
+    body: [
+      h('p', { class: 'dialog-msg' }, `Saves these ${src.length} layer${src.length === 1 ? '' : 's'} as a reusable look: ${src.map((l) => l.name).join(', ')}.`),
+      h('label', { class: 'field wide' }, h('span', null, 'Name'), name),
+      h('p', { class: 'dialog-note' }, 'Find it later under Filter › Looks. Applying a look adds these layers as a group above the selected layer.'),
+    ],
+    buttons: [{ label: 'Cancel' }, { label: 'Save', primary: true, onClick: async () => { const n = name.value.trim(); if (!n) return false; return (await saveLook(n)) ? undefined : false; } }],
+  });
+}
+
+export function manageLooksDialog() {
+  const list = h('div', { class: 'look-list' });
+  const draw = () => {
+    const looks = savedLooks();
+    list.replaceChildren(...(looks.length ? looks.map((l) => h('div', { class: 'look-row' },
+      h('span', null, l.name), h('span', { class: 'dim' }, `${l.items.length} layer${l.items.length === 1 ? '' : 's'}`),
+      h('button', { class: 'btn small danger', type: 'button', onclick: () => { deleteLook(l.name); draw(); } }, 'Delete')))
+      : [h('p', { class: 'dialog-msg dim' }, 'No saved looks yet. Select some effect layers and use Filter › Looks › Save Current Effects as Look.')]));
+  };
+  draw();
+  dialog({ title: 'Manage looks', width: 440, body: list, buttons: [{ label: 'Close', primary: true }] });
+}
+
+export function newGuideDialog() {
+  const doc = app.doc; if (!doc) return;
+  let axis: 'x' | 'y' = 'x', pos = Math.round(doc.width / 2);
+  const f = numField('Position', pos, (v) => { pos = v; }, { unit: 'px' });
+  dialog({
+    title: 'New guide', width: 380,
+    body: [
+      h('div', { class: 'field wide' }, h('span', null, 'Direction'), seg([{ v: 'x', label: 'Vertical' }, { v: 'y', label: 'Horizontal' }], axis, (v) => { axis = v; f.set(pos = Math.round((v === 'x' ? doc.width : doc.height) / 2)); })),
+      f,
+      h('p', { class: 'dialog-note' }, 'Tip: with rulers on (View › Rulers), drag from a ruler to place a guide; drag it back onto a ruler to remove it.'),
+    ],
+    buttons: [{ label: 'Cancel' }, { label: 'Add', primary: true, onClick: () => addGuide(axis, pos) }],
+  });
+}
 
 export function shortcutsDialog(rows: [string, string][]) {
   dialog({

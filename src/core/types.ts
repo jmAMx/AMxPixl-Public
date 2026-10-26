@@ -58,7 +58,9 @@ export type AdjParams =
   | { kind: 'gradmap'; dark: string; mid: string; light: string; useMid: boolean; reverse: boolean }
   /** Output channel rows of input percentages, e.g. r: [100, 0, 0]. */
   | { kind: 'mixer'; r: [number, number, number]; g: [number, number, number]; b: [number, number, number]; mono: boolean }
-  | { kind: 'photofilter'; color: string; density: number; preserve: boolean };
+  | { kind: 'photofilter'; color: string; density: number; preserve: boolean }
+  /** A loaded .cube colour lookup, stored as a packed image in the pixel pool under `key`. */
+  | { kind: 'lut'; key: string | null; name: string; size: number; intensity: number };
 
 /** One colour-grading wheel: tint direction (hue °), tint strength and brightness shift. */
 export interface GradeWheel { hue: number; amount: number; lum: number }
@@ -74,7 +76,32 @@ interface LayerBase {
   /** Clipping mask: only shows where the nearest non-clipped layer below has pixels. */
   clip?: boolean;
   mask?: Mask | null;
+  styles?: LayerStyles | null;
+  blendIf?: BlendIf | null;
 }
+
+/** Editable layer effects drawn from the layer's shape (sizes in document pixels, opacity 0..1). */
+export interface LayerStyles {
+  shadow: { on: boolean; color: string; opacity: number; angle: number; distance: number; size: number };
+  glow: { on: boolean; color: string; opacity: number; size: number };
+  innerGlow: { on: boolean; color: string; opacity: number; size: number };
+  stroke: { on: boolean; color: string; opacity: number; size: number; position: 'outside' | 'inside' | 'center' };
+  overlay: { on: boolean; color: string; opacity: number };
+}
+
+/**
+ * Blend If: fade the layer out by brightness. Each range is [black, black-feather, white-feather, white] on 0..255:
+ * pixels darker than `black` or brighter than `white` vanish, fading in between.
+ */
+export interface BlendIf { on: boolean; self: [number, number, number, number]; under: [number, number, number, number] }
+
+/**
+ * Lossless warp of a raster layer, as control points in the layer's own pixel space. Perspective: 4 corners
+ * (TL, TR, BR, BL). Mesh: an n x n grid, row by row.
+ */
+export interface Warp { kind: 'perspective' | 'mesh'; n: number; pts: number[] }
+
+export interface Guide { axis: 'x' | 'y'; pos: number }
 
 /**
  * A layer mask: an alpha-only pixel buffer (opaque = layer shows) with its own placement, so it can follow the
@@ -88,7 +115,7 @@ export interface PixelTarget { key: string; t: Xform }
 /** An effect layer's settings: which effect, a random seed for its texture, and its parameter values. */
 export interface FxParams { kind: string; seed: number; v: Record<string, number | string | boolean> }
 
-export interface RasterLayer extends LayerBase { type: 'raster'; key: string; t: Xform }
+export interface RasterLayer extends LayerBase { type: 'raster'; key: string; t: Xform; warp?: Warp | null }
 export interface TextLayer extends LayerBase { type: 'text'; t: Xform; text: TextProps }
 export interface ShapeLayer extends LayerBase { type: 'shape'; t: Xform; shape: ShapeProps }
 export interface AdjustLayer extends LayerBase { type: 'adjust'; adj: AdjParams }
@@ -120,4 +147,5 @@ export interface Meta {
   activeId: string | null;
   selection: Selection | null;
   counter: number;
+  guides?: Guide[];
 }
