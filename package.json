@@ -3,7 +3,7 @@
   "productName": "AMxPixl",
   "description": "Pixl Editor: a lightweight, non-destructive image editor.",
   "private": true,
-  "version": "0.4.5+1",
+  "version": "0.4.6",
   "type": "module",
   "scripts": {
     "dev": "vite",
