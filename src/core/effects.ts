@@ -38,6 +38,34 @@ export interface FxDef {
 }
 
 const n = (v: FxValue) => Number(v);
+
+/**
+ * GIMP's video-degradation patterns (from GEGL), shared with the .xcf importer: [width, height, cells], where each
+ * cell says which colour channel (0 R, 1 G, 2 B) that pixel keeps.
+ */
+export const VIDEO_PATTERNS: [number, number, string][] = ([
+  ['01 02 12 10 20 21'], // staggered
+  ['0011 0011 0022 0022 1122 1122 1100 1100 2200 2200 2211 2211'], // large staggered
+  ['0 1 2'], // striped
+  ['0 0 1 1 2 2'], // wide striped
+  ['01 01 02 02 12 12 10 10 20 20 21 21'], // long staggered
+  ['012 201 120'], // 3x3
+  ['001122 001122 220011 220011 112200 112200'], // large 3x3
+  ['220000 222002 222222 222112 221111 111111 001111 000110 000000 000220 002222 222222 112222 111221 111111 111001 110000 000000'], // hex
+  ['01200 11120 01222 00120 01112 20122 00012 20111 22012 20001 12011 22201 12000 11201 12220'], // dots
+] as [string][]).map(([rows]) => { const r = rows.split(' '); return [r[0].length, r.length, r.join('')]; });
+const VIDEO_PATTERN_NAMES = ['staggered', 'large-staggered', 'striped', 'wide-striped', 'long-staggered', '3x3', 'large-3x3', 'hex', 'dots'];
+
+/** The pattern tables as GLSL constants for the video degradation effect. */
+const videoPatternGlsl = (() => {
+  let off = 0;
+  const offs = VIDEO_PATTERNS.map(([, , c]) => { const o = off; off += c.length; return o; });
+  const cells = VIDEO_PATTERNS.map(([, , c]) => [...c].join(', ')).join(', ');
+  return `const int VPW[9] = int[9](${VIDEO_PATTERNS.map((p) => p[0]).join(', ')});
+const int VPH[9] = int[9](${VIDEO_PATTERNS.map((p) => p[1]).join(', ')});
+const int VPO[9] = int[9](${offs.join(', ')});
+const int VPC[${off}] = int[${off}](${cells});`;
+})();
 export const hex3 = (h: FxValue): [number, number, number] => {
   const x = parseInt(String(h).slice(1), 16) || 0;
   return [((x >> 16) & 255) / 255, ((x >> 8) & 255) / 255, (x & 255) / 255];
@@ -374,6 +402,36 @@ vec4 fx(vec2 p, vec2 d) {
   float band = smoothstep(1.0 - 0.08 * uB.z, 1.0, vnoise(vec2(3.0, d.y / 50.0 + uTime * 1.2)));
   col = mix(col, vec3(hash(floor(d / vec2(3.0, 1.0)))), band * 0.7 * step(0.001, uB.z));
   return vec4(col, s.a);
+}`,
+  },
+
+  {
+    // GIMP's Filters › Distorts › Video Degradation, same patterns, plus a cell size and a strength.
+    kind: 'videodeg', label: 'Video Degradation', group: 'CRT & VHS', moves: true,
+    params: [
+      { key: 'pattern', label: 'Pattern', type: 'select', value: 'striped', options: [
+        ['staggered', 'Staggered'], ['large-staggered', 'Large staggered'], ['striped', 'Striped'], ['wide-striped', 'Wide striped'],
+        ['long-staggered', 'Long staggered'], ['3x3', '3×3'], ['large-3x3', 'Large 3×3'], ['hex', 'Hex'], ['dots', 'Dots']] },
+      { key: 'size', label: 'Cell size', type: 'range', min: 1, max: 12, value: 1, unit: 'px' },
+      { key: 'additive', label: 'Additive (brighter, like GIMP)', type: 'bool', value: true },
+      { key: 'rotated', label: 'Rotated', type: 'bool', value: false },
+      { key: 'strength', label: 'Strength', type: 'range', min: 0, max: 100, value: 100, unit: '%' },
+    ],
+    uniforms: (v) => ({ uA: [sel(v.pattern, VIDEO_PATTERN_NAMES), n(v.size), v.additive ? 1 : 0, v.rotated ? 1 : 0], uB: [n(v.strength) / 100, 0, 0, 0] }),
+    glsl: `
+${videoPatternGlsl}
+int imod(int a, int b) { return ((a % b) + b) % b; }
+vec4 fx(vec2 p, vec2 d) {
+  vec4 c = src(p);
+  int pat = int(uA.x + 0.5);
+  // In motion the pattern rolls down the picture.
+  ivec2 q = ivec2(floor((d + vec2(0.0, uTime * uA.y * 8.0)) / uA.y));
+  int w = VPW[pat], h = VPH[pat];
+  int idx = uA.w > 0.5 ? w * imod(q.x, h) + imod(q.y, w) : w * imod(q.y, h) + imod(q.x, w);
+  int s = VPC[VPO[pat] + idx];
+  vec3 v = vec3(s == 0 ? c.r : 0.0, s == 1 ? c.g : 0.0, s == 2 ? c.b : 0.0);
+  vec3 r = uA.z > 0.5 ? min(v + c.rgb, 1.0) : v;
+  return vec4(mix(c.rgb, r, uB.x), c.a);
 }`,
   },
 

@@ -21,6 +21,14 @@ npm run app
 
 This runs the desktop app with live reload. `npm run package` builds `src-tauri/target/release/amxpixl.exe` and an installer in `src-tauri/target/release/bundle/nsis/`.
 
+### Releasing
+
+1. Bump `version` in `package.json` and add a `## <version>` section to `CHANGELOG.md`.
+2. `npm run package`
+3. `npm run release` publishes the installer to the public [AMxPixl-releases](https://github.com/jmAMx/AMxPixl-releases/releases) page (the source stays private) and tags the version here. Add `-- -Draft` to review it on GitHub before it goes live. The app's Help › Check for Updates reads that page.
+
+One-time setup: `winget install GitHub.cli`, then `gh auth login`.
+
 ## What makes it different
 
 - **Lossless transforms.** Layers keep their original pixels. You can scale, rotate, flip, resize the image or crop as many times as you like, and nothing degrades. Pixels are resampled once, on export.
@@ -47,7 +55,7 @@ This runs the desktop app with live reload. `npm run package` builds `src-tauri/
 | `src/core/import/` | `.xcf` and `.psd` readers, plus GIMP filter equivalents |
 | `src/tools/` | Canvas tools (move/transform, selections and magic wand, crop, brush, eraser, clone/heal, gradient, bucket, text, shapes, hand, zoom) |
 | `src/ui/` | Menus, panels, dialogs, canvas view, timeline |
-| `branding/` | The Pixl logo (`pixl-logo.png`) and the small-size and file-icon drawings the app icons are made from |
+| `branding/` | The Pixl logo (`pixl-logo.png`, large sizes) and icon (`pixl-icon.png`, 16–32 px), plus the rendered `.pixl` file icon |
 | `src/actions.ts` | Commands behind the menus and shortcuts |
 
 ## File format

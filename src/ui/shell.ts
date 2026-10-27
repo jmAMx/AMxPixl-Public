@@ -304,7 +304,7 @@ function menubar() {
   app.on('change', syncUndo); app.on('docs', syncUndo); syncUndo();
   return h('header', { class: 'menubar' },
     h('div', { class: 'brand', title: 'AMxPixl' },
-      h('img', { class: 'logo', src: 'brand/pixl-mark-32.svg', alt: '' }),
+      h('img', { class: 'logo', src: 'brand/pixl-icon-64.png', alt: '' }),
       h('span', { class: 'wordmark' }, h('span', { class: 'px-name' }, 'Pixl')),
       h('span', { class: 'app-version', title: `AMxPixl version ${__APP_VERSION__}` }, `v${__APP_VERSION__}`)),
     h('nav', { class: 'menus' }, ...buttons),

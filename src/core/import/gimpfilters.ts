@@ -1,3 +1,4 @@
+import { VIDEO_PATTERNS } from '../effects';
 import type { FilterArg, XcfFilter } from './xcf';
 
 /**
@@ -306,19 +307,6 @@ function bevel(p: Px, a: Record<string, FilterArg>) {
   svgBlend(p, light, mode);
   for (let i = 0; i < alpha.length; i++) p.d[i * 4 + 3] = alpha[i];
 }
-
-/** GEGL video-degradation patterns: [width, height, which channel (0 R, 1 G, 2 B) each cell keeps]. */
-const VIDEO_PATTERNS: [number, number, string][] = ([
-  ['01 02 12 10 20 21'], // staggered
-  ['0011 0011 0022 0022 1122 1122 1100 1100 2200 2200 2211 2211'], // large staggered
-  ['0 1 2'], // striped
-  ['0 0 1 1 2 2'], // wide striped
-  ['01 01 02 02 12 12 10 10 20 20 21 21'], // long staggered
-  ['012 201 120'], // 3x3
-  ['001122 001122 220011 220011 112200 112200'], // large 3x3
-  ['220000 222002 222222 222112 221111 111111 001111 000110 000000 000220 002222 222222 112222 111221 111111 111001 110000 000000'], // hex
-  ['01200 11120 01222 00120 01112 20122 00012 20111 22012 20001 12011 22201 12000 11201 12220'], // dots
-] as [string][]).map(([rows]) => { const r = rows.split(' '); return [r[0].length, r.length, r.join('')]; });
 
 /**
  * GEGL video degradation: a CRT-style RGB pattern. Each pixel keeps one colour channel; "additive" (the default)
