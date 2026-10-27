@@ -25,7 +25,7 @@ This runs the desktop app with live reload. `npm run package` builds `src-tauri/
 
 1. Bump `version` in `package.json` and add a `## <version>` section to `CHANGELOG.md`.
 2. `npm run package`
-3. `npm run release` publishes the installer to the public [AMxPixl-releases](https://github.com/jmAMx/AMxPixl-releases/releases) page (the source stays private) and tags the version here. Add `-- -Draft` to review it on GitHub before it goes live. The app's Help › Check for Updates reads that page.
+3. Commit, then `npm run release`: it tags the version and publishes the installer on this repository's [Releases](https://github.com/jmAMx/AMxPixl/releases) page. Add `-- -Draft` to review it on GitHub before it goes live. The app's Help › Check for Updates reads that page.
 
 One-time setup: `winget install GitHub.cli`, then `gh auth login`.
 

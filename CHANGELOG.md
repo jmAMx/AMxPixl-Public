@@ -2,11 +2,15 @@
 
 Each version's section becomes its release notes (`scripts/release.ps1` copies it to the download page).
 
+## 0.5.2
+
+- Sharper icons: the app and .pixl file icons are shrunk in steps with high-quality filtering (no more jagged edges), and the file icon's logo sits on a dark tile so it reads at small sizes. `npm run icons` rebuilds them from `branding/`.
+- Check for Updates looks at this repository's Releases page.
+
 ## 0.5.1
 
-- Pixl's icon: your full logo at large sizes, the colour-bar P icon at small sizes (taskbar, title bar, file icons).
+- Pixl's icon: the full logo at large sizes, the colour-bar P icon at small sizes (taskbar, title bar, file icons).
 - New effect layer: **Video Degradation** (CRT & VHS), with GIMP's nine RGB patterns, cell size, additive and rotated options. It can animate (the pattern rolls).
-- Check for Updates now looks at the public releases page.
 
 ## 0.5.0
 

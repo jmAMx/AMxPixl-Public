@@ -1,10 +1,10 @@
 import { isDesktop } from './platform';
 
 /**
- * Update check against the public releases repository (the source code stays private). Releases are published there
- * by scripts/release.ps1. If the check fails (offline, no releases yet) the quiet startup check says nothing.
+ * Update check against the AMxPixl repository's GitHub releases (published by scripts/release.ps1). If the check
+ * fails (offline, no releases yet) the quiet startup check says nothing.
  */
-const REPO = 'jmAMx/AMxPixl-releases';
+const REPO = 'jmAMx/AMxPixl';
 export const RELEASES_URL = `https://github.com/${REPO}/releases/latest`;
 const LAST_CHECK = 'amxpixl.updateCheck';
 

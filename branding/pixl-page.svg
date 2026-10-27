@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <!-- The document page behind the .pixl file icon (large sizes); scripts/icons.ps1 places the logo on it. -->
+  <path d="M62 10h100l56 56v168a12 12 0 0 1-12 12H62a12 12 0 0 1-12-12V22a12 12 0 0 1 12-12z" fill="#fbfcfc" stroke="#9aa8a5" stroke-width="5" stroke-linejoin="round"/>
+  <path d="M162 10v44a12 12 0 0 0 12 12h44z" fill="#9fdccc" stroke="#9aa8a5" stroke-width="5" stroke-linejoin="round"/>
+  <!-- Dark backing inside the logo's frame, so its white letters stand out on the light page. -->
+  <rect x="66" y="88" width="136" height="136" rx="16" fill="#141a19"/>
+</svg>

@@ -3,7 +3,7 @@
   "productName": "AMxPixl",
   "description": "Pixl Editor: a lightweight, non-destructive image editor.",
   "private": true,
-  "version": "0.5.1",
+  "version": "0.5.2",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -12,6 +12,7 @@
     "typecheck": "tsc --noEmit",
     "app": "tauri dev",
     "package": "tauri build",
+    "icons": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/icons.ps1",
     "release": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/release.ps1"
   },
   "devDependencies": {
