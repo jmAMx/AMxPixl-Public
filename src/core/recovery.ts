@@ -74,6 +74,8 @@ export async function restoreRecovery(uid: string): Promise<Doc | null> {
   doc.guides = r.meta.guides ?? [];
   doc.resample = r.meta.resample ?? 'smooth';
   doc.anim = r.meta.anim ?? null;
+  doc.paths = r.meta.paths ?? [];
+  doc.activePath = r.meta.activePath ?? null;
   doc.setSelection(r.meta.selection ?? null);
   doc.quickMask = r.meta.quickMask ?? null;
   doc.file = r.file;

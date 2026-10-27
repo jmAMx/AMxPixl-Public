@@ -173,6 +173,7 @@ export function timelinePanel() {
     if (!d?.anim || el.hidden || e.ctrlKey || e.metaKey || e.altKey) return;
     const t = e.target as HTMLElement;
     if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+    if (app.tool?.id === 'pen') return; // Enter finishes a path there
     if (e.key === 'Enter') { e.preventDefault(); togglePlay(); }
     else if (e.key === ',') { e.preventDefault(); stop(); A.goToFrame(d.frame - 1); }
     else if (e.key === '.') { e.preventDefault(); stop(); A.goToFrame(d.frame + 1); }

@@ -2,6 +2,15 @@
 
 Each version's section becomes its release notes (`scripts/release.ps1` copies it to the download page).
 
+## 0.6.0
+
+- **Pen tool (P)** and a **Paths** panel: Bézier paths you can edit (drag points and handles, corner/smooth, add and delete points). Fill or stroke a path (with the Brush or a plain line), turn it into a selection (Ctrl+Enter) or trace a selection into a path.
+- **Text on a path**, with a Start slider to slide it along the curve.
+- **Polygon and star shapes**, and Convert Shape to Path.
+- **Retouch tools**: Dodge and Burn (O; shadows, midtones or highlights), Blur, Sharpen and Smudge (R).
+- **Brushes**: textured tips (chalk, spray, charcoal, grain, splatter, square, or your own from an image), spacing, angle jitter and scatter, and saved brush presets.
+- GIMP files: hue-saturation now matches GIMP more closely.
+
 ## 0.5.2
 
 - Sharper icons: the app and .pixl file icons are shrunk in steps with high-quality filtering (no more jagged edges), and the file icon's logo sits on a dark tile so it reads at small sizes. `npm run icons` rebuilds them from `branding/`.

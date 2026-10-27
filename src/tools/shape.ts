@@ -5,7 +5,7 @@ import { view } from '../ui/canvasview';
 import { checkbox, numField, seg } from '../ui/widgets';
 import type { PInfo, Tool } from './tool';
 
-const NAMES = { rect: 'Rectangle', ellipse: 'Ellipse', line: 'Line' };
+const NAMES = { rect: 'Rectangle', ellipse: 'Ellipse', line: 'Line', polygon: 'Polygon', star: 'Star' };
 
 class ShapeTool implements Tool {
   id = 'shape'; name = 'Shape'; key = 'U'; icon = 'shape' as const;
@@ -15,8 +15,12 @@ class ShapeTool implements Tool {
 
   options(bar: HTMLElement) {
     const o = app.opts.shape;
+    const poly = o.kind === 'polygon' || o.kind === 'star';
     bar.append(
-      seg([{ v: 'rect', icon: 'rect', title: 'Rectangle' }, { v: 'ellipse', icon: 'circle', title: 'Ellipse' }, { v: 'line', icon: 'line', title: 'Line' }], o.kind, (v) => { o.kind = v; app.saveOpts(); }),
+      seg([{ v: 'rect', icon: 'rect', title: 'Rectangle' }, { v: 'ellipse', icon: 'circle', title: 'Ellipse' }, { v: 'polygon', icon: 'polygon', title: 'Polygon' },
+        { v: 'star', icon: 'star', title: 'Star' }, { v: 'line', icon: 'line', title: 'Line' }], o.kind, (v) => { o.kind = v; app.saveOpts(); app.emit('tool'); }),
+      ...(poly ? [numField(o.kind === 'star' ? 'Points' : 'Sides', o.sides, (v) => { o.sides = Math.round(v); app.saveOpts(); }, { min: 3, max: 64 })] : []),
+      ...(o.kind === 'star' ? [numField('Inner', Math.round(o.inner * 100), (v) => { o.inner = v / 100; app.saveOpts(); }, { unit: '%', min: 5, max: 100 })] : []),
       checkbox('Fill (FG)', o.fill, (v) => { o.fill = v; app.saveOpts(); }),
       checkbox('Stroke', o.stroke, (v) => { o.stroke = v; app.saveOpts(); }, 'Outline in the background colour (or foreground if there is no fill)'),
       numField('Width', o.strokeWidth, (v) => { o.strokeWidth = v; app.saveOpts(); }, { unit: 'px', min: 0, max: 500 }),
@@ -39,7 +43,8 @@ class ShapeTool implements Tool {
     const layer: ShapeLayer = {
       id: newId(), type: 'shape', name: `${NAMES[o.kind]} ${doc.counter++}`, visible: true, opacity: 1, blend: 'normal',
       t: { x: Math.round(p.x), y: Math.round(p.y), sx: 1, sy: 1, rot: 0 },
-      shape: { kind: o.kind, w: 0, h: 0, fill, stroke, strokeWidth: isLine ? Math.max(1, o.strokeWidth) : o.strokeWidth, radius: o.radius, ...(o.antiAlias ? {} : { antiAlias: false }) },
+      shape: { kind: o.kind, w: 0, h: 0, fill, stroke, strokeWidth: isLine ? Math.max(1, o.strokeWidth) : o.strokeWidth, radius: o.radius, ...(o.antiAlias ? {} : { antiAlias: false }),
+        ...(o.kind === 'polygon' || o.kind === 'star' ? { sides: o.sides, inner: o.inner } : {}) },
     };
     doc.insertLayer(layer);
     this.drawing = { layer, x: layer.t.x, y: layer.t.y };

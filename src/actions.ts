@@ -12,10 +12,14 @@ import { savedLooks, storeLooks, type Look, type LookItem } from './core/looks';
 import { parseCube } from './core/lut';
 import { apply, decompose, invert, matScale, mul, roundOut, setT, tidy, union, xformMatrix, type Mat, type Pt, type Rect, type Xform } from './core/math';
 import { flatten, renderDoc } from './core/render';
+import { Stroke } from './core/brush';
+import { glops } from './core/glops';
+import { ellipseSub, flattenSub, mapSubs, maskToSubs, polySub, rectSub, toPath2D } from './core/paths';
+import { shapePoints } from './core/layers';
 import { invertSel, mapSel, maskSelection, selBounds } from './core/selection';
 import { colorRangeMask, combine, layerAlphaMask, modifyMask, sampleSource, wandMask, type Modify, type SelMode } from './core/selops';
 import { defaultStyles } from './core/styles';
-import type { AdjKind, AdjParams, Anim, AnimFrame, BlendIf, GroupLayer, Guide, Layer, LayerStyles, Mask, PlacedLayer, RasterLayer, Warp } from './core/types';
+import type { AdjKind, AdjParams, Anim, AnimFrame, BlendIf, GroupLayer, Guide, Layer, LayerStyles, Mask, PathPoint, PlacedLayer, RasterLayer, SubPath, TextLayer, VPath, Warp } from './core/types';
 import { initWarp, warpBounds } from './core/warp';
 import { isFilter, isPlaced } from './core/types';
 import { view } from './ui/canvasview';
@@ -249,6 +253,166 @@ export function setLayerProp(id: string, patch: Partial<Pick<Layer, 'name' | 'vi
   if (label) doc.commit(label); else doc.touch('meta');
 }
 
+// ---------- paths ----------
+
+const pathId = () => `p${Math.random().toString(36).slice(2, 9)}`;
+
+/** Starts an empty path (the Pen adds points to it) and makes it the active one. */
+export function newPath(subs: SubPath[] = [], name?: string): VPath | null {
+  const doc = need(); if (!doc) return null;
+  const p: VPath = { id: pathId(), name: name ?? `Path ${doc.paths.length + 1}`, subs };
+  doc.paths.push(p);
+  doc.activePath = p.id;
+  if (subs.length) doc.commit(`New path`); else doc.touch('meta');
+  return p;
+}
+
+export function selectPath(id: string | null) {
+  const doc = app.doc; if (!doc) return;
+  doc.activePath = id;
+  doc.touch('meta');
+}
+
+export function renamePath(id: string, name: string) {
+  const doc = need(); const p = doc?.paths.find((x) => x.id === id); if (!doc || !p) return;
+  p.name = name;
+  doc.commit('Rename path');
+}
+
+export function deletePath(id = app.doc?.activePath) {
+  const doc = need(); if (!doc || !id) return;
+  doc.paths = doc.paths.filter((p) => p.id !== id);
+  if (doc.activePath === id) doc.activePath = doc.paths[doc.paths.length - 1]?.id ?? null;
+  doc.commit('Delete path');
+}
+
+function needPath(doc: Doc): VPath | null {
+  const p = doc.path;
+  if (!p || !p.subs.some((s) => s.pts.length > 1)) { toast('Draw a path with the Pen (P) first.'); return null; }
+  return p;
+}
+
+/** Fills the active path on the current layer with the foreground colour. */
+export function fillPath() {
+  const doc = need(); if (!doc) return;
+  const path = needPath(doc); if (!path) return;
+  const pt = needTarget(doc, 'fill'); if (!pt) return;
+  doc.ensureCovers(pt.target);
+  const color = pt.isMask ? '#ffffff' : app.fg;
+  doc.editPixels(pt.target, pt.isMask ? 'Fill path on mask' : 'Fill path', (ctx) => {
+    setT(ctx, invert(xformMatrix(pt.target.t)));
+    ctx.fillStyle = color;
+    ctx.fill(toPath2D(path), 'evenodd');
+  });
+  if (!pt.isMask) app.useColor(app.fg);
+}
+
+/**
+ * Strokes the active path on the current layer: 'brush' paints along it with the Brush's settings (tip, size,
+ * pressure tapering off), 'line' draws a plain line `width` pixels wide in the foreground colour.
+ */
+export function strokePath(mode: 'brush' | 'line', width = 4) {
+  const doc = need(); if (!doc) return;
+  const path = needPath(doc); if (!path) return;
+  const pt = needTarget(doc, 'paint'); if (!pt) return;
+  if (mode === 'line') {
+    doc.ensureCovers(pt.target);
+    doc.editPixels(pt.target, 'Stroke path', (ctx) => {
+      setT(ctx, invert(xformMatrix(pt.target.t)));
+      ctx.strokeStyle = pt.isMask ? '#ffffff' : app.fg;
+      ctx.lineWidth = width;
+      ctx.lineJoin = 'round';
+      ctx.lineCap = 'round';
+      ctx.stroke(toPath2D(path));
+    });
+    return;
+  }
+  const o = app.opts.brush;
+  const s = new Stroke(doc, pt.target, {
+    color: pt.isMask ? '#ffffff' : app.fg, size: o.size, hardness: o.hardness, opacity: o.opacity, flow: o.flow, erase: false, pressure: false,
+    aliased: !o.antiAlias, tip: o.tip, spacing: o.spacing / 100, jitter: o.jitter, scatter: o.scatter,
+  });
+  for (const sub of path.subs) {
+    for (const q of flattenSub(sub, 1)) s.add({ x: q.x, y: q.y, pressure: 1 });
+    s.lift();
+  }
+  s.end('Stroke path');
+  if (!pt.isMask) app.useColor(app.fg);
+}
+
+/** The active path as a selection (inside = selected; overlapping parts cancel out, like holes in letters). */
+export function pathToSelection(mode: SelMode = 'replace') {
+  const doc = need(); if (!doc) return;
+  const path = needPath(doc); if (!path) return;
+  const c = newCanvas(doc.width, doc.height);
+  const x = ctx2d(c);
+  x.fillStyle = '#fff';
+  x.fill(toPath2D(path), 'evenodd');
+  if (!app.opts.select.antiAlias) { const h = glops.hardEdge(c); if (h) { x.globalCompositeOperation = 'copy'; x.drawImage(h, 0, 0); } }
+  doc.setSelection(combine(doc, c, mode));
+  doc.commit('Path to selection');
+}
+
+/** Traces the selection's edge into a new path. */
+export function selectionToPath() {
+  const doc = need(); if (!doc) return;
+  const m = doc.selectionMask();
+  if (!m) { toast('Make a selection first.'); return; }
+  const subs = maskToSubs(m);
+  if (!subs.length) { toast('The selection is too small to trace.'); return; }
+  newPath(subs, 'Path from selection');
+}
+
+/** The selected shape layer's outline as a new path (in document coordinates). */
+export function shapeToPath() {
+  const doc = need(); const l = doc?.active;
+  if (!doc || l?.type !== 'shape') { toast('Select a shape layer first.'); return; }
+  const s = l.shape;
+  let subs: SubPath[];
+  if (s.kind === 'line') subs = [polySub([{ x: 0, y: 0 }, { x: s.w, y: s.h }], false)];
+  else {
+    const x = Math.min(0, s.w), y = Math.min(0, s.h), w = Math.abs(s.w), h = Math.abs(s.h);
+    if (s.kind === 'ellipse') subs = [ellipseSub(x + w / 2, y + h / 2, w / 2, h / 2)];
+    else if (s.kind === 'polygon' || s.kind === 'star') subs = [polySub(shapePoints(s))];
+    else subs = [s.radius > 0 ? roundRectSub(x, y, w, h, Math.min(s.radius, w / 2, h / 2)) : rectSub(x, y, w, h)];
+  }
+  const m = layerMatrix(l);
+  newPath(mapSubs(subs, (px, py) => apply(m, px, py)), `${l.name} path`);
+}
+
+function roundRectSub(x: number, y: number, w: number, h: number, r: number): SubPath {
+  const k = r * 0.5523;
+  const P = (px: number, py: number, ix: number, iy: number, ox: number, oy: number): PathPoint => ({ x: px, y: py, ix, iy, ox, oy });
+  return {
+    closed: true, pts: [
+      P(x + r, y, x + r - k, y, x + r, y), P(x + w - r, y, x + w - r, y, x + w - r + k, y),
+      P(x + w, y + r, x + w, y + r - k, x + w, y + r), P(x + w, y + h - r, x + w, y + h - r, x + w, y + h - r + k),
+      P(x + w - r, y + h, x + w - r + k, y + h, x + w - r, y + h), P(x + r, y + h, x + r, y + h, x + r - k, y + h),
+      P(x, y + h - r, x, y + h - r + k, x, y + h - r), P(x, y + r, x, y + r, x, y + r - k),
+    ],
+  };
+}
+
+/** A new text layer that runs along the active path (its first part). Edit the words with the Text tool. */
+export function textOnPath() {
+  const doc = need(); if (!doc) return;
+  const path = needPath(doc); if (!path) return;
+  const sub = path.subs.find((s) => s.pts.length > 1)!;
+  const o = app.opts.text;
+  const l: TextLayer = {
+    id: newId(), type: 'text', name: 'Text on path', visible: true, opacity: 1, blend: 'normal',
+    t: { x: 0, y: 0, sx: 1, sy: 1, rot: 0 },
+    text: {
+      content: 'Text on a path', font: o.font, size: o.size, weight: o.weight, italic: o.italic, color: app.fg, align: o.align,
+      lineHeight: 1.2, tracking: 0, onPath: { sub: structuredClone(sub), offset: 0 }, ...(o.antiAlias ? {} : { antiAlias: false }),
+    },
+  };
+  doc.insertLayer(l);
+  doc.commit('Text on path');
+  app.setTool('text');
+  toast('Click the text with the Text tool to change the words. Move it along the path with the "Start" slider in Properties.');
+}
+
 // ---------- animation ----------
 
 const frameId = () => `f${Math.random().toString(36).slice(2, 9)}`;
@@ -455,6 +619,7 @@ export function transformDoc(label: string, g: Mat, w: number, h: number, scaleS
   if (doc.selection?.ops.some((o) => o.shape === 'mask')) doc.setSelection(maskSelection(remap(doc.selectionMask()!), (c) => doc.addCanvas(c)));
   else doc.setSelection(mapSel(doc.selection, (x, y) => { const p = apply(g, x, y); return [p.x, p.y]; }));
   if (doc.quickMask) doc.quickMask = doc.addCanvas(remap(doc.pool.get(doc.quickMask)!));
+  doc.paths = doc.paths.map((p) => ({ ...p, subs: mapSubs(p.subs, (x, y) => apply(g, x, y)) }));
   // Guides are lines: map two points on each; a rotation can turn vertical guides horizontal.
   doc.guides = doc.guides.map((gd) => {
     const a = gd.axis === 'x' ? apply(g, gd.pos, 0) : apply(g, 0, gd.pos);

@@ -9,7 +9,9 @@ import type { PixelTarget } from '../core/types';
 import { hexToRgb, rgbToHex } from '../ui/color';
 import { view } from '../ui/canvasview';
 import { h } from '../ui/dom';
-import { checkbox, seg, slider, toast } from '../ui/widgets';
+import { checkbox, icon, seg, slider, toast } from '../ui/widgets';
+import { brushDialog } from '../ui/brushpanel';
+import { listTips } from '../core/tips';
 import type { PInfo, Tool } from './tool';
 
 /** What painting should go to (the active layer's pixels or its mask), or null after explaining why not. */
@@ -73,7 +75,9 @@ class PaintTool implements Tool {
 
   options(bar: HTMLElement) {
     const o = this.o;
+    const tipName = listTips().find((t) => t.id === o.tip)?.label ?? 'Round';
     bar.append(
+      h('button', { class: 'btn small', type: 'button', title: 'Brush presets, tip shape, spacing, jitter and scatter', onclick: () => brushDialog(this.id) }, icon('brush'), tipName),
       slider({ label: 'Size', min: 1, max: 1000, value: o.size, unit: 'px', compact: true, onInput: (v) => { o.size = v; view.requestOverlay(); }, onChange: () => app.saveOpts() }),
       slider({ label: 'Hardness', min: 0, max: 1, step: 1, display: 100, value: o.hardness, unit: '%', compact: true, onInput: (v) => { o.hardness = v; }, onChange: () => app.saveOpts() }),
       slider({ label: 'Opacity', min: 0.01, max: 1, step: 1, display: 100, value: o.opacity, unit: '%', compact: true, onInput: (v) => { o.opacity = v; }, onChange: () => app.saveOpts() }),
@@ -91,7 +95,8 @@ class PaintTool implements Tool {
     const o = this.o;
     this.onMask = pt.isMask;
     const erase = pt.isMask ? this.id === 'eraser' || maskHides() : this.id === 'eraser';
-    this.stroke = new Stroke(doc, pt.target, { color: pt.isMask ? '#ffffff' : app.fg, size: o.size, hardness: o.hardness, opacity: o.opacity, flow: o.flow, erase, pressure: o.pressure, aliased: !o.antiAlias });
+    this.stroke = new Stroke(doc, pt.target, { color: pt.isMask ? '#ffffff' : app.fg, size: o.size, hardness: o.hardness, opacity: o.opacity, flow: o.flow, erase, pressure: o.pressure, aliased: !o.antiAlias,
+      tip: o.tip, spacing: o.spacing / 100, jitter: o.jitter, scatter: o.scatter });
     if (p.shift && this.last) this.stroke.add({ x: this.last.x, y: this.last.y, pressure: p.pressure });
     this.stroke.add({ x: p.x, y: p.y, pressure: p.pressure });
   }

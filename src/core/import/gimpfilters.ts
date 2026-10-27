@@ -328,7 +328,7 @@ function videoDegradation(p: Px, a: Record<string, FilterArg>) {
 
 export interface FilterSpaces { colorize: boolean; brightness: boolean; huesat: boolean; c2a: boolean }
 /** Which filters work in linear light (true) or perceptual sRGB (false). Determined by testing against GIMP. */
-export const SPACES: FilterSpaces = { colorize: true, brightness: true, huesat: false, c2a: false };
+export const SPACES: FilterSpaces = { colorize: true, brightness: true, huesat: true, c2a: false };
 
 /** Applies one filter in place. Returns false if AMxPixl doesn't know this filter (the layer is left as is). */
 export function applyGimpFilter(p: Px, f: XcfFilter): boolean {

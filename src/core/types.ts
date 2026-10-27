@@ -25,10 +25,15 @@ export interface TextProps {
   tracking: number;
   /** False for hard pixel edges (pixel art). Missing means on. */
   antiAlias?: boolean;
+  /** Text set along a curve (in the layer's own coordinates), starting `offset` pixels in. */
+  onPath?: { sub: SubPath; offset: number } | null;
 }
 
 export interface ShapeProps {
-  kind: 'rect' | 'ellipse' | 'line';
+  kind: 'rect' | 'ellipse' | 'line' | 'polygon' | 'star';
+  /** Polygon/star: number of corners (points), and a star's inner radius as a fraction of the outer. */
+  sides?: number;
+  inner?: number;
   /** Rect/ellipse: box size. Line: end point relative to the start (may be negative). */
   w: number;
   h: number;
@@ -126,6 +131,13 @@ export interface FxParams { kind: string; seed: number; v: Record<string, number
 /** `speed` scales the movement (1 = normal); `flicker` is how many times a second random textures change. */
 export interface FxMotion { on: boolean; speed: number; flicker: number }
 
+/** A point on a path, with its two Bézier handles (absolute positions; equal to the point when there's no curve). */
+export interface PathPoint { x: number; y: number; ix: number; iy: number; ox: number; oy: number }
+/** One continuous run of points; closed runs join the last point back to the first. */
+export interface SubPath { closed: boolean; pts: PathPoint[] }
+/** A vector path drawn with the Pen (document coordinates). */
+export interface VPath { id: string; name: string; subs: SubPath[] }
+
 /** One animation frame: which layers it shows or hides (others follow their own eye), and how long it's held. */
 export interface AnimFrame { id: string; vis: Record<string, boolean>; ms?: number }
 /** Frame animation: frames play in order at `fps` (a frame's own `ms` overrides its length). */
@@ -172,4 +184,7 @@ export interface Meta {
   resample?: 'smooth' | 'nearest';
   /** Frame animation (GIF/video), or none for a still image. */
   anim?: Anim | null;
+  /** Pen paths, and which one the Pen and Paths panel work on. */
+  paths?: VPath[];
+  activePath?: string | null;
 }

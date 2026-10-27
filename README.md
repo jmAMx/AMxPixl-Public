@@ -37,7 +37,9 @@ One-time setup: `winget install GitHub.cli`, then `gh auth login`.
 - **Compositing:** layer masks (with live density and feather), clipping masks, layer groups (Pass Through or isolated), layer styles (drop shadow, outer/inner glow, stroke, colour overlay) and Blend If.
 - **Looks:** saved stacks of effect/adjustment layers, with built-in VHS, Old Film, CRT Arcade, Newsprint, Teal & Orange, Lo-fi Digital and Dreamy Mist.
 - **Colour lookup:** load `.cube` LUT files as an editable adjustment layer.
-- **Retouching:** clone stamp and a live healing brush, either of which can sample all layers so you can retouch on an empty layer.
+- **Retouching:** clone stamp and a live healing brush (either can sample all layers, so you can retouch on an empty layer), dodge and burn, blur, sharpen and smudge.
+- **Brushes:** textured tips (built-in or from your own image), spacing, angle jitter, scatter and saved presets.
+- **Paths:** a Pen tool for Bézier paths; fill, stroke, path ↔ selection, text on a path, polygon and star shapes, shape to path.
 - **Selections:** marquee, lasso, magic wand, Colour Range, Modify (feather, expand, contract, smooth, border), Quick Mask (Q) and Ctrl+click a layer to select its shape.
 - **Opens GIMP and Photoshop files:** `.xcf` (GIMP 2.10 and 3, including GIMP 3's non-destructive filters and linear-light layer blending) and `.psd` (layers, groups, masks, clipping, blend modes). Anything that can't be carried over editably is listed when the file opens.
 - **Motion:** a Timeline with frames (one per layer, or a loop), onion skinning and playback. Effect layers can animate: grain, dust and glitches re-roll, scanlines and VHS tracking roll, light leaks drift, halftone dots drift, turn, pulse or ripple. Export as GIF, animated PNG, MP4 or WebM.

@@ -12,6 +12,7 @@ import { historyPanel } from './historypanel';
 import { adjustmentMenuItems, effectMenuItems, layersPanel, looksMenuItems, maskMenuItems } from './layerspanel';
 import { propertiesPanel } from './properties';
 import { timelinePanel, togglePlay } from './timeline';
+import { pathsPanel, strokePathDialog } from './pathspanel';
 import { closePopups, dialogOpen, icon, popupMenu, toast, type MenuItem } from './widgets';
 
 // ---------- menus & shortcuts ----------
@@ -66,6 +67,8 @@ const MENUS: MenuDef[] = [
       'sep',
       { label: 'Fill with Foreground', accel: 'Alt+Backspace', run: () => A.fillWith('fg'), enabled: hasLayer },
       { label: 'Fill with Background', accel: 'Ctrl+Backspace', run: () => A.fillWith('bg'), enabled: hasLayer },
+      { label: 'Fill Path', run: A.fillPath, enabled: () => !!app.doc?.path },
+      { label: 'Stroke Path…', run: strokePathDialog, enabled: () => !!app.doc?.path },
       'sep',
       { label: 'Free Transform', accel: 'Ctrl+T', run: () => app.setTool('move'), enabled: hasLayer },
     ],
@@ -101,6 +104,8 @@ const MENUS: MenuDef[] = [
       { label: 'Layer Style', sub: styleMenuItems },
       'sep',
       { label: 'Merge Down', accel: 'Ctrl+E', run: A.mergeDown, enabled: hasLayer },
+      { label: 'Convert Shape to Path', run: A.shapeToPath, enabled: () => app.doc?.active?.type === 'shape' },
+      { label: 'Text on Path', run: A.textOnPath, enabled: () => !!app.doc?.path },
       { label: 'Rasterize / Merge Group', run: A.rasterizeLayer, enabled: () => ['text', 'shape', 'group'].includes(app.doc?.active?.type ?? '') },
       'sep',
       { label: 'Transform', sub: () => [
@@ -141,6 +146,9 @@ const MENUS: MenuDef[] = [
       ] },
       'sep',
       { label: 'Quick Mask', accel: 'Q', run: A.toggleQuickMask, enabled: hasDoc, checked: () => !!app.doc?.quickMask },
+      'sep',
+      { label: 'Path to Selection', accel: 'Ctrl+Enter', run: () => A.pathToSelection(), enabled: () => !!app.doc?.path },
+      { label: 'Selection to Path', run: A.selectionToPath, enabled: hasSel },
     ],
   },
   {
@@ -185,7 +193,7 @@ const MENUS: MenuDef[] = [
 
 const extraShortcuts: [string, string][] = [
   ['V', 'Move & transform'], ['M', 'Rectangle / ellipse select'], ['L', 'Lasso'], ['W', 'Magic wand'],['Ctrl + click layer thumbnail', 'Select layer shape'], ['C', 'Crop'], ['I', 'Eyedropper'],
-  ['B', 'Brush'], ['E', 'Eraser'], ['S', 'Clone stamp (Alt+click sets the source)'], ['J', 'Healing brush'], ['G', 'Gradient / paint bucket'], ['T', 'Text'], ['U', 'Shape'], ['H', 'Hand'], ['Z', 'Zoom'],
+  ['B', 'Brush'], ['E', 'Eraser'], ['S', 'Clone stamp (Alt+click sets the source)'], ['J', 'Healing brush'], ['O', 'Dodge / burn (Alt flips)'], ['R', 'Blur / sharpen / smudge'], ['P', 'Pen (paths)'],['G', 'Gradient / paint bucket'], ['T', 'Text'], ['U', 'Shape'], ['H', 'Hand'], ['Z', 'Zoom'],
   ['X', 'Swap colours'], ['D', 'Default colours'], ['[ / ]', 'Brush size'], ['Space (hold)', 'Pan'], ['Ctrl + wheel', 'Zoom at cursor'],
   ['Alt + click (brush)', 'Pick colour'], ['Shift + drag', 'Add to selection / constrain'], ['Alt + drag', 'Subtract from selection'],
 ];
@@ -458,16 +466,17 @@ function statusbar() {
 }
 
 function dock() {
-  const panels: { id: keyof typeof app.prefs.dock & string; title: string; el: HTMLElement; grow?: boolean }[] = [
+  const panels: { id: keyof typeof app.prefs.dock & string; title: string; el: HTMLElement; grow?: boolean; closedByDefault?: boolean }[] = [
     { id: 'color', title: 'Colour', el: colorPanel() },
     { id: 'properties', title: 'Properties', el: propertiesPanel(), grow: true },
     { id: 'layers', title: 'Layers', el: layersPanel(), grow: true },
+    { id: 'paths', title: 'Paths', el: pathsPanel(), closedByDefault: true },
     { id: 'history', title: 'History', el: historyPanel() },
   ];
   const el = h('aside', { class: 'dock' });
   const build = () => {
     el.replaceChildren(...panels.map((p) => {
-      const openP = app.prefs.dock[p.id] !== false;
+      const openP = p.closedByDefault ? app.prefs.dock[p.id] === true : app.prefs.dock[p.id] !== false;
       return h('section', { class: `panel panel-${p.id}` + (openP ? ' open' : '') + (p.grow ? ' grow' : '') },
         h('button', { class: 'panel-head', type: 'button', 'aria-expanded': String(openP), onclick: () => { app.prefs.dock[p.id] = !openP; app.setPrefs({}); } },
           h('span', { class: 'chev' }, icon('chevron')), p.title),

@@ -23,6 +23,32 @@ float lum(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)) * 255.0; }
 const RAMP = HEAD + `
 void main() { o = vec4(uColor, smoothstep(uP.x, uP.y, at(uA).a)); }`;
 
+/**
+ * Retouch brushes, weighted by the stroke's coverage (uC alpha) × strength (uP.y). uA = the layer before the
+ * stroke, uB = a blurred copy. uP.x: 0 dodge, 1 burn, 2 blur, 3 sharpen. uP.z: range 0 shadows, 1 midtones,
+ * 2 highlights (dodge/burn).
+ */
+const RETOUCH = HEAD + `
+void main() {
+  vec4 c = at(uA), b = at(uB);
+  float k = at(uC).a * uP.y;
+  int mode = int(uP.x + 0.5);
+  vec3 r = c.rgb;
+  float a = c.a;
+  if (mode <= 1) {
+    float l = dot(c.rgb, vec3(0.2126, 0.7152, 0.0722));
+    float w = uP.z < 0.5 ? (1.0 - l) * (1.0 - l) : uP.z < 1.5 ? 1.0 - (2.0 * l - 1.0) * (2.0 * l - 1.0) : l * l;
+    float e = 1.0 + 1.6 * k * w;
+    r = pow(max(c.rgb, 0.0), vec3(mode == 0 ? 1.0 / e : e));
+  } else if (mode == 2) {
+    r = mix(c.rgb, b.rgb, k);
+    a = mix(c.a, b.a, k);
+  } else {
+    r = clamp(c.rgb + (c.rgb - b.rgb) * k * 1.6, 0.0, 1.0);
+  }
+  o = vec4(r, a);
+}`;
+
 /** Hard edges (anti-aliasing off): every pixel fully on or off, colour kept. */
 const HARD = HEAD + `
 void main() { vec4 c = at(uA); o = vec4(c.rgb, step(0.5, c.a)); }`;
@@ -178,6 +204,10 @@ class GLOps {
     set(gl, pr.u);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     return this.canvas;
+  }
+
+  retouch(src: HTMLCanvasElement, blurred: HTMLCanvasElement, coverage: HTMLCanvasElement, mode: number, strength: number, range: number) {
+    return this.run('retouch', RETOUCH, [src, blurred, coverage], (gl, u) => gl.uniform4f(u.uP, mode, strength, range, 0));
   }
 
   /** Anti-aliasing off: half-covered edge pixels become fully on or off. */

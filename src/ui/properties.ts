@@ -135,6 +135,11 @@ export function propertiesPanel() {
       h('div', { class: 'btn-row' }, seg([{ v: 'left', icon: 'alignL', title: 'Left' }, { v: 'center', icon: 'alignC', title: 'Centre' }, { v: 'right', icon: 'alignR', title: 'Right' }], l.text.align, (v) => set({ align: v }))),
       slider({ label: 'Line height', min: 0.6, max: 3, step: 0.05, value: l.text.lineHeight, onInput: (v) => set({ lineHeight: v }, false), onChange: e.done }),
       slider({ label: 'Tracking', min: -20, max: 100, step: 0.5, value: l.text.tracking, unit: 'px', onInput: (v) => set({ tracking: v }, false), onChange: e.done }),
+      ...(l.text.onPath ? [
+        // Text on a path: slide it along the curve, or take it off the path.
+        slider({ label: 'Start', min: -2000, max: 2000, value: l.text.onPath.offset, unit: 'px', onInput: (v) => set({ onPath: { ...l.text.onPath!, offset: v } }, false), onChange: e.done }),
+        h('button', { class: 'btn small', type: 'button', title: 'Set the text in ordinary lines again', onclick: () => { set({ onPath: null }); build(true); } }, 'Remove from path'),
+      ] : []),
       h('button', { class: 'btn small', type: 'button', onclick: () => rasterizeLayer() }, 'Rasterize text'));
   };
 

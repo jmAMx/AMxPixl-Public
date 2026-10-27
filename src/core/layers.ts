@@ -27,7 +27,7 @@ export function localBounds(l: PlacedLayer, pool: Pool): Rect {
     }
     case 'text': {
       const lay = layoutText(l.text);
-      return { x: 0, y: 0, w: lay.w, h: lay.h };
+      return { x: lay.x, y: lay.y, w: lay.w, h: lay.h };
     }
     case 'shape':
       return shapeBounds(l.shape);
@@ -42,12 +42,31 @@ export function shapeBounds(s: ShapeProps): Rect {
   return { x: Math.min(0, s.w), y: Math.min(0, s.h), w: Math.abs(s.w), h: Math.abs(s.h) };
 }
 
+/** A polygon's or star's corners inside its box (first point at the top). */
+export function shapePoints(s: ShapeProps): { x: number; y: number }[] {
+  const b = shapeBounds(s);
+  const n = Math.max(3, Math.round(s.sides ?? (s.kind === 'star' ? 5 : 6)));
+  const star = s.kind === 'star', inner = Math.max(0.05, Math.min(1, s.inner ?? 0.45));
+  const cx = b.x + b.w / 2, cy = b.y + b.h / 2;
+  const out: { x: number; y: number }[] = [];
+  const count = star ? n * 2 : n;
+  for (let i = 0; i < count; i++) {
+    const a = -Math.PI / 2 + (i * Math.PI * 2) / count;
+    const k = star && i % 2 ? inner : 1;
+    out.push({ x: cx + Math.cos(a) * (b.w / 2) * k, y: cy + Math.sin(a) * (b.h / 2) * k });
+  }
+  return out;
+}
+
 export function drawShape(ctx: CanvasRenderingContext2D, s: ShapeProps) {
   const b = s.kind === 'line' ? null : shapeBounds(s);
   ctx.beginPath();
   if (s.kind === 'line') {
     ctx.moveTo(0, 0);
     ctx.lineTo(s.w, s.h);
+  } else if (s.kind === 'polygon' || s.kind === 'star') {
+    shapePoints(s).forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)));
+    ctx.closePath();
   } else if (s.kind === 'ellipse') {
     ctx.ellipse(b!.x + b!.w / 2, b!.y + b!.h / 2, Math.max(0.01, b!.w / 2), Math.max(0.01, b!.h / 2), 0, 0, Math.PI * 2);
   } else {

@@ -24,16 +24,21 @@ const load = <T>(k: string, d: T): T => {
 const store = (k: string, v: unknown) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* storage unavailable */ } };
 
 export const DEFAULT_OPTS = {
-  brush: { size: 24, hardness: 0.8, opacity: 1, flow: 1, pressure: true, antiAlias: true },
-  eraser: { size: 40, hardness: 0.8, opacity: 1, flow: 1, pressure: false, antiAlias: true },
+  brush: { size: 24, hardness: 0.8, opacity: 1, flow: 1, pressure: true, antiAlias: true, tip: 'round', spacing: 12, jitter: 0, scatter: 0 },
+  eraser: { size: 40, hardness: 0.8, opacity: 1, flow: 1, pressure: false, antiAlias: true, tip: 'round', spacing: 12, jitter: 0, scatter: 0 },
   select: { antiAlias: true },
+  dodge: { size: 60, hardness: 0.3, strength: 0.35, range: 1, pressure: false },
+  burn: { size: 60, hardness: 0.3, strength: 0.35, range: 1, pressure: false },
+  blur: { size: 40, hardness: 0.5, strength: 0.7, range: 1, pressure: false },
+  sharpen: { size: 40, hardness: 0.5, strength: 0.4, range: 1, pressure: false },
+  smudge: { size: 30, hardness: 0.5, strength: 0.6, range: 1, pressure: false },
   clone: { size: 40, hardness: 0.6, opacity: 1, flow: 1, pressure: false, aligned: true, sampleAll: false },
   heal: { size: 40, hardness: 0.5, opacity: 1, flow: 1, pressure: false, aligned: true, sampleAll: false },
   wand: { tolerance: 32, contiguous: true, sampleAll: true, antiAlias: true },
   fill: { tolerance: 32, contiguous: true, opacity: 1 },
   gradient: { kind: 'linear' as 'linear' | 'radial', toTransparent: false, opacity: 1 },
   text: { font: 'Segoe UI', size: 64, weight: 400, italic: false, align: 'left' as 'left' | 'center' | 'right', antiAlias: true },
-  shape: { kind: 'rect' as 'rect' | 'ellipse' | 'line', fill: true, stroke: false, strokeWidth: 4, radius: 0, antiAlias: true },
+  shape: { kind: 'rect' as 'rect' | 'ellipse' | 'line' | 'polygon' | 'star', fill: true, stroke: false, strokeWidth: 4, radius: 0, antiAlias: true, sides: 6, inner: 0.45 },
   move: { autoSelect: false, mode: 'transform' as 'transform' | 'perspective' | 'warp' },
   picker: { sample: 1 },
 };
