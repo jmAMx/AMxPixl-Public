@@ -2,6 +2,14 @@
 
 Each version's section becomes its release notes (`scripts/release.ps1` copies it to the download page).
 
+## 0.6.3
+
+- **Tool groups**: right-click a tool to start a group or add it to one. A group takes one slot in the toolbox and shows the tool you used last; right-click or press and hold it to pick another. "Group Tools by Shortcut Key" sets up the usual groups in one go.
+- **Tool options in the sidebar**: the ⋯ button at the right of the options bar moves them under the tools (and back). The toolbox widens to fit them and spreads the tools into a grid.
+- New Dodge (sun) and Burn (flame) icons, so they no longer look like Zoom and Hand.
+- The "Pixl" name is laid out like the logo, with a small IXL under the P.
+- The title bar shows the version, e.g. "AMxPixl 0.6.3".
+
 ## 0.6.2
 
 - **Toolbox**: drag its right edge wider to lay the tools out in a grid (double-click the edge for one column). Turn on tool names under the icons with View › Tool Names or by right-clicking the toolbox.

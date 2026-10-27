@@ -20,6 +20,8 @@ export interface Prefs {
   theme: 'dark' | 'light'; glow: boolean; dock: Record<string, boolean>; rulers: boolean; guides: boolean; snap: boolean; pixelGrid: boolean; onion: boolean;
   /** Toolbox columns (drag its edge wider for a grid) and whether each tool shows its name. */
   toolCols: number; toolLabels: boolean;
+  /** Tools that share one toolbox slot (tool ids), and where the tool options are shown. */
+  toolGroups: string[][]; optionsDock: 'top' | 'side';
 }
 
 const load = <T>(k: string, d: T): T => {
@@ -58,7 +60,7 @@ class App {
   tool!: Tool;
   tools: Tool[] = [];
   opts: ToolOpts = structuredClone(DEFAULT_OPTS);
-  prefs: Prefs = load<Prefs>('amxpixl.prefs', { theme: 'dark', glow: false, dock: { color: true, properties: true, layers: true, history: false }, rulers: false, guides: true, snap: true, pixelGrid: true, onion: false, toolCols: 1, toolLabels: false });
+  prefs: Prefs = load<Prefs>('amxpixl.prefs', { theme: 'dark', glow: false, dock: { color: true, properties: true, layers: true, history: false }, rulers: false, guides: true, snap: true, pixelGrid: true, onion: false, toolCols: 1, toolLabels: false, toolGroups: [], optionsDock: 'top' });
   /** Set while a modal filter preview or text edit owns the canvas. */
   busy = false;
   /** An animation is playing in the Timeline. */

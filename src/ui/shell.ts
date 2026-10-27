@@ -12,6 +12,7 @@ import { historyPanel } from './historypanel';
 import { adjustmentMenuItems, effectMenuItems, layersPanel, looksMenuItems, maskMenuItems } from './layerspanel';
 import { propertiesPanel } from './properties';
 import { canvasScrollbars } from './scrollbars';
+import { optionsBar, toolbox, toolboxGrip } from './toolbox';
 import { timelinePanel, togglePlay } from './timeline';
 import { pathsPanel, strokePathDialog } from './pathspanel';
 import { closePopups, dialogOpen, icon, popupMenu, toast, type MenuItem } from './widgets';
@@ -320,105 +321,6 @@ function menubar() {
     h('nav', { class: 'menus' }, ...buttons),
     h('div', { class: 'grow' }),
     undoBtn, redoBtn, themeBtn);
-}
-
-function optionsBar() {
-  const el = h('div', { class: 'optionsbar' });
-  let lastActive: string | null = null;
-  const build = () => {
-    const t = app.tool;
-    el.replaceChildren(h('span', { class: 'opt-tool' }, icon(t.icon), t.name));
-    const box = h('div', { class: 'opt-controls' });
-    t.options?.(box);
-    el.append(box);
-  };
-  app.on('tool', build);
-  // Reflect option changes made elsewhere (e.g. [ ] brush size) unless the user is editing a field here.
-  app.on('options', () => { if (!el.contains(document.activeElement)) build(); });
-  app.on('colors', () => { if (app.tool.id === 'text') build(); });
-  app.on('change', ({ doc }) => {
-    if (doc !== app.doc) return;
-    if (doc.activeId !== lastActive) { lastActive = doc.activeId; if (app.tool.id === 'text') build(); }
-  });
-  build();
-  return el;
-}
-
-const TOOL_GAP = 2, TOOL_PAD = 6, MAX_TOOL_COLS = 6;
-const toolCell = () => (app.prefs.toolLabels ? 62 : 34);
-const toolboxWidth = (cols: number) => cols * toolCell() + (cols - 1) * TOOL_GAP + TOOL_PAD * 2;
-const clampCols = (n: number) => Math.max(1, Math.min(MAX_TOOL_COLS, Math.round(n) || 1));
-
-/** Lays the toolbox out in `cols` columns (it's sized to fit them exactly). */
-function layoutToolbox(el: HTMLElement, cols: number) {
-  document.documentElement.style.setProperty('--toolbox-w', `${toolboxWidth(cols)}px`);
-  el.style.setProperty('--tool-cols', String(cols));
-  el.style.setProperty('--tool-cell', `${toolCell()}px`);
-  el.classList.toggle('labels', app.prefs.toolLabels);
-}
-
-/** The strip on the toolbox's right edge: drag it wider to lay the tools out in a grid; double-click for one column. */
-function toolboxGrip(box: HTMLElement) {
-  const grip = h('div', { class: 'toolbox-grip', title: 'Drag to show the tools in more columns · double-click for one column' });
-  grip.addEventListener('pointerdown', (e) => {
-    if (e.button !== 0) return;
-    e.preventDefault();
-    try { grip.setPointerCapture(e.pointerId); } catch { /* pointer already gone */ }
-    grip.classList.add('drag');
-    const left = box.getBoundingClientRect().left;
-    let cols = app.prefs.toolCols;
-    const move = (ev: PointerEvent) => {
-      const n = clampCols((ev.clientX - left - TOOL_PAD * 2 + TOOL_GAP) / (toolCell() + TOOL_GAP));
-      if (n !== cols) { cols = n; layoutToolbox(box, cols); }
-    };
-    const up = () => {
-      grip.classList.remove('drag');
-      grip.removeEventListener('pointermove', move);
-      grip.removeEventListener('pointerup', up);
-      grip.removeEventListener('pointercancel', up);
-      if (cols !== app.prefs.toolCols) app.setPrefs({ toolCols: cols });
-    };
-    grip.addEventListener('pointermove', move);
-    grip.addEventListener('pointerup', up);
-    grip.addEventListener('pointercancel', up);
-  });
-  grip.addEventListener('dblclick', () => app.setPrefs({ toolCols: 1 }));
-  return grip;
-}
-
-function toolbox() {
-  const el = h('nav', { class: 'toolbox', 'aria-label': 'Tools' });
-  const btns = app.tools.map((t) => {
-    const b = h('button', { class: 'tool', type: 'button', title: `${t.name} (${t.key})`, 'aria-label': t.name, onclick: () => app.setTool(t.id) },
-      icon(t.icon), h('span', { class: 'tool-name' }, t.name));
-    b.dataset.tool = t.id;
-    return b;
-  });
-  el.addEventListener('contextmenu', (e) => {
-    e.preventDefault();
-    popupMenu([
-      { label: 'Show Tool Names', checked: app.prefs.toolLabels, onClick: () => app.setPrefs({ toolLabels: !app.prefs.toolLabels }) },
-      { label: 'One Column', disabled: app.prefs.toolCols === 1, onClick: () => app.setPrefs({ toolCols: 1 }) },
-    ], e.clientX, e.clientY);
-  });
-  const relayout = () => layoutToolbox(el, clampCols(app.prefs.toolCols));
-  app.on('prefs', relayout);
-  relayout();
-  const sync = () => btns.forEach((b) => b.classList.toggle('on', b.dataset.tool === app.tool.id));
-  const fg = h('button', { class: 'sw fg', type: 'button', title: 'Foreground colour' });
-  const bg = h('button', { class: 'sw bg', type: 'button', title: 'Background colour' });
-  const syncColors = () => { fg.style.background = app.fg; bg.style.background = app.bg; };
-  const showColor = () => { if (!app.prefs.dock.color) { app.prefs.dock.color = true; app.setPrefs({}); } };
-  fg.addEventListener('click', showColor);
-  bg.addEventListener('click', showColor);
-  app.on('tool', sync); app.on('colors', syncColors);
-  sync(); syncColors();
-  el.append(h('div', { class: 'tool-grid' }, ...btns), h('div', { class: 'grow' }),
-    h('div', { class: 'swatch-stack' }, bg, fg),
-    h('div', { class: 'swatch-btns' },
-      h('button', { class: 'mini', type: 'button', title: 'Default colours (D)', onclick: () => { app.setColor('fg', '#000000'); app.setColor('bg', '#ffffff'); } }, icon('resetColors')),
-      h('button', { class: 'mini', type: 'button', title: 'Swap colours (X)', onclick: () => { const f = app.fg; app.setColor('fg', app.bg); app.setColor('bg', f); } }, icon('swap'))));
-  return el;
 }
 
 function tabs() {

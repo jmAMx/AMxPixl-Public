@@ -89,6 +89,13 @@ pub fn run() {
     }))
     .plugin(tauri_plugin_dialog::init())
     .manage(OpenFiles(Mutex::new(file_args(&args))))
+    // The title bar shows the version ("AMxPixl 0.6.3"), taken from package.json at build time.
+    .setup(|app| {
+      if let Some(w) = app.get_webview_window("main") {
+        let _ = w.set_title(&format!("AMxPixl {}", app.package_info().version));
+      }
+      Ok(())
+    })
     .invoke_handler(tauri::generate_handler![take_open_files, read_file, write_file, open_release_page])
     .run(tauri::generate_context!())
     .expect("error while running AMxPixl");

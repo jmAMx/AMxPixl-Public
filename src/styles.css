@@ -80,11 +80,13 @@ button, select, input, textarea { font: inherit; color: inherit; }
 .welcome-card .logo { width: 104px; height: 104px; margin-bottom: 4px; }
 html[data-theme="dark"] .mono.for-dark, html[data-theme="light"] .mono.for-light { display: block; }
 .wordmark { font: 700 19px/1 'Rajdhani', sans-serif; letter-spacing: .4px; filter: var(--engrave); white-space: nowrap; }
-/* "Pixl" in the logo's typeface (Spotnik), drawn from outlines so it takes the theme's text colour. */
+/* "Pixl" laid out like the logo (Spotnik: a tall P with a small IXL under its bowl), drawn from outlines so it takes
+   the theme's text colour. */
 .px-name {
-  display: inline-block; vertical-align: baseline; height: .72em; aspect-ratio: 231.22 / 78.8; background: var(--text);
+  display: inline-block; vertical-align: baseline; height: 1.15em; aspect-ratio: 67.86 / 78.4; background: var(--text);
   -webkit-mask: url('/brand/pixl-wordmark.svg') center / contain no-repeat; mask: url('/brand/pixl-wordmark.svg') center / contain no-repeat;
 }
+.brand .px-name { height: 25px; vertical-align: middle; }
 .amx-credit { position: absolute; left: 0; right: 0; bottom: 14px; display: flex; justify-content: center; align-items: center; gap: 6px; font: 600 12px/1 'Rajdhani', sans-serif; letter-spacing: .08em; color: var(--text-dim); opacity: .7; }
 .amx-credit .mono { height: 14px; }
 .app-version {
@@ -137,6 +139,8 @@ html[data-theme="dark"] .mono.for-dark, html[data-theme="light"] .mono.for-light
   display: flex; align-items: center; gap: 12px; height: 38px; padding: 0 10px;
   background: var(--panel); border-bottom: 1px solid var(--border); overflow: hidden;
 }
+.opt-body { display: flex; align-items: center; gap: 12px; min-width: 0; flex: 1; }
+.optionsbar .opt-more { margin-left: auto; }
 .opt-tool { display: flex; align-items: center; gap: 6px; padding-right: 12px; border-right: 1px solid var(--border); font: 600 14px/1 'Rajdhani', sans-serif; white-space: nowrap; color: var(--accent); }
 .opt-controls { display: flex; align-items: center; gap: 14px; min-width: 0; overflow: hidden; }
 .opt-controls > * { flex: none; }
@@ -226,6 +230,27 @@ input[type="range"]:focus-visible::-webkit-slider-thumb { background: var(--acce
   font-size: 10.5px; line-height: 1.15; text-align: center; color: var(--text-dim);
 }
 .toolbox.labels .tool.on .tool-name { color: var(--accent); }
+/* A slot holding a group of tools: a small corner mark, like Photoshop's flyouts. */
+.tool { position: relative; }
+.tool.grouped::after {
+  content: ''; position: absolute; right: 3px; bottom: 3px; width: 0; height: 0;
+  border-left: 4px solid transparent; border-bottom: 4px solid currentColor; opacity: .55;
+}
+
+/* Tool options shown in the sidebar under the tools. */
+.side-options { align-self: stretch; margin: 10px 0 0; padding: 8px 8px 4px; border-top: 1px solid var(--border); flex: none; }
+.opt-body.side { flex-direction: column; align-items: stretch; gap: 8px; }
+.opt-head { display: flex; align-items: center; gap: 6px; }
+.opt-head .opt-tool { border-right: none; padding-right: 0; }
+.opt-head .icon-btn { width: 24px; height: 24px; }
+.opt-body.side .opt-controls { flex-direction: column; align-items: stretch; gap: 9px; overflow: visible; }
+.opt-body.side .opt-controls > * { flex: none; max-width: 100%; }
+.opt-body.side .opt-sep { width: auto; height: 1px; }
+.opt-body.side .slider.compact { display: grid; grid-template-columns: 62px minmax(0, 1fr) auto; }
+.opt-body.side .field, .opt-body.side .opt { display: flex; justify-content: space-between; }
+.opt-body.side .opt-note { white-space: normal; }
+.opt-body.side .seg { align-self: flex-start; flex-wrap: wrap; }
+.opt-body.side .font-select, .opt-body.side select { max-width: 100%; }
 .tool:hover { background: var(--raised); }
 .tool.on { background: var(--accent-soft); color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent-line), var(--glow); }
 .swatch-stack { position: relative; width: 36px; height: 36px; flex: none; margin-top: 8px; }

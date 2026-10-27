@@ -22,6 +22,7 @@ import { ask, toast } from './ui/widgets';
 app.tools = [moveTool, rectSelectTool, ellipseSelectTool, lassoTool, wandTool, cropTool, pickerTool, brushTool, eraserTool, cloneTool, healTool, dodgeTool, burnTool, blurTool, sharpenTool, smudgeTool, gradientTool, fillTool, penTool, textTool, shapeTool, handTool, zoomTool];
 app.tool = brushTool;
 app.applyPrefs();
+document.title = `AMxPixl ${__APP_VERSION__}`;
 mountShell(document.getElementById('app')!);
 
 // Drop images anywhere: onto an open image they become layers, otherwise each opens as a new image.
