@@ -2,6 +2,18 @@
 
 A lightweight, non-destructive image editor. It aims to beat GIMP for everyday design and photo work and to run well on older hardware, including integrated graphics.
 
+## System requirements
+
+| | Minimum | Recommended |
+| --- | --- | --- |
+| OS | Windows 10 or 11, 64-bit | |
+| Processor | 2 cores | 4 cores |
+| Memory | 4 GB | 8 GB or more for large images |
+| Graphics | WebGL2 support (most integrated and dedicated GPUs from about 2013 on) | |
+| Disk | About 5 MB | |
+
+Pixl uses Microsoft Edge WebView2, which comes with Windows 11 and recent Windows 10 updates; if it's missing, the installer downloads it. Without WebGL2 everything works except adjustment and effect layers.
+
 ## Run it
 
 ```bash
@@ -25,7 +37,7 @@ This runs the desktop app with live reload. `npm run package` builds `src-tauri/
 
 1. Bump `version` in `package.json` and add a `## <version>` section to `CHANGELOG.md`.
 2. `npm run package`
-3. Commit, then `npm run release`: it tags the version and publishes the installer on this repository's [Releases](https://github.com/jmAMx/AMxPixl/releases) page. Add `-- -Draft` to review it on GitHub before it goes live. The app's Help › Check for Updates reads that page.
+3. Commit, then `npm run release`: it tags the version and publishes the installer on this repository's [Releases](https://github.com/jmAMx/AMxPixl-public/releases) page. Add `-- -Draft` to review it on GitHub before it goes live. The app's Help › Check for Updates reads that page.
 
 One-time setup: `winget install GitHub.cli`, then `gh auth login`.
 
@@ -57,7 +69,7 @@ One-time setup: `winget install GitHub.cli`, then `gh auth login`.
 | `src/core/import/` | `.xcf` and `.psd` readers, plus GIMP filter equivalents |
 | `src/tools/` | Canvas tools (move/transform, selections and magic wand, crop, brush, eraser, clone/heal, gradient, bucket, text, shapes, hand, zoom) |
 | `src/ui/` | Menus, panels, dialogs, canvas view, timeline |
-| `branding/` | The Pixl logo (`pixl-logo.png`, large sizes) and icon (`pixl-icon.png`, 16–32 px), plus the rendered `.pixl` file icon |
+| `branding/` | The Pixl logo (`pixl-logo.png`, large sizes) and icon (`pixl-icon.png`, 16–32 px), plus the rendered `.pixl` file icon. The "Pixl" wordmark in the app is outlines of the Spotnik typeface (`public/brand/pixl-wordmark.svg`); the font itself isn't included |
 | `src/actions.ts` | Commands behind the menus and shortcuts |
 
 ## File format

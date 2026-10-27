@@ -80,6 +80,11 @@ button, select, input, textarea { font: inherit; color: inherit; }
 .welcome-card .logo { width: 104px; height: 104px; margin-bottom: 4px; }
 html[data-theme="dark"] .mono.for-dark, html[data-theme="light"] .mono.for-light { display: block; }
 .wordmark { font: 700 19px/1 'Rajdhani', sans-serif; letter-spacing: .4px; filter: var(--engrave); white-space: nowrap; }
+/* "Pixl" in the logo's typeface (Spotnik), drawn from outlines so it takes the theme's text colour. */
+.px-name {
+  display: inline-block; vertical-align: baseline; height: .72em; aspect-ratio: 231.22 / 78.8; background: var(--text);
+  -webkit-mask: url('/brand/pixl-wordmark.svg') center / contain no-repeat; mask: url('/brand/pixl-wordmark.svg') center / contain no-repeat;
+}
 .amx-credit { position: absolute; left: 0; right: 0; bottom: 14px; display: flex; justify-content: center; align-items: center; gap: 6px; font: 600 12px/1 'Rajdhani', sans-serif; letter-spacing: .08em; color: var(--text-dim); opacity: .7; }
 .amx-credit .mono { height: 14px; }
 .app-version {
@@ -111,6 +116,7 @@ html[data-theme="dark"] .mono.for-dark, html[data-theme="light"] .mono.for-light
 .menu {
   position: fixed; z-index: 50; min-width: 230px; width: max-content; padding: 4px;
   background: var(--panel); border: 1px solid var(--border-strong); border-radius: 6px; box-shadow: var(--shadow);
+  max-height: calc(100vh - 8px); overflow-y: auto;
 }
 .menu-item {
   position: relative; display: grid; grid-template-columns: 18px 1fr auto; align-items: center; gap: 6px; width: 100%;
@@ -123,7 +129,7 @@ html[data-theme="dark"] .mono.for-dark, html[data-theme="light"] .mono.for-light
 .menu-label { white-space: nowrap; }
 .menu-accel { color: var(--text-dim); font-size: 11.5px; padding-left: 20px; white-space: nowrap; }
 .menu-sep { height: 1px; margin: 4px 6px; background: var(--border); }
-.submenu { display: none; position: absolute; left: calc(100% - 2px); top: -5px; }
+.submenu { display: none; }
 .menu-item.has-sub:hover > .submenu { display: block; }
 
 /* ---------- options bar ---------- */
@@ -203,13 +209,23 @@ input[type="range"]:focus-visible::-webkit-slider-thumb { background: var(--acce
 .color-input::-webkit-color-swatch { border: none; border-radius: 2px; }
 
 /* ---------- main area ---------- */
-.main { display: grid; grid-template-columns: 46px minmax(0, 1fr) 296px; min-height: 0; }
+.main { position: relative; display: grid; grid-template-columns: var(--toolbox-w, 46px) minmax(0, 1fr) 296px; min-height: 0; }
 
 .toolbox {
   display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 6px 0;
   background: var(--panel); border-right: 1px solid var(--border); overflow-y: auto; overflow-x: hidden;
 }
-.tool { width: 34px; height: 32px; border: none; background: none; border-radius: 5px; display: grid; place-items: center; cursor: pointer; color: var(--text); flex: none; }
+.toolbox-grip { position: absolute; top: 0; bottom: 0; left: calc(var(--toolbox-w, 46px) - 3px); width: 6px; z-index: 5; cursor: ew-resize; }
+.toolbox-grip:hover, .toolbox-grip.drag { background: linear-gradient(to right, transparent 2px, var(--accent-line) 2px 4px, transparent 4px); }
+.tool-grid { display: grid; grid-template-columns: repeat(var(--tool-cols, 1), var(--tool-cell, 34px)); gap: 2px; justify-content: center; flex: none; }
+.tool { width: 100%; height: 32px; border: none; background: none; border-radius: 5px; display: grid; place-items: center; cursor: pointer; color: var(--text); flex: none; }
+.tool-name { display: none; }
+.toolbox.labels .tool { height: auto; min-height: 50px; padding: 6px 2px 5px; display: flex; flex-direction: column; justify-content: flex-start; gap: 4px; }
+.toolbox.labels .tool-name {
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+  font-size: 10.5px; line-height: 1.15; text-align: center; color: var(--text-dim);
+}
+.toolbox.labels .tool.on .tool-name { color: var(--accent); }
 .tool:hover { background: var(--raised); }
 .tool.on { background: var(--accent-soft); color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent-line), var(--glow); }
 .swatch-stack { position: relative; width: 36px; height: 36px; flex: none; margin-top: 8px; }
@@ -260,6 +276,13 @@ input[type="range"]:focus-visible::-webkit-slider-thumb { background: var(--acce
 
 .workspace { position: relative; overflow: hidden; background: var(--canvas-area); }
 .workspace canvas.view { position: absolute; left: 0; top: 0; touch-action: none; }
+.cv-scroll { position: absolute; z-index: 2; touch-action: none; }
+.cv-scroll.h { left: 0; right: 11px; bottom: 0; height: 11px; }
+.cv-scroll.v { top: 0; bottom: 11px; right: 0; width: 11px; }
+.cv-thumb { position: absolute; border-radius: 6px; background: var(--border-strong); opacity: .8; }
+.cv-scroll.h .cv-thumb { top: 3px; bottom: 2px; min-width: 24px; }
+.cv-scroll.v .cv-thumb { left: 3px; right: 2px; min-height: 24px; }
+.cv-scroll:hover .cv-thumb, .cv-thumb.drag { background: var(--accent); opacity: .9; }
 
 .welcome { position: absolute; inset: 0; display: grid; place-items: center; background: var(--canvas-area); }
 .welcome-card { display: flex; flex-direction: column; align-items: center; gap: 10px; text-align: center; padding: 24px; }

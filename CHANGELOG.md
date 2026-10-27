@@ -2,6 +2,14 @@
 
 Each version's section becomes its release notes (`scripts/release.ps1` copies it to the download page).
 
+## 0.6.2
+
+- **Toolbox**: drag its right edge wider to lay the tools out in a grid (double-click the edge for one column). Turn on tool names under the icons with View › Tool Names or by right-clicking the toolbox.
+- **Canvas scrollbars** along the bottom and right when the image runs past the window.
+- **Menus stay on screen**: right-click menus and submenus open to the left or upwards when there's no room, and very long menus scroll.
+- The "Pixl" name at the top is set in the logo's typeface.
+- Ready for the public repository: updates are checked against its Releases page, the README lists system requirements, and the notes describe hardware generally rather than naming particular parts.
+
 ## 0.6.1
 
 Faster and smoother, measured on older hardware (a 4-core desktop processor with integrated graphics):
@@ -44,9 +52,46 @@ Faster and smoother, measured on older hardware (a 4-core desktop processor with
 
 - New app icon, embedded correctly in the program.
 
+## 0.4.5
+
+- Pixl's own logo, in light and dark versions with hand-drawn 16 and 32 px sizes. The in-app logo follows the light/dark theme, and the AMx tie is a small "An AMx app" credit on the welcome screen and in About.
+- .pixl files get their own document icon in Explorer.
+- 0.4.5.1: the logo stands on its own without a background tile, with a thin outline so it stays visible on dark taskbars.
+
 ## 0.4.0
 
 - Magic Wand, Colour Range, Select › Modify, Quick Mask, select layer shape.
 - Opens GIMP (.xcf) and Photoshop (.psd) files.
 - Autosave with crash recovery, recent files, .pixl file association, update check.
 - Pixel-art options: anti-alias toggles, nearest-neighbour resampling, pixel grid.
+
+## 0.3.0
+
+- Layer styles: drop shadow, outer and inner glow, stroke (outside, centre or inside) and colour overlay, editable and drawn on the GPU.
+- Blend If: fade a layer by its own brightness or the brightness underneath.
+- Colour Lookup adjustment loads .cube LUT files (3D and 1D).
+- Clone Stamp (S) and Healing Brush (J) with aligned sampling.
+- Lossless perspective and mesh warp for image layers.
+- Rulers, guides (drag them from the rulers) and snapping to guides, the canvas and layers.
+- Looks: seven built-in effect stacks, plus saving your own.
+- A half-resolution preview while dragging when full quality is too slow for the computer.
+- Fixes: Ctrl+G and other shortcuts were swallowed in the desktop app; the first frame after adding a LUT could look wrong.
+
+## 0.2.0
+
+- Layer masks with live density and feather. Brushes, gradients, fill and filters paint on the mask when it's selected.
+- Clipping masks and layer groups (Pass Through or isolated).
+- GPU effect layers: film grain, halation, bloom, diffusion, light leak, fade & split tone, dust & scratches, lens distortion, chromatic aberration, vignette, CRT screen, VHS tape, compression artifacts, bit crush & dither, glitch and halftone.
+- New adjustments: HSL / Colour Mixer, Colour Grading, Gradient Map, Channel Mixer and Photo Filter.
+- The Layers panel shows the group tree and mask thumbnails, and has a right-click menu.
+
+## 0.1.0
+
+The first version: a lightweight, non-destructive image editor meant to replace GIMP and run well on older hardware.
+
+- Lossless layer transforms, image size, crop, rotate and flip.
+- GPU adjustment layers (levels, curves, hue/saturation, exposure and more).
+- Brush, eraser, gradient, paint bucket, selections, text and vector shapes.
+- Filters with live preview, the .pixl project format, and PNG, JPEG and WebP export.
+- A cached preview pyramid and GPU-side undo keep large images quick.
+- Windows desktop app with an installer.

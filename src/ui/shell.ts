@@ -11,6 +11,7 @@ import { h, isTyping } from './dom';
 import { historyPanel } from './historypanel';
 import { adjustmentMenuItems, effectMenuItems, layersPanel, looksMenuItems, maskMenuItems } from './layerspanel';
 import { propertiesPanel } from './properties';
+import { canvasScrollbars } from './scrollbars';
 import { timelinePanel, togglePlay } from './timeline';
 import { pathsPanel, strokePathDialog } from './pathspanel';
 import { closePopups, dialogOpen, icon, popupMenu, toast, type MenuItem } from './widgets';
@@ -174,6 +175,7 @@ const MENUS: MenuDef[] = [
       { label: 'Play / Pause Animation', run: togglePlay, enabled: () => !!app.doc?.anim },
       { label: 'Onion Skin', run: () => app.setPrefs({ onion: !app.prefs.onion }), checked: () => app.prefs.onion },
       'sep',
+      { label: 'Tool Names', run: () => app.setPrefs({ toolLabels: !app.prefs.toolLabels }), checked: () => app.prefs.toolLabels },
       { label: 'Pixel Grid (600% and up)', accel: "Ctrl+'", run: () => app.setPrefs({ pixelGrid: !app.prefs.pixelGrid }), checked: () => app.prefs.pixelGrid },
       { label: 'New Guide…', run: newGuideDialog, enabled: hasDoc },
       { label: 'Clear Guides', run: A.clearGuides, enabled: () => !!app.doc?.guides.length },
@@ -313,7 +315,7 @@ function menubar() {
   return h('header', { class: 'menubar' },
     h('div', { class: 'brand', title: 'AMxPixl' },
       h('img', { class: 'logo', src: 'brand/pixl-icon-64.png', alt: '' }),
-      h('span', { class: 'wordmark' }, h('span', { class: 'px-name' }, 'Pixl')),
+      h('span', { class: 'wordmark' }, h('span', { class: 'px-name', role: 'img', 'aria-label': 'Pixl' })),
       h('span', { class: 'app-version', title: `AMxPixl version ${__APP_VERSION__}` }, `v${__APP_VERSION__}`)),
     h('nav', { class: 'menus' }, ...buttons),
     h('div', { class: 'grow' }),
@@ -342,13 +344,66 @@ function optionsBar() {
   return el;
 }
 
+const TOOL_GAP = 2, TOOL_PAD = 6, MAX_TOOL_COLS = 6;
+const toolCell = () => (app.prefs.toolLabels ? 62 : 34);
+const toolboxWidth = (cols: number) => cols * toolCell() + (cols - 1) * TOOL_GAP + TOOL_PAD * 2;
+const clampCols = (n: number) => Math.max(1, Math.min(MAX_TOOL_COLS, Math.round(n) || 1));
+
+/** Lays the toolbox out in `cols` columns (it's sized to fit them exactly). */
+function layoutToolbox(el: HTMLElement, cols: number) {
+  document.documentElement.style.setProperty('--toolbox-w', `${toolboxWidth(cols)}px`);
+  el.style.setProperty('--tool-cols', String(cols));
+  el.style.setProperty('--tool-cell', `${toolCell()}px`);
+  el.classList.toggle('labels', app.prefs.toolLabels);
+}
+
+/** The strip on the toolbox's right edge: drag it wider to lay the tools out in a grid; double-click for one column. */
+function toolboxGrip(box: HTMLElement) {
+  const grip = h('div', { class: 'toolbox-grip', title: 'Drag to show the tools in more columns · double-click for one column' });
+  grip.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    try { grip.setPointerCapture(e.pointerId); } catch { /* pointer already gone */ }
+    grip.classList.add('drag');
+    const left = box.getBoundingClientRect().left;
+    let cols = app.prefs.toolCols;
+    const move = (ev: PointerEvent) => {
+      const n = clampCols((ev.clientX - left - TOOL_PAD * 2 + TOOL_GAP) / (toolCell() + TOOL_GAP));
+      if (n !== cols) { cols = n; layoutToolbox(box, cols); }
+    };
+    const up = () => {
+      grip.classList.remove('drag');
+      grip.removeEventListener('pointermove', move);
+      grip.removeEventListener('pointerup', up);
+      grip.removeEventListener('pointercancel', up);
+      if (cols !== app.prefs.toolCols) app.setPrefs({ toolCols: cols });
+    };
+    grip.addEventListener('pointermove', move);
+    grip.addEventListener('pointerup', up);
+    grip.addEventListener('pointercancel', up);
+  });
+  grip.addEventListener('dblclick', () => app.setPrefs({ toolCols: 1 }));
+  return grip;
+}
+
 function toolbox() {
   const el = h('nav', { class: 'toolbox', 'aria-label': 'Tools' });
   const btns = app.tools.map((t) => {
-    const b = h('button', { class: 'tool', type: 'button', title: `${t.name} (${t.key})`, 'aria-label': t.name, onclick: () => app.setTool(t.id) }, icon(t.icon));
+    const b = h('button', { class: 'tool', type: 'button', title: `${t.name} (${t.key})`, 'aria-label': t.name, onclick: () => app.setTool(t.id) },
+      icon(t.icon), h('span', { class: 'tool-name' }, t.name));
     b.dataset.tool = t.id;
     return b;
   });
+  el.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    popupMenu([
+      { label: 'Show Tool Names', checked: app.prefs.toolLabels, onClick: () => app.setPrefs({ toolLabels: !app.prefs.toolLabels }) },
+      { label: 'One Column', disabled: app.prefs.toolCols === 1, onClick: () => app.setPrefs({ toolCols: 1 }) },
+    ], e.clientX, e.clientY);
+  });
+  const relayout = () => layoutToolbox(el, clampCols(app.prefs.toolCols));
+  app.on('prefs', relayout);
+  relayout();
   const sync = () => btns.forEach((b) => b.classList.toggle('on', b.dataset.tool === app.tool.id));
   const fg = h('button', { class: 'sw fg', type: 'button', title: 'Foreground colour' });
   const bg = h('button', { class: 'sw bg', type: 'button', title: 'Background colour' });
@@ -358,7 +413,7 @@ function toolbox() {
   bg.addEventListener('click', showColor);
   app.on('tool', sync); app.on('colors', syncColors);
   sync(); syncColors();
-  el.append(...btns, h('div', { class: 'grow' }),
+  el.append(h('div', { class: 'tool-grid' }, ...btns), h('div', { class: 'grow' }),
     h('div', { class: 'swatch-stack' }, bg, fg),
     h('div', { class: 'swatch-btns' },
       h('button', { class: 'mini', type: 'button', title: 'Default colours (D)', onclick: () => { app.setColor('fg', '#000000'); app.setColor('bg', '#ffffff'); } }, icon('resetColors')),
@@ -388,7 +443,7 @@ function welcome() {
   const el = h('div', { class: 'welcome' },
     h('div', { class: 'welcome-card' },
       h('img', { class: 'logo', src: 'brand/pixl-logo-256.png', alt: '' }),
-      h('h1', { class: 'wordmark big' }, h('span', { class: 'px-name' }, 'Pixl'), h('span', { class: 'dim' }, ' Editor')),
+      h('h1', { class: 'wordmark big' }, h('span', { class: 'px-name', role: 'img', 'aria-label': 'Pixl' }), h('span', { class: 'dim' }, ' Editor')),
       h('p', { class: 'dim' }, 'Lossless layers, GPU adjustments, everything on this PC.'),
       h('div', { class: 'welcome-actions' },
         h('button', { class: 'btn primary', type: 'button', onclick: newDocDialog }, icon('plus'), 'New image'),
@@ -490,14 +545,16 @@ function dock() {
 
 export function mountShell(root: HTMLElement) {
   const ws = view.el;
-  ws.append(welcome());
+  ws.append(canvasScrollbars(), welcome());
+  const tools = toolbox();
   root.append(
     menubar(),
     optionsBar(),
     h('div', { class: 'main' },
-      toolbox(),
+      tools,
       h('section', { class: 'center' }, tabs(), ws, timelinePanel()),
-      dock()),
+      dock(),
+      toolboxGrip(tools)),
     statusbar());
   window.addEventListener('keydown', onKey);
 }

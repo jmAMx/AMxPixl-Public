@@ -1,4 +1,4 @@
-# Publishes the installer you've already built (npm run package) as a GitHub release of jmAMx/AMxPixl, tagged with
+# Publishes the installer you've already built (npm run package) as a GitHub release of jmAMx/AMxPixl-public, tagged with
 # the version in package.json and with that version's CHANGELOG section as the notes. Pixl's Check for Updates reads
 # these releases (the repository has to be public for that).
 #
@@ -11,7 +11,7 @@ param([switch]$Draft)
 $ErrorActionPreference = 'Continue'
 $root = Split-Path $PSScriptRoot -Parent
 Set-Location $root
-$repo = 'jmAMx/AMxPixl'
+$repo = 'jmAMx/AMxPixl-public'
 
 $gh = Get-Command gh -ErrorAction SilentlyContinue
 if (-not $gh) { $gh = Get-Command 'C:\Program Files\GitHub CLI\gh.exe' -ErrorAction SilentlyContinue }

@@ -16,7 +16,11 @@ type Events = {
 
 type Handler<T> = (v: T) => void;
 
-export interface Prefs { theme: 'dark' | 'light'; glow: boolean; dock: Record<string, boolean>; rulers: boolean; guides: boolean; snap: boolean; pixelGrid: boolean; onion: boolean }
+export interface Prefs {
+  theme: 'dark' | 'light'; glow: boolean; dock: Record<string, boolean>; rulers: boolean; guides: boolean; snap: boolean; pixelGrid: boolean; onion: boolean;
+  /** Toolbox columns (drag its edge wider for a grid) and whether each tool shows its name. */
+  toolCols: number; toolLabels: boolean;
+}
 
 const load = <T>(k: string, d: T): T => {
   try { const v = localStorage.getItem(k); return v ? { ...d, ...JSON.parse(v) } : d; } catch { return d; }
@@ -54,7 +58,7 @@ class App {
   tool!: Tool;
   tools: Tool[] = [];
   opts: ToolOpts = structuredClone(DEFAULT_OPTS);
-  prefs: Prefs = load<Prefs>('amxpixl.prefs', { theme: 'dark', glow: false, dock: { color: true, properties: true, layers: true, history: false }, rulers: false, guides: true, snap: true, pixelGrid: true, onion: false });
+  prefs: Prefs = load<Prefs>('amxpixl.prefs', { theme: 'dark', glow: false, dock: { color: true, properties: true, layers: true, history: false }, rulers: false, guides: true, snap: true, pixelGrid: true, onion: false, toolCols: 1, toolLabels: false });
   /** Set while a modal filter preview or text edit owns the canvas. */
   busy = false;
   /** An animation is playing in the Timeline. */

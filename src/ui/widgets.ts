@@ -184,12 +184,16 @@ let closeActivePopup: (() => void) | null = null;
 export function popupMenu(items: MenuItem[], x: number, y: number, onClose?: () => void) {
   closeActivePopup?.();
   const el = buildMenu(items, () => close());
-  el.style.left = `${x}px`;
-  el.style.top = `${y}px`;
   document.body.append(el);
+  // Opens down and to the right of the point; flips to the other side where it would run off screen.
   const r = el.getBoundingClientRect();
-  if (r.right > innerWidth - 4) el.style.left = `${Math.max(4, innerWidth - r.width - 4)}px`;
-  if (r.bottom > innerHeight - 4) el.style.top = `${Math.max(4, innerHeight - r.height - 4)}px`;
+  el.style.left = `${placeAlong(x, x, r.width, innerWidth)}px`;
+  // Too tall for either side: use the roomier one and scroll.
+  const below = innerHeight - 4 - y, above = y - 4;
+  if (r.height > below && r.height > above) {
+    el.style.maxHeight = `${Math.max(below, above)}px`;
+    el.style.top = `${below >= above ? y : 4}px`;
+  } else el.style.top = `${placeAlong(y, y, r.height, innerHeight)}px`;
   const outside = (e: PointerEvent) => { if (!el.contains(e.target as Node)) close(); };
   const key = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.stopPropagation(); close(); } };
   const close = () => {
@@ -224,8 +228,28 @@ function buildMenu(items: MenuItem[], done: () => void): HTMLElement {
       const sub = buildMenu(it.sub, done);
       sub.classList.add('submenu');
       row.append(sub);
+      // Submenus open beside their row, flipping left or shifting up to stay on screen.
+      row.addEventListener('pointerenter', () => {
+        sub.style.display = 'block';
+        const rr = row.getBoundingClientRect(), s = sub.getBoundingClientRect();
+        sub.style.left = `${placeAlong(rr.right - 2, rr.left + 2, s.width, innerWidth)}px`;
+        sub.style.top = `${placeAlong(rr.top - 5, rr.bottom + 5, s.height, innerHeight, true)}px`;
+        sub.style.display = '';
+      });
     }
     el.append(row);
   }
   return el;
+}
+
+/**
+ * Where a popup of `size` starts along one axis: after `start` if it fits, else ending at `end` (the other side),
+ * else pinned to the screen edge. `shift` slides it back on screen instead of flipping (submenus going up).
+ */
+function placeAlong(start: number, end: number, size: number, limit: number, shift = false) {
+  const m = 4;
+  if (start + size <= limit - m) return start;
+  if (shift) return Math.max(m, limit - m - size);
+  if (end - size >= m) return end - size;
+  return Math.max(m, limit - m - size);
 }
