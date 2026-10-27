@@ -1,5 +1,6 @@
 import type { FxValue } from './effects';
 import type { AdjParams, BlendMode } from './types';
+import { setSetting } from './settings';
 
 /** One layer of a look: an effect (by kind + settings) or an adjustment (full settings). */
 export interface LookItem {
@@ -78,5 +79,5 @@ export function savedLooks(): Look[] {
 }
 
 export function storeLooks(list: Look[]) {
-  try { localStorage.setItem(KEY, JSON.stringify(list)); return true; } catch { return false; }
+  try { setSetting(KEY, JSON.stringify(list)); return true; } catch { return false; }
 }

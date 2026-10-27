@@ -12,6 +12,7 @@ import { savedLooks, storeLooks, type Look, type LookItem } from './core/looks';
 import { parseCube } from './core/lut';
 import { apply, decompose, invert, matScale, mul, roundOut, setT, tidy, union, xformMatrix, type Mat, type Pt, type Rect, type Xform } from './core/math';
 import { flatten, renderDoc } from './core/render';
+import { trimRect } from './core/bounds';
 import { Stroke } from './core/brush';
 import { glops } from './core/glops';
 import { ellipseSub, flattenSub, mapSubs, maskToSubs, polySub, rectSub, toPath2D } from './core/paths';
@@ -642,6 +643,20 @@ export function cropToSelection() {
   if (!b) { toast('Make a selection first.'); return; }
   doc.setSelection(null);
   cropTo(b);
+}
+
+/**
+ * Image › Crop to Content: trims the empty space around the image. Empty means transparent, or, when the image is
+ * opaque, the colour of its top-left corner (a plain background). Uses what's visible, all layers together.
+ */
+export async function cropToContent() {
+  const doc = need(); if (!doc) return;
+  const r = await trimRect(flatten(doc));
+  if (!app.docs.includes(doc)) return;
+  if (!r) { toast('The image is empty, so there is nothing to crop to.'); return; }
+  if (r.x === 0 && r.y === 0 && r.w === doc.width && r.h === doc.height) { toast('There is no empty space around the image.'); return; }
+  cropTo(r);
+  toast(`Cropped to ${r.w} × ${r.h} px.`);
 }
 
 export function resizeImage(w: number, h: number, resample?: Doc['resample']) {

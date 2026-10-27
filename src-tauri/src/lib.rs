@@ -63,6 +63,32 @@ fn write_file(request: tauri::ipc::Request<'_>) -> Result<(), String> {
   })
 }
 
+/// settings.json in the app's config folder: a copy of everything Pixl remembers (looks, recent files, preferences),
+/// kept outside the web view's storage so app updates can't lose it.
+fn settings_path(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
+  app.path().app_config_dir().map(|d| d.join("settings.json")).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn read_settings(app: tauri::AppHandle) -> Result<String, String> {
+  match std::fs::read_to_string(settings_path(&app)?) {
+    Ok(s) => Ok(s),
+    Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+    Err(e) => Err(e.to_string()),
+  }
+}
+
+#[tauri::command]
+fn write_settings(app: tauri::AppHandle, json: String) -> Result<(), String> {
+  let path = settings_path(&app)?;
+  if let Some(dir) = path.parent() {
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+  }
+  let tmp = path.with_extension("json.saving");
+  std::fs::write(&tmp, json).map_err(|e| e.to_string())?;
+  std::fs::rename(&tmp, &path).map_err(|e| e.to_string())
+}
+
 /// Opens the project's release page in the default browser (only that page, so this can't launch anything else).
 #[tauri::command]
 fn open_release_page(url: String) -> Result<(), String> {
@@ -96,7 +122,7 @@ pub fn run() {
       }
       Ok(())
     })
-    .invoke_handler(tauri::generate_handler![take_open_files, read_file, write_file, open_release_page])
+    .invoke_handler(tauri::generate_handler![take_open_files, read_file, write_file, read_settings, write_settings, open_release_page])
     .run(tauri::generate_context!())
     .expect("error while running AMxPixl");
 }

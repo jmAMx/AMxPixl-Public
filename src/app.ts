@@ -1,5 +1,6 @@
 import type { ChangeKind, Doc } from './core/document';
 import type { Tool } from './tools/tool';
+import { setSetting } from './core/settings';
 
 type Events = {
   docs: void;
@@ -27,7 +28,7 @@ export interface Prefs {
 const load = <T>(k: string, d: T): T => {
   try { const v = localStorage.getItem(k); return v ? { ...d, ...JSON.parse(v) } : d; } catch { return d; }
 };
-const store = (k: string, v: unknown) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* storage unavailable */ } };
+const store = (k: string, v: unknown) => { try { setSetting(k, JSON.stringify(v)); } catch { /* storage unavailable */ } };
 
 export const DEFAULT_OPTS = {
   brush: { size: 24, hardness: 0.8, opacity: 1, flow: 1, pressure: true, antiAlias: true, tip: 'round', spacing: 12, jitter: 0, scatter: 0 },

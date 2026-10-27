@@ -1,4 +1,5 @@
 import { ctx2d, newCanvas } from './layers';
+import { setSetting } from './settings';
 
 /**
  * Brush tips: the shape of one dab. 'round' is the classic soft/hard round brush (drawn from hardness). The others
@@ -137,7 +138,7 @@ export async function addCustomTip(file: File): Promise<string> {
   const id = `custom-${Date.now().toString(36)}`;
   const all = customTips();
   all[id] = { label: file.name.replace(/\.[^.]+$/, '').slice(0, 24) || 'Custom', data: c.toDataURL('image/png') };
-  try { localStorage.setItem(CUSTOM_KEY, JSON.stringify(all)); } catch { throw new Error('There is no room left to store more brush tips. Remove one first.'); }
+  try { setSetting(CUSTOM_KEY, JSON.stringify(all)); } catch { throw new Error('There is no room left to store more brush tips. Remove one first.'); }
   cache.set(id, c);
   return id;
 }
@@ -145,7 +146,7 @@ export async function addCustomTip(file: File): Promise<string> {
 export function removeCustomTip(id: string) {
   const all = customTips();
   delete all[id];
-  try { localStorage.setItem(CUSTOM_KEY, JSON.stringify(all)); } catch { /* ignore */ }
+  try { setSetting(CUSTOM_KEY, JSON.stringify(all)); } catch { /* ignore */ }
   cache.delete(id);
 }
 

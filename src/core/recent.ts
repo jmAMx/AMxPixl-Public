@@ -1,6 +1,7 @@
 import type { FileRef } from './fileio';
 import { idbDel, idbGet, idbPut } from './idb';
 import { readPath } from './platform';
+import { setSetting } from './settings';
 
 export interface RecentEntry { id: string; name: string; path?: string; time: number; thumb?: string }
 
@@ -12,7 +13,7 @@ export function recentList(): RecentEntry[] {
 }
 
 function store(list: RecentEntry[]) {
-  try { localStorage.setItem(KEY, JSON.stringify(list.slice(0, MAX))); } catch { /* full or blocked: recent files are a convenience */ }
+  try { setSetting(KEY, JSON.stringify(list.slice(0, MAX))); } catch { /* full or blocked: recent files are a convenience */ }
 }
 
 /** Remembers a file that was opened or saved (moving it to the top). Browser handles go to IndexedDB. */

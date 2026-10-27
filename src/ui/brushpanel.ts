@@ -1,6 +1,7 @@
 import { app } from '../app';
 import { pickFiles } from '../core/fileio';
 import { ctx2d, newCanvas } from '../core/layers';
+import { setSetting } from '../core/settings';
 import { addCustomTip, getTip, listTips, removeCustomTip } from '../core/tips';
 import { h } from './dom';
 import { dialog, slider, toast } from './widgets';
@@ -30,7 +31,7 @@ export function savedPresets(): BrushPreset[] {
   try { return JSON.parse(localStorage.getItem(PRESETS_KEY) || '[]'); } catch { return []; }
 }
 function storePresets(list: BrushPreset[]) {
-  try { localStorage.setItem(PRESETS_KEY, JSON.stringify(list)); } catch { toast("Couldn't save brush presets (storage is full).", 'error'); }
+  try { setSetting(PRESETS_KEY, JSON.stringify(list)); } catch { toast("Couldn't save brush presets (storage is full).", 'error'); }
 }
 
 export function applyPreset(o: BrushOpts, p: BrushPreset) {

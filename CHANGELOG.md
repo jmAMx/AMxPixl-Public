@@ -2,6 +2,12 @@
 
 Each version's section becomes its release notes (`scripts/release.ps1` copies it to the download page).
 
+## 0.6.5
+
+- **Crop to Content** (Image menu, Ctrl+Alt+X, or the button in Canvas Size) trims the empty space around the image. Empty means transparent, or, on an opaque image, the plain colour of its top-left corner.
+- **Your settings survive updates**: saved looks, recent files, preferences, tool options, colours, brush presets and custom brush tips are also kept in a settings file in your app-data folder. Anything the app's web storage loses is put back from it at startup.
+- Fixed: with the tool options in the sidebar, an empty band appeared under the window.
+
 ## 0.6.4
 
 - **Bounding boxes** that fit what's on the layer. The Move tool's box hugs the visible pixels instead of the whole layer, so a small shape on a big layer gets a small box. Its handles scale it, dragging just outside a corner turns it, and X, Y, W and H in Properties give its real size and place on the canvas.

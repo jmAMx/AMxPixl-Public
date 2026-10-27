@@ -80,6 +80,7 @@ const MENUS: MenuDef[] = [
       { label: 'Image Size…', accel: 'Ctrl+Alt+I', run: imageSizeDialog, enabled: hasDoc },
       { label: 'Canvas Size…', accel: 'Ctrl+Alt+C', run: canvasSizeDialog, enabled: hasDoc },
       { label: 'Crop to Selection', run: A.cropToSelection, enabled: hasSel },
+      { label: 'Crop to Content', accel: 'Ctrl+Alt+X', run: () => { void A.cropToContent(); }, enabled: hasDoc },
       'sep',
       { label: 'Rotate 90° Clockwise', run: () => A.rotateCanvas(90), enabled: hasDoc },
       { label: 'Rotate 90° Counter-clockwise', run: () => A.rotateCanvas(-90), enabled: hasDoc },

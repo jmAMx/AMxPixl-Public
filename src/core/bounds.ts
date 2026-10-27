@@ -1,4 +1,4 @@
-import { alphaBox } from './alphabox';
+import { alphaBox, trimBox } from './alphabox';
 import { ctx2d, localBounds } from './layers';
 import type { Rect } from './math';
 import type { PlacedLayer } from './types';
@@ -20,12 +20,15 @@ let pool: WorkerPool<object, { rect: Rect | null }> | null = null;
 /** Called whenever a pixel buffer changes, so its box is worked out again. */
 export function pixelsChanged(key: string) { versions.set(key, (versions.get(key) ?? 0) + 1); }
 
-async function scan(canvas: HTMLCanvasElement): Promise<Rect | null> {
-  if (typeof Worker === 'undefined') return alphaBox(ctx2d(canvas, true).getImageData(0, 0, canvas.width, canvas.height).data, canvas.width, canvas.height);
+async function scan(canvas: HTMLCanvasElement, type: 'bounds' | 'trim' = 'bounds'): Promise<Rect | null> {
+  if (typeof Worker === 'undefined') return (type === 'trim' ? trimBox : alphaBox)(ctx2d(canvas, true).getImageData(0, 0, canvas.width, canvas.height).data, canvas.width, canvas.height);
   pool ??= new WorkerPool(() => new Worker(new URL('./workers/pixelworker.ts', import.meta.url), { type: 'module' }), 1);
   const bitmap = await createImageBitmap(canvas);
-  return (await pool.run({ type: 'bounds', bitmap }, [bitmap])).rect;
+  return (await pool.run({ type, bitmap }, [bitmap])).rect;
 }
+
+/** The part of an image left after trimming empty edges (transparent, or a flat background colour); null if empty. */
+export const trimRect = (canvas: HTMLCanvasElement) => scan(canvas, 'trim');
 
 /**
  * The box around a buffer's visible pixels: the cached one, null if it has none, or undefined while it's still being

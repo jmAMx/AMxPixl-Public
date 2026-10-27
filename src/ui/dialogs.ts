@@ -1,5 +1,5 @@
 import { app } from '../app';
-import { addGuide, colorRangeSelection, createDoc, deleteLook, exportImage, lookSourceLayers, modifySelection, nextUntitled, resizeCanvas, resizeImage, saveLook } from '../actions';
+import { addGuide, colorRangeSelection, createDoc, cropToContent, deleteLook, exportImage, lookSourceLayers, modifySelection, nextUntitled, resizeCanvas, resizeImage, saveLook } from '../actions';
 import { savedLooks } from '../core/looks';
 import { colorRangeMask, sampleSource, type Modify, type SelMode } from '../core/selops';
 import { checkForUpdate, openReleasePage, type UpdateInfo } from '../core/update';
@@ -104,7 +104,10 @@ export function canvasSizeDialog() {
       h('div', { class: 'row' }, numField('Width', w, (v) => { w = Math.round(v); }, { unit: 'px', min: 1, max: 30000 }), numField('Height', hh, (v) => { hh = Math.round(v); }, { unit: 'px', min: 1, max: 30000 })),
       h('div', { class: 'field wide' }, h('span', null, 'Anchor'), grid),
     ],
-    buttons: [{ label: 'Cancel' }, { label: 'Apply', primary: true, onClick: () => resizeCanvas(w, hh, ax, ay) }],
+    buttons: [
+      { label: 'Crop to content', onClick: () => { void cropToContent(); } },
+      { label: 'Cancel' }, { label: 'Apply', primary: true, onClick: () => resizeCanvas(w, hh, ax, ay) },
+    ],
   });
 }
 
