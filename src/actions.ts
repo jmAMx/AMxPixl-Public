@@ -4,7 +4,7 @@ import { Doc, flatLayers, newId } from './core/document';
 import { defaultFx, fxDef } from './core/effects';
 import { baseName, canvasBlob, decodeImage, decodePixl, docFromCanvas, encodePixl, extOf, PIXL_ACCEPT, saveBlob, type Picked } from './core/fileio';
 import { importPsd } from './core/import/psd';
-import { importXcf } from './core/import/xcf';
+import { importXcf } from './core/import/xcfimport';
 import { addRecent, openRecent, removeRecent, type RecentEntry } from './core/recent';
 import { clearRecovery } from './core/recovery';
 import { cloneCanvas, ctx2d, drawPlaced, follow, layerMatrix, localBounds, newCanvas } from './core/layers';
@@ -257,7 +257,7 @@ export function setLayerProp(id: string, patch: Partial<Pick<Layer, 'name' | 'vi
 
 const pathId = () => `p${Math.random().toString(36).slice(2, 9)}`;
 
-/** Starts an empty path (the Pen adds points to it) and makes it the active one. */
+/** Starts an empty path (the Paths tool adds points to it) and makes it the active one. */
 export function newPath(subs: SubPath[] = [], name?: string): VPath | null {
   const doc = need(); if (!doc) return null;
   const p: VPath = { id: pathId(), name: name ?? `Path ${doc.paths.length + 1}`, subs };
@@ -288,7 +288,7 @@ export function deletePath(id = app.doc?.activePath) {
 
 function needPath(doc: Doc): VPath | null {
   const p = doc.path;
-  if (!p || !p.subs.some((s) => s.pts.length > 1)) { toast('Draw a path with the Pen (P) first.'); return null; }
+  if (!p || !p.subs.some((s) => s.pts.length > 1)) { toast('Draw a path with the Paths tool (P) first.'); return null; }
   return p;
 }
 
@@ -773,11 +773,11 @@ export function modifySelection(kind: Modify, r: number) {
 }
 
 /** Magic wand at a document point. */
-export function selectSimilar(x: number, y: number, mode: SelMode) {
+export async function selectSimilar(x: number, y: number, mode: SelMode) {
   const doc = need(); if (!doc) return;
   const o = app.opts.wand;
-  const m = wandMask(sampleSource(doc, o.sampleAll, doc.active), x, y, o.tolerance, o.contiguous, o.antiAlias);
-  if (!m) return;
+  const m = await wandMask(sampleSource(doc, o.sampleAll, doc.active), x, y, o.tolerance, o.contiguous, o.antiAlias);
+  if (!m || !app.docs.includes(doc)) return;
   doc.setSelection(combine(doc, m, mode));
   doc.commit(mode === 'replace' ? 'Magic Wand' : mode === 'add' ? 'Add to selection' : 'Subtract from selection');
 }

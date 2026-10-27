@@ -1,4 +1,5 @@
-import type { Doc } from './document';
+import { flatLayers, type Doc } from './document';
+import { fxDef } from './effects';
 import { fxEngine } from './fx';
 import { glfx } from './glfx';
 import { glops } from './glops';
@@ -27,6 +28,42 @@ export interface RenderOpts {
   screen?: boolean;
   /** Animation frame to draw (defaults to the document's current frame). */
   frame?: number;
+}
+
+/**
+ * How far (document pixels) a change to some pixels can show up beyond them once everything is composited: blurs,
+ * glows, shadows, mask feathering, and effects that look at neighbouring pixels. Infinity when an effect can move
+ * pixels anywhere (lens distortion, CRT curvature), so the whole view has to redraw.
+ */
+export function dirtyPad(doc: Doc): number {
+  let pad = 2;
+  const n = (v: unknown) => Number(v) || 0;
+  for (const l of flatLayers(doc.layers)) {
+    if (l.mask && l.mask.feather > 0) pad = Math.max(pad, l.mask.feather * 3);
+    const st = l.styles;
+    if (st) {
+      if (st.shadow.on) pad = Math.max(pad, st.shadow.distance + st.shadow.size * 3);
+      if (st.glow.on) pad = Math.max(pad, st.glow.size * 3);
+      if (st.innerGlow.on) pad = Math.max(pad, st.innerGlow.size * 3);
+      if (st.stroke.on) pad = Math.max(pad, st.stroke.size * 2);
+    }
+    if (l.type !== 'effect') continue;
+    const v = l.fx.v, def = fxDef(l.fx.kind);
+    if (l.fx.kind === 'distortion' || l.fx.kind === 'crt') return Infinity;
+    let p = def?.aux ? def.aux.radius(v) * 3 : 0;
+    switch (l.fx.kind) {
+      case 'grain': p += n(v.size) * 2; break;
+      case 'chromatic': p += n(v.amount) * 1.5; break;
+      case 'vhs': p += n(v.shift) + 12 * 24 + 80; break;
+      case 'glitch': p += n(v.offset) * 1.5 + n(v.split) + 40; break;
+      case 'halftone': p += n(v.size) * 2.5; break;
+      case 'dither': p += n(v.pixel) * 2; break;
+      case 'compression': p += n(v.block) * 4; break;
+      case 'videodeg': p += n(v.size) * 2; break;
+    }
+    pad = Math.max(pad, p + 4);
+  }
+  return pad;
 }
 
 /** Seconds into the animation at the start of `frame` (frames can have their own length). */

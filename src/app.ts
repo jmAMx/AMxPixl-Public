@@ -27,6 +27,7 @@ export const DEFAULT_OPTS = {
   brush: { size: 24, hardness: 0.8, opacity: 1, flow: 1, pressure: true, antiAlias: true, tip: 'round', spacing: 12, jitter: 0, scatter: 0 },
   eraser: { size: 40, hardness: 0.8, opacity: 1, flow: 1, pressure: false, antiAlias: true, tip: 'round', spacing: 12, jitter: 0, scatter: 0 },
   select: { antiAlias: true },
+  pen: { mode: 'pen' as 'pen' | 'freehand', smooth: 50 },
   dodge: { size: 60, hardness: 0.3, strength: 0.35, range: 1, pressure: false },
   burn: { size: 60, hardness: 0.3, strength: 0.35, range: 1, pressure: false },
   blur: { size: 40, hardness: 0.5, strength: 0.7, range: 1, pressure: false },

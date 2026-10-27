@@ -22,7 +22,7 @@ export function pathsPanel() {
         });
         return h('div', { class: 'path-row' + (p.id === doc.activePath ? ' active' : ''), onclick: () => A.selectPath(p.id) },
           icon('path'), name, h('span', { class: 'dim' }, `${p.subs.reduce((n, s) => n + s.pts.length, 0)} pts`));
-      }) : [h('p', { class: 'empty-note' }, 'Draw a path with the Pen (P), or make one from a selection or shape.')]));
+      }) : [h('p', { class: 'empty-note' }, 'Draw a path with the Paths tool (P), or make one from a selection or shape.')]));
     const has = !!doc.path;
     const btn = (label: string, title: string, fn: () => void, enabled = has) => h('button', { class: 'btn small', type: 'button', title, disabled: !enabled, onclick: fn }, label);
     el.replaceChildren(list,

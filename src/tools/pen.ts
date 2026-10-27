@@ -1,9 +1,10 @@
 import { app } from '../app';
 import { newPath } from '../actions';
-import { corner, hitPath, isSmooth, segments, splitSegment, toggleSmooth } from '../core/paths';
+import { corner, fitPolyline, hitPath, isSmooth, segments, splitSegment, toggleSmooth } from '../core/paths';
 import type { PathPoint, VPath } from '../core/types';
 import { view } from '../ui/canvasview';
 import { h } from '../ui/dom';
+import { seg, slider } from '../ui/widgets';
 import type { PInfo, Tool } from './tool';
 
 type Drag =
@@ -13,17 +14,25 @@ type Drag =
 const LABELS = { new: 'Add point', in: 'Edit curve', out: 'Edit curve', point: 'Move point' } as const;
 
 /**
- * Pen (P): draws and edits Bézier paths. Click to add corner points, drag to pull out curve handles, click the
- * first point to close. Drag any point or handle to adjust; Alt+click a point switches corner/smooth; Ctrl+click a
- * point deletes it and Ctrl+click on a line adds one. Enter or Esc finishes the current line.
+ * Paths (P), in two modes like Illustrator's Pen and Pencil.
+ * Pen: click to add corner points, drag to pull out curve handles, click the first point to close. Drag any point
+ * or handle to adjust; Alt+click a point switches corner/smooth; Ctrl+click a point deletes it and Ctrl+click on a
+ * line adds one. Enter or Esc finishes the current line.
+ * Freehand: drag to draw; the line is smoothed into a few editable points (ending near the start closes it).
  */
 class PenTool implements Tool {
-  id = 'pen'; name = 'Pen'; key = 'P'; icon = 'pen' as const;
-  hint = 'Click to add points · drag to curve · click the first point to close · drag points/handles to adjust · Alt+click point: corner ↔ smooth · Ctrl+click: delete point / add point on a line · Enter finishes';
+  id = 'pen'; name = 'Paths'; key = 'P'; icon = 'pen' as const;
+  get hint() {
+    return app.opts.pen.mode === 'freehand'
+      ? 'Drag to draw a path freehand · end near the start to close it · higher Smoothness = fewer, rounder points'
+      : 'Click to add points · drag to curve · click the first point to close · drag points/handles to adjust · Alt+click point: corner ↔ smooth · Ctrl+click: delete point / add point on a line · Enter finishes';
+  }
   private open: { path: string; sub: number } | null = null;
   private sel: { sub: number; i: number } | null = null;
   private drag: Drag | null = null;
   private changed = false;
+  /** Points of a freehand line being drawn (document pixels). */
+  private drawn: { x: number; y: number }[] | null = null;
 
   cursor() { return 'crosshair'; }
 
@@ -35,8 +44,12 @@ class PenTool implements Tool {
   deactivate() { this.open = null; this.sel = null; }
 
   options(bar: HTMLElement) {
-    const doc = app.doc;
-    bar.append(h('span', { class: 'opt-note' }, doc?.path ? `Editing "${doc.path.name}"` : 'Click on the image to start a path'),
+    const doc = app.doc, o = app.opts.pen;
+    bar.append(
+      seg([{ v: 'pen', label: 'Pen', title: 'Click to place points; drag for curves' }, { v: 'freehand', label: 'Freehand', title: 'Drag to draw; smoothed into editable points' }],
+        o.mode, (v) => { o.mode = v; this.open = null; app.saveOpts(); app.emit('tool'); }),
+      ...(o.mode === 'freehand' ? [slider({ label: 'Smoothness', min: 0, max: 100, value: o.smooth, unit: '%', compact: true, onInput: (v) => { o.smooth = v; }, onChange: () => app.saveOpts() })] : []),
+      h('span', { class: 'opt-note' }, doc?.path ? `Adding to "${doc.path.name}"` : 'Draw on the image to start a path'),
       h('button', { class: 'btn small', type: 'button', title: 'Start a separate path', onclick: () => { this.open = null; this.sel = null; newPath(); app.emit('tool'); } }, 'New path'));
   }
 
@@ -53,6 +66,7 @@ class PenTool implements Tool {
 
   down(p: PInfo) {
     const doc = app.doc!;
+    if (app.opts.pen.mode === 'freehand') { this.drawn = [{ x: p.x, y: p.y }]; this.sel = null; return; }
     const tol = 6 / doc.zoom;
     let path = this.path;
     if (this.open && (!path || path.id !== this.open.path || !path.subs[this.open.sub])) this.open = null;
@@ -111,6 +125,11 @@ class PenTool implements Tool {
   }
 
   move(p: PInfo) {
+    if (this.drawn) {
+      const last = this.drawn[this.drawn.length - 1];
+      if (Math.hypot(p.x - last.x, p.y - last.y) * app.doc!.zoom >= 1.5) { this.drawn.push({ x: p.x, y: p.y }); view.requestOverlay(); }
+      return;
+    }
     const d = this.drag, path = this.path;
     if (!d || !path) return;
     const pt = path.subs[d.sub]?.pts[d.i];
@@ -140,10 +159,32 @@ class PenTool implements Tool {
   hover() { if (this.open) view.requestOverlay(); }
 
   up() {
+    if (this.drawn) { this.finishFreehand(); return; }
     const d = this.drag;
     this.drag = null;
     if (d && this.changed) app.doc!.commit(LABELS[d.kind]);
     this.changed = false;
+  }
+
+  /** Smooths the drawn line into a run of editable points on the current path (or a new one). */
+  private finishFreehand() {
+    const pts = this.drawn!;
+    this.drawn = null;
+    const doc = app.doc!;
+    const len = pts.reduce((s, q, i) => (i ? s + Math.hypot(q.x - pts[i - 1].x, q.y - pts[i - 1].y) : 0), 0);
+    if (pts.length < 2 || len * doc.zoom < 4) { view.requestOverlay(); return; }
+    // Smoothness sets how far (in screen pixels) the curve may stray from the drawn line to save points.
+    const eps = (0.6 + app.opts.pen.smooth * 0.08) / doc.zoom;
+    const end = pts[pts.length - 1];
+    const closed = len * doc.zoom > 40 && Math.hypot(end.x - pts[0].x, end.y - pts[0].y) * doc.zoom < 12;
+    const sub = fitPolyline(pts, eps, closed);
+    if (sub.pts.length < 2) { view.requestOverlay(); return; }
+    const path = this.path ?? newPath();
+    if (!path) return;
+    path.subs.push(sub);
+    this.sel = null;
+    this.open = null;
+    doc.commit('Draw path');
   }
 
   keydown(e: KeyboardEvent) {
@@ -168,9 +209,18 @@ class PenTool implements Tool {
   }
 
   overlay(ctx: CanvasRenderingContext2D) {
+    const S = (x: number, y: number) => view.toScreen(x, y);
+    if (this.drawn && this.drawn.length > 1) {
+      // The freehand line as it's being drawn.
+      ctx.save();
+      ctx.beginPath();
+      this.drawn.forEach((q, i) => { const s = S(q.x, q.y); if (i) ctx.lineTo(s.x, s.y); else ctx.moveTo(s.x, s.y); });
+      ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(0,0,0,.5)'; ctx.stroke();
+      ctx.lineWidth = 1.4; ctx.strokeStyle = '#2ee6be'; ctx.stroke();
+      ctx.restore();
+    }
     const path = this.path;
     if (!path) return;
-    const S = (x: number, y: number) => view.toScreen(x, y);
     ctx.save();
     // The path itself, with a dark edge so it shows on any image.
     const line = new Path2D();

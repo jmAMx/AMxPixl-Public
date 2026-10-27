@@ -2,6 +2,17 @@
 
 Each version's section becomes its release notes (`scripts/release.ps1` copies it to the download page).
 
+## 0.6.1
+
+Faster and smoother, measured on older hardware (a 4-core desktop processor with integrated graphics):
+
+- **Opening GIMP files** happens in the background, so the window stays responsive. A file with many filters used to freeze it for over 5 seconds.
+- **GIF export** is about 10× faster (24 frames at 1500×1000: 123 s → 12 s). Frames are colour-reduced and encoded on background threads, so the app no longer freezes for seconds at a time.
+- **Painting** is about 6× faster per brush movement on large images. The canvas redraws only the area that changed, plus room for effects like shadows and halftone that spread out.
+- **Magic wand** with "Select similar" runs in the background.
+- The **Pen** is now the **Paths** tool (P) with two modes, like Illustrator's Pen and Pencil. In **Pen** mode you place anchor points. In **Freehand** mode you drag to draw, and the line is smoothed into editable points. Drawing back to the start closes the path. A Smoothness slider sets how many points it keeps.
+- New eyedropper icon.
+
 ## 0.6.0
 
 - **Pen tool (P)** and a **Paths** panel: Bézier paths you can edit (drag points and handles, corner/smooth, add and delete points). Fill or stroke a path (with the Brush or a plain line), turn it into a selection (Ctrl+Enter) or trace a selection into a path.

@@ -1,8 +1,23 @@
-import { Doc, newId } from '../document';
-import { ctx2d, newCanvas } from '../layers';
-import type { BlendMode, GroupLayer, Guide, Layer, Mask, RasterLayer } from '../types';
-import { applyGimpFilter, fromPx, SPACES, toPx } from './gimpfilters';
+import type { BlendMode, Guide } from '../types';
+import { applyGimpFilter, SPACES, type Px } from './gimpfilters';
 import { Reader, sampleTo8 } from './reader';
+
+/*
+ * GIMP .xcf parsing. This module runs in a background worker (workers/xcfworker.ts), so it uses no DOM: pixels
+ * are plain RGBA buffers, and the main thread (xcfimport.ts) turns the result into a document.
+ */
+
+/** RGBA pixels, 8 bits per channel. */
+export interface PxBuf { w: number; h: number; data: Uint8ClampedArray }
+
+/** One layer or group as read from the file (bottom to top within its parent). */
+export interface XcfLayer {
+  name: string; visible: boolean; opacity: number; blend: BlendMode; linear: boolean;
+  mask: { px: PxBuf; x: number; y: number; enabled: boolean } | null;
+  group: boolean; open: boolean; children: XcfLayer[];
+  x: number; y: number; px: PxBuf | null;
+}
+export interface XcfResult { W: number; H: number; guides: Guide[]; notes: string[]; layers: XcfLayer[]; count: number }
 
 /** GIMP layer modes (2.10/3.x numbering, including the legacy ones) to AMxPixl blend modes. */
 const MODES: Record<number, BlendMode> = {
@@ -139,15 +154,15 @@ async function readHierarchy(r: Reader, ptr: number, wide: boolean, comp: number
   return { w, h, bpp, data };
 }
 
-/** Interleaved samples to an RGBA canvas. Layer types: 0 RGB, 1 RGBA, 2 grey, 3 grey+alpha, 4 indexed, 5 indexed+alpha. */
-function toCanvas(px: { w: number; h: number; data: Uint8Array }, type: number, fmt: Fmt, cmap: Uint8Array | null): HTMLCanvasElement {
-  const c = newCanvas(px.w, px.h);
-  const img = new ImageData(Math.max(1, px.w), Math.max(1, px.h));
-  const d = img.data, s = px.data, B = fmt.bytes;
+/** Interleaved samples to RGBA. Layer types: 0 RGB, 1 RGBA, 2 grey, 3 grey+alpha, 4 indexed, 5 indexed+alpha. */
+function toRGBA(px: { w: number; h: number; data: Uint8Array }, type: number, fmt: Fmt, cmap: Uint8Array | null): PxBuf {
+  const w = Math.max(1, px.w), h = Math.max(1, px.h);
+  const d = new Uint8ClampedArray(w * h * 4), s = px.data, B = fmt.bytes;
   const comps = [3, 4, 1, 2, 1, 2][type] ?? 4;
   const indexed = type >= 4;
   const stride = indexed ? comps : comps * B;
   const cs = (p: number, i: number) => sampleTo8(s, p + i * B, B, fmt.float, fmt.linear);
+  if (!s.length) return { w, h, data: d };
   for (let i = 0; i < px.w * px.h; i++) {
     const p = i * stride, o = i * 4;
     if (indexed) {
@@ -162,11 +177,10 @@ function toCanvas(px: { w: number; h: number; data: Uint8Array }, type: number, 
       d[o + 3] = comps === 2 ? sampleTo8(s, p + B, B, fmt.float, false) : 255;
     }
   }
-  if (px.w > 0 && px.h > 0) ctx2d(c).putImageData(img, 0, 0);
-  return c;
+  return { w, h, data: d };
 }
 
-interface Node { layer: Layer; path: number[] }
+interface Node { layer: XcfLayer; path: number[] }
 
 export type FilterArg = number | string | number[];
 
@@ -228,9 +242,9 @@ function readFilterPtrs(r: Reader, wide: boolean): number[] {
  * Bakes a layer's GIMP filters into its pixels, oldest first. Each filter is mixed in by its opacity and its own
  * mask (white = full effect). Unknown filters are skipped and listed in the import notes.
  */
-async function applyFilters(r: Reader, canvas: HTMLCanvasElement, filters: XcfFilter[], wide: boolean, comp: number, fmt: Fmt, notes: Set<string>, hasAlpha: boolean) {
-  const w = canvas.width, h = canvas.height;
-  const px = toPx(ctx2d(canvas, true).getImageData(0, 0, w, h));
+async function applyFilters(r: Reader, buf: PxBuf, filters: XcfFilter[], wide: boolean, comp: number, fmt: Fmt, notes: Set<string>, hasAlpha: boolean): Promise<PxBuf> {
+  const { w, h } = buf;
+  const px: Px = { w, h, d: Float32Array.from(buf.data, (v) => v / 255) };
   const applied: string[] = [], skipped: string[] = [];
   for (const f of filters) {
     const before = px.d.slice();
@@ -242,7 +256,7 @@ async function applyFilters(r: Reader, canvas: HTMLCanvasElement, filters: XcfFi
       r.u32(); r.u32(); readString(r); readProps(r);
       const mh = wide ? r.u64() : r.u32();
       const md = await readHierarchy(r, mh, wide, comp);
-      if (md.w === w && md.h === h) mask = ctx2d(toCanvas(md, 2, fmt, null), true).getImageData(0, 0, w, h).data;
+      if (md.w === w && md.h === h) mask = toRGBA(md, 2, fmt, null).data;
       // GIMP stores an all-black mask when a filter covers the whole layer (no selection): that means "no mask".
       if (mask && !mask.some((v, i) => i % 4 === 0 && v > 0)) mask = null;
     }
@@ -259,9 +273,9 @@ async function applyFilters(r: Reader, canvas: HTMLCanvasElement, filters: XcfFi
   if (!hasAlpha) for (let i = 3; i < px.d.length; i += 4) px.d[i] = 1;
   if (applied.length) notes.add('GIMP filters were applied to the layers they were on.');
   if (skipped.length) notes.add(`Some GIMP filters aren't supported yet and were left off: ${[...new Set(skipped)].join(', ')}.`);
-  const out = newCanvas(w, h);
-  ctx2d(out).putImageData(fromPx(px), 0, 0);
-  return out;
+  const data = new Uint8ClampedArray(px.d.length);
+  for (let i = 0; i < data.length; i++) data[i] = Math.round(px.d[i] * 255);
+  return { w, h, data };
 }
 
 /** Filters left off during imports (for checking new ones against GIMP). */
@@ -269,10 +283,11 @@ const skippedFilters: XcfFilter[] = [];
 export const __xcfDebug = { readFilter, readFilterPtrs, readString, readProps, PROP, SPACES, skippedFilters };
 
 /**
- * Opens a GIMP .xcf (GIMP 2.x and 3.x): layers with names, positions, opacity, visibility and blend modes, layer
- * groups, layer masks, guides, and high bit depths (converted to 8-bit). Text comes in as pixels.
+ * Reads a GIMP .xcf (GIMP 2.x and 3.x): layers with names, positions, opacity, visibility and blend modes, layer
+ * groups, layer masks, guides, and high bit depths (converted to 8-bit), with GIMP 3 filters baked in. Text comes
+ * in as pixels.
  */
-export async function importXcf(buf: ArrayBuffer, name: string): Promise<Doc> {
+export async function parseXcf(buf: ArrayBuffer): Promise<XcfResult> {
   const r = new Reader(buf);
   if (r.str(9) !== 'gimp xcf ') throw new Error('Not a GIMP file.');
   const tag = r.str(4);
@@ -299,7 +314,6 @@ export async function importXcf(buf: ArrayBuffer, name: string): Promise<Doc> {
   const layerPtrs: number[] = [];
   for (;;) { const p = wide ? r.u64() : r.u32(); if (!p) break; layerPtrs.push(p); }
 
-  const doc = new Doc(name, W, H);
   const nodes: Node[] = [];
   let topIndex = 0;
   for (const ptr of layerPtrs) {
@@ -316,32 +330,27 @@ export async function importXcf(buf: ArrayBuffer, name: string): Promise<Doc> {
     const linear = p.mode >= 23 && p.mode !== 61;
     if (APPROX[p.mode] !== undefined) notes.add('Some GIMP blend modes were replaced with the closest match.');
     if (p.text) notes.add('Text layers come in as pixels.');
-    let mask: Mask | null = null;
+    let mask: XcfLayer['mask'] = null;
     if (mptr) {
       r.pos = mptr;
       r.u32(); r.u32(); readString(r); readProps(r);
       const mh = wide ? r.u64() : r.u32();
-      const md = await readHierarchy(r, mh, wide, comp);
+      const md = toRGBA(await readHierarchy(r, mh, wide, comp), 2, fmt, null);
       // Grey mask values become alpha.
-      const mc = toCanvas(md, 2, fmt, null);
-      const x = ctx2d(mc, true);
-      const a = x.getImageData(0, 0, Math.max(1, mc.width), Math.max(1, mc.height));
-      for (let k = 0; k < a.data.length; k += 4) { a.data[k + 3] = a.data[k]; a.data[k] = a.data[k + 1] = a.data[k + 2] = 255; }
-      x.putImageData(a, 0, 0);
-      mask = { key: doc.addCanvas(mc), t: { x: p.x, y: p.y, sx: 1, sy: 1, rot: 0 }, enabled: p.applyMask, density: 1, feather: 0 };
+      const a = md.data;
+      for (let k = 0; k < a.length; k += 4) { a[k + 3] = a[k]; a[k] = a[k + 1] = a[k + 2] = 255; }
+      mask = { px: md, x: p.x, y: p.y, enabled: p.applyMask };
     }
     const path = p.path ?? [topIndex++];
-    const base0 = { id: newId(), name: lname, visible: p.visible, opacity: Math.max(0, Math.min(1, p.opacity)), mask, linear };
+    const base0 = { name: lname, visible: p.visible, opacity: Math.max(0, Math.min(1, p.opacity)), mask, linear, children: [], x: p.x, y: p.y };
     if (p.group) {
       if (filters.length) notes.add(`Filters on groups aren't supported yet (${[...new Set(filters.map((f) => f.op.split(':')[1]))].join(', ')}).`);
-      const g: GroupLayer = { ...base0, type: 'group', blend: p.mode === 61 ? 'pass-through' : blend, children: [], open: p.expanded };
-      nodes.push({ layer: g, path });
+      nodes.push({ layer: { ...base0, group: true, open: p.expanded, blend: p.mode === 61 ? 'pass-through' : blend, px: null }, path });
     } else {
-      const px = await readHierarchy(r, hptr, wide, comp);
-      let canvas = toCanvas(px.w ? px : { w: lw, h: lh, data: new Uint8Array(0) }, type, fmt, cmap);
-      if (filters.length && canvas.width > 0 && canvas.height > 0) canvas = await applyFilters(r, canvas, filters, wide, comp, fmt, notes, type % 2 === 1);
-      const l: RasterLayer = { ...base0, type: 'raster', blend: blend === 'pass-through' ? 'normal' : blend, key: doc.addCanvas(canvas), t: { x: p.x, y: p.y, sx: 1, sy: 1, rot: 0 } };
-      nodes.push({ layer: l, path });
+      const raw = await readHierarchy(r, hptr, wide, comp);
+      let px = toRGBA(raw.w ? raw : { w: lw, h: lh, data: new Uint8Array(0) }, type, fmt, cmap);
+      if (filters.length && raw.w > 0 && raw.h > 0) px = await applyFilters(r, px, filters, wide, comp, fmt, notes, type % 2 === 1);
+      nodes.push({ layer: { ...base0, group: false, open: false, blend: blend === 'pass-through' ? 'normal' : blend, px }, path });
     }
   }
 
@@ -351,19 +360,21 @@ export async function importXcf(buf: ArrayBuffer, name: string): Promise<Doc> {
   const kids = new Map<Node, Node[]>();
   for (const n of nodes) {
     const parent = n.path.length > 1 ? byPath.get(n.path.slice(0, -1).join('/')) : undefined;
-    if (parent && parent.layer.type === 'group') { if (!kids.has(parent)) kids.set(parent, []); kids.get(parent)!.push(n); }
+    if (parent && parent.layer.group) { if (!kids.has(parent)) kids.set(parent, []); kids.get(parent)!.push(n); }
     else roots.push(n);
   }
-  const build = (list: Node[]): Layer[] => [...list].sort((a, b) => b.path[b.path.length - 1] - a.path[a.path.length - 1]).map((n) => {
-    if (n.layer.type === 'group') n.layer.children = build(kids.get(n) ?? []);
+  const build = (list: Node[]): XcfLayer[] => [...list].sort((a, b) => b.path[b.path.length - 1] - a.path[a.path.length - 1]).map((n) => {
+    if (n.layer.group) n.layer.children = build(kids.get(n) ?? []);
     return n.layer;
   });
-  doc.layers = build(roots);
-  doc.guides = guides;
-  doc.activeId = doc.layers[doc.layers.length - 1]?.id ?? null;
-  doc.counter = nodes.length + 1;
   if (fmt.bytes > 1) notes.add(`High bit depth (${fmt.bytes * 8}-bit${fmt.float ? ' float' : ''}) was converted to 8-bit.`);
-  doc.importNotes = [...notes];
-  doc.resetHistory('Import XCF');
-  return doc;
+  return { W, H, guides, notes: [...notes], layers: build(roots), count: nodes.length };
+}
+
+/** The pixel buffers in a parse result (to hand them over from the worker without copying). */
+export function xcfBuffers(r: XcfResult): ArrayBuffer[] {
+  const out: ArrayBuffer[] = [];
+  const walk = (ls: XcfLayer[]) => { for (const l of ls) { if (l.px) out.push(l.px.data.buffer as ArrayBuffer); if (l.mask) out.push(l.mask.px.data.buffer as ArrayBuffer); walk(l.children); } };
+  walk(r.layers);
+  return out;
 }

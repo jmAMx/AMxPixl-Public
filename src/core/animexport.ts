@@ -1,5 +1,6 @@
-import { applyPalette, GIFEncoder, quantize } from 'gifenc';
+import type { Palette } from 'gifenc';
 import type { Doc } from './document';
+import { WorkerPool } from './workers/pool';
 import { canvasBlob } from './fileio';
 import { ctx2d, newCanvas } from './layers';
 import { flatten } from './render';
@@ -26,19 +27,25 @@ interface Frame { canvas: HTMLCanvasElement; ms: number }
 
 const tick = () => new Promise((r) => setTimeout(r, 0));
 
-async function renderFrames(doc: Doc, o: AnimExportOptions, even: boolean, total: number): Promise<Frame[]> {
-  const a = doc.anim!;
-  const out: Frame[] = [];
+/** Frame `i` at export size, on the chosen background. */
+function renderFrame(doc: Doc, i: number, o: AnimExportOptions, even: boolean): HTMLCanvasElement {
   let w = Math.max(1, Math.round(doc.width * o.scale)), h = Math.max(1, Math.round(doc.height * o.scale));
   // H.264 and VP9 need even dimensions.
   if (even) { w += w % 2; h += h % 2; }
-  for (let i = 0; i < a.frames.length; i++) {
-    const src = flatten(doc, o.scale, { frame: i, nearest: o.nearest });
-    const c = newCanvas(w, h);
-    const x = ctx2d(c, true);
-    if (o.background !== 'transparent') { x.fillStyle = o.background === 'white' ? '#ffffff' : '#000000'; x.fillRect(0, 0, w, h); }
-    x.drawImage(src, 0, 0);
-    out.push({ canvas: c, ms: a.frames[i].ms ?? 1000 / a.fps });
+  const src = flatten(doc, o.scale, { frame: i, nearest: o.nearest });
+  const c = newCanvas(w, h);
+  const x = ctx2d(c);
+  if (o.background !== 'transparent') { x.fillStyle = o.background === 'white' ? '#ffffff' : '#000000'; x.fillRect(0, 0, w, h); }
+  x.drawImage(src, 0, 0);
+  return c;
+}
+
+const frameMs = (doc: Doc, i: number) => doc.anim!.frames[i].ms ?? 1000 / doc.anim!.fps;
+
+async function renderFrames(doc: Doc, o: AnimExportOptions, even: boolean, total: number): Promise<Frame[]> {
+  const out: Frame[] = [];
+  for (let i = 0; i < doc.anim!.frames.length; i++) {
+    out.push({ canvas: renderFrame(doc, i, o, even), ms: frameMs(doc, i) });
     o.onProgress?.(i + 1, total);
     await tick();
   }
@@ -47,25 +54,34 @@ async function renderFrames(doc: Doc, o: AnimExportOptions, even: boolean, total
 
 // ---------- GIF ----------
 
-async function encodeGif(frames: Frame[], loop: boolean, transparent: boolean, o: AnimExportOptions): Promise<Blob> {
-  const gif = GIFEncoder();
-  const n = frames.length;
+type GifReply = { index: Uint8Array; palette: Palette; transparentIndex: number } & { bytes: Uint8Array };
+let gifPool: WorkerPool<object, GifReply> | null = null;
+const pool = () => (gifPool ??= new WorkerPool<object, GifReply>(() => new Worker(new URL('./workers/gifworker.ts', import.meta.url), { type: 'module' })));
+
+/**
+ * GIF: each frame is drawn here (the GPU), then handed to background workers that read its pixels and reduce them
+ * to 256 colours, several frames at once; one worker then writes the file. The window stays responsive throughout.
+ */
+async function encodeGif(doc: Doc, o: AnimExportOptions): Promise<Blob> {
+  const n = doc.anim!.frames.length;
+  const transparent = o.background === 'transparent';
+  const p = pool();
+  let done = 0, w = 0, h = 0;
+  const jobs: Promise<GifReply>[] = [];
   for (let i = 0; i < n; i++) {
-    const { canvas, ms } = frames[i];
-    const data = ctx2d(canvas, true).getImageData(0, 0, canvas.width, canvas.height).data;
-    const format = transparent ? 'rgba4444' : 'rgb565';
-    const palette = quantize(data, 256, transparent ? { format, oneBitAlpha: true } : { format });
-    const index = applyPalette(data, palette, format);
-    const ti = transparent ? palette.findIndex((p) => p[3] === 0) : -1;
-    gif.writeFrame(index, canvas.width, canvas.height, {
-      palette, delay: Math.max(20, Math.round(ms)), repeat: loop ? 0 : -1,
-      ...(ti >= 0 ? { transparent: true, transparentIndex: ti, dispose: 2 } : {}),
-    });
-    o.onProgress?.(n + i + 1, n * 2);
-    await tick();
+    const c = renderFrame(doc, i, o, false);
+    w = c.width; h = c.height;
+    const bitmap = await createImageBitmap(c);
+    jobs.push(p.run({ type: 'frame', bitmap, transparent }, [bitmap]).then((r) => { o.onProgress?.(++done, n + 1); return r; }));
+    // Don't run too far ahead of the workers (each queued frame holds a full-size image).
+    if (jobs.length - done > 6) await jobs[jobs.length - 6];
+    // Leave the screen a frame to update between renders (the GPU is shared with the workers' read-backs).
+    await new Promise((r) => setTimeout(r, 16));
   }
-  gif.finish();
-  return new Blob([gif.bytes() as Uint8Array<ArrayBuffer>], { type: 'image/gif' });
+  const frames = (await Promise.all(jobs)).map((r, i) => ({ index: r.index, palette: r.palette, transparentIndex: r.transparentIndex, delay: Math.max(20, Math.round(frameMs(doc, i))) }));
+  const r = await p.run({ type: 'encode', width: w, height: h, loop: doc.anim!.loop, frames }, frames.map((f) => f.index.buffer));
+  o.onProgress?.(n + 1, n + 1);
+  return new Blob([r.bytes as Uint8Array<ArrayBuffer>], { type: 'image/gif' });
 }
 
 // ---------- APNG ----------
@@ -161,8 +177,8 @@ export async function exportAnimation(doc: Doc, o: AnimExportOptions): Promise<B
   if (!doc.anim?.frames.length) throw new Error('This image has no animation yet (View › Timeline).');
   const video = o.format === 'mp4' || o.format === 'webm';
   const n = doc.anim.frames.length;
+  if (o.format === 'gif') return encodeGif(doc, o);
   const frames = await renderFrames(doc, { ...o, background: video && o.background === 'transparent' ? 'black' : o.background }, video, n * 2);
-  if (o.format === 'gif') return encodeGif(frames, doc.anim.loop, o.background === 'transparent', o);
   if (o.format === 'apng') return encodeApng(frames, doc.anim.loop, o);
   return encodeVideo(frames, o);
 }

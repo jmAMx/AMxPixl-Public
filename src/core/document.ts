@@ -160,7 +160,33 @@ export class Doc {
   markPixels(key: string, notify = true, r?: Rect) {
     invalidate(this.pool.get(key), r);
     this.dirtyKeys.add(key);
+    this.noteDirty(r ? this.docRectOf(key, r) : null);
     if (notify) this.touch('pixels');
+  }
+
+  /** The area of the image changed since the view last drew ('all' when it can't be narrowed down). */
+  private pendingDirty: Rect | 'all' | null = null;
+
+  private noteDirty(r: Rect | null) {
+    if (this.pendingDirty === 'all') return;
+    this.pendingDirty = !r ? 'all' : this.pendingDirty ? union(this.pendingDirty, r) : r;
+  }
+
+  /** Hands the changed area to the view (and forgets it). */
+  takeDirty(): Rect | 'all' | null {
+    const d = this.pendingDirty;
+    this.pendingDirty = null;
+    return d;
+  }
+
+  /** Where a region of a pixel buffer lands in the image, or null if that can't be worked out simply. */
+  private docRectOf(key: string, r: Rect): Rect | null {
+    if (key === this.quickMask) return r;
+    for (const l of this.all()) {
+      if (l.type === 'raster' && l.key === key) return l.warp ? null : mapRect(xformMatrix(l.t), r);
+      if (l.mask?.key === key) return mapRect(xformMatrix(l.mask.t), r);
+    }
+    return null;
   }
 
   /** Records everything changed since the last commit as one undoable step. */

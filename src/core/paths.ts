@@ -160,10 +160,26 @@ function simplify(pts: Pt[], eps: number): Pt[] {
 
 /** Turns closed outlines (polylines) into smooth paths: gentle bends get curve handles, sharp ones stay corners. */
 function outlineToSub(loop: Pt[]): SubPath {
-  const pts = simplify(loop, 0.9);
+  return fitPolyline(loop, 0.9, true);
+}
+
+/**
+ * Fits a drawn line (or outline) with a few smooth points: drops points within `eps` of the line through their
+ * neighbours, then gives gentle bends curve handles along the direction of travel. Sharp bends stay corners.
+ */
+export function fitPolyline(raw: Pt[], eps: number, closed: boolean): SubPath {
+  let pts: Pt[];
+  if (closed && raw.length > 3) {
+    // A loop's ends meet, so simplify its two halves, split at the point farthest from the start.
+    let far = 0, fd = -1;
+    raw.forEach((p, i) => { const d = Math.hypot(p.x - raw[0].x, p.y - raw[0].y); if (d > fd) { fd = d; far = i; } });
+    pts = [...simplify(raw.slice(0, far + 1), eps).slice(0, -1), ...simplify([...raw.slice(far), raw[0]], eps).slice(0, -1)];
+  } else pts = simplify(raw, eps);
+  if (closed && pts.length > 2 && Math.hypot(pts[0].x - pts[pts.length - 1].x, pts[0].y - pts[pts.length - 1].y) < eps * 2) pts.pop();
   const n = pts.length;
   const out: PathPoint[] = pts.map((p) => corner(p.x, p.y));
   for (let i = 0; i < n; i++) {
+    if (!closed && (i === 0 || i === n - 1)) continue;
     const a = pts[(i - 1 + n) % n], p = pts[i], b = pts[(i + 1) % n];
     const v1x = p.x - a.x, v1y = p.y - a.y, v2x = b.x - p.x, v2y = b.y - p.y;
     const l1 = Math.hypot(v1x, v1y), l2 = Math.hypot(v2x, v2y);
@@ -174,7 +190,7 @@ function outlineToSub(loop: Pt[]): SubPath {
     out[i].ix = p.x - tx * l1 / 3; out[i].iy = p.y - ty * l1 / 3;
     out[i].ox = p.x + tx * l2 / 3; out[i].oy = p.y + ty * l2 / 3;
   }
-  return { closed: true, pts: out };
+  return { closed, pts: out };
 }
 
 /**

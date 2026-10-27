@@ -84,6 +84,17 @@ function pixelStamp(color: string, d: number, flow: number) {
   return c;
 }
 
+/** Draws just the `r` part of `src` at the same place (no scaling). */
+function blit(ctx: CanvasRenderingContext2D, src: HTMLCanvasElement, r: Rect) {
+  ctx.drawImage(src, r.x, r.y, r.w, r.h, r.x, r.y, r.w, r.h);
+}
+
+/** Replaces `rr` of the layer with the matching part of `res`, a result covering region `R`. */
+function putBack(ctx: CanvasRenderingContext2D, res: HTMLCanvasElement, R: Rect, rr: Rect) {
+  ctx.clearRect(rr.x, rr.y, rr.w, rr.h);
+  ctx.drawImage(res, rr.x - R.x, rr.y - R.y, rr.w, rr.h, rr.x, rr.y, rr.w, rr.h);
+}
+
 /**
  * Fills transparent holes in `c` smoothly from the pixels around them ("pull-push"): halve it repeatedly (canvas
  * averaging weights each pixel by its alpha), then from the smallest level up, lay each level over the enlarged
@@ -237,12 +248,7 @@ export class Stroke {
     }
     const res = glops.heal(C, around(S), around(D), cov, this.o.opacity);
     if (!res) return;
-    const s = ctx2d(this.src);
-    s.save();
-    s.beginPath(); s.rect(rr.x, rr.y, rr.w, rr.h); s.clip();
-    s.globalCompositeOperation = 'copy';
-    s.drawImage(res, R.x, R.y);
-    s.restore();
+    putBack(ctx2d(this.src), res, R, rr);
   }
 
   /** Dodge, burn, blur or sharpen: the layer as it was before the stroke, changed where the stroke has been. */
@@ -263,12 +269,7 @@ export class Stroke {
     }
     const res = glops.retouch(B, blurred, cropCanvas(this.buffer, R), mode, rt.strength, rt.range);
     if (!res) return;
-    const s = ctx2d(this.src);
-    s.save();
-    s.beginPath(); s.rect(rr.x, rr.y, rr.w, rr.h); s.clip();
-    s.globalCompositeOperation = 'copy';
-    s.drawImage(res, R.x, R.y);
-    s.restore();
+    putBack(ctx2d(this.src), res, R, rr);
   }
 
   private smudgeBuf: HTMLCanvasElement | null = null;
@@ -310,26 +311,22 @@ export class Stroke {
     cx.globalCompositeOperation = 'destination-in';
     cx.drawImage(this.mask!, -rr.x, -rr.y);
     const s = ctx2d(this.src);
-    s.save();
-    s.beginPath(); s.rect(rr.x, rr.y, rr.w, rr.h); s.clip();
-    s.globalCompositeOperation = 'copy';
-    s.drawImage(this.backup, 0, 0);
-    s.globalCompositeOperation = 'source-over';
+    s.clearRect(rr.x, rr.y, rr.w, rr.h);
+    blit(s, this.backup, rr);
     s.drawImage(changed, rr.x, rr.y);
-    s.restore();
   }
 
   /** Redraws `rr` of the layer as it was before the stroke with the stroke so far on top. */
   private compose(rr: Rect) {
     if (this.o.retouch && this.o.retouch.mode !== 'smudge') { this.retouchRegion(rr); return; }
+    // Only the rectangle is copied (drawing whole layer-sized images clipped to it is far slower on integrated GPUs).
     const s = ctx2d(this.src);
     s.save();
-    s.beginPath(); s.rect(rr.x, rr.y, rr.w, rr.h); s.clip();
-    s.globalCompositeOperation = 'copy';
-    s.drawImage(this.backup, 0, 0);
+    s.clearRect(rr.x, rr.y, rr.w, rr.h);
+    blit(s, this.backup, rr);
     s.globalCompositeOperation = this.o.erase ? 'destination-out' : 'source-over';
     s.globalAlpha = this.o.opacity;
-    s.drawImage(this.buffer, 0, 0);
+    blit(s, this.buffer, rr);
     s.restore();
   }
 
@@ -405,7 +402,7 @@ export class Stroke {
       bctx.save();
       bctx.globalCompositeOperation = 'destination-in';
       bctx.beginPath(); bctx.rect(rr.x, rr.y, rr.w, rr.h); bctx.clip();
-      bctx.drawImage(this.mask, 0, 0);
+      blit(bctx, this.mask, rr);
       bctx.restore();
     }
     this.compose(rr);

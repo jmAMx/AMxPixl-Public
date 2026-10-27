@@ -1,7 +1,7 @@
 import { app } from '../app';
 import { ctx2d, newCanvas } from '../core/layers';
-import { intersect, invert, type Mat, type Pt } from '../core/math';
-import { renderDoc } from '../core/render';
+import { intersect, invert, mapRect, roundOut, union, type Mat, type Pt, type Rect } from '../core/math';
+import { dirtyPad, renderDoc } from '../core/render';
 import type { PInfo, Tool } from '../tools/tool';
 import { addGuide } from '../actions';
 import { h } from './dom';
@@ -15,6 +15,7 @@ class CanvasView {
   private composite = document.createElement('canvas');
   private qmTint = document.createElement('canvas');
   private onionCanvas = document.createElement('canvas');
+  private partialCanvas = document.createElement('canvas');
   private onion: HTMLCanvasElement | null = null;
   private compRect = { x: 0, y: 0, w: 0, h: 0 };
   private compScale = 1;
@@ -61,7 +62,16 @@ class CanvasView {
     };
     window.addEventListener('pointerup', release, true);
     window.addEventListener('pointercancel', release, true);
-    app.on('change', ({ doc }) => { if (doc === app.doc) { this.requestRender(); this.syncAnts(); } });
+    app.on('change', ({ doc, kind }) => {
+      if (doc !== app.doc) return;
+      // Painting reports where it changed the image; only that area (plus a margin) is redrawn.
+      const d = doc.takeDirty();
+      if (kind === 'pixels' && d && d !== 'all' && !this.dirty) {
+        this.partial = this.partial ? union(this.partial, d) : d;
+        this.schedule();
+      } else this.requestRender();
+      this.syncAnts();
+    });
     app.on('docs', () => { this.ensureFitted(); this.requestRender(); this.syncAnts(); });
     app.on('tool', () => { this.updateCursor(); this.requestOverlay(); });
     app.on('prefs', () => { this.checker = null; this.requestRender(); });
@@ -90,7 +100,10 @@ class CanvasView {
   /** A drag is in progress (background work like autosave waits for it to finish). */
   get busy() { return this.interacting || this.down; }
 
-  requestRender() { this.dirty = true; this.schedule(); }
+  requestRender() { this.dirty = true; this.partial = null; this.schedule(); }
+
+  /** Part of the image (document pixels) that changed and still needs redrawing, when not all of it does. */
+  private partial: Rect | null = null;
   requestOverlay() { this.schedule(); }
 
   private schedule() {
@@ -192,7 +205,44 @@ class CanvasView {
       ctx.fillRect(vr.x, vr.y, vr.w, vr.h);
       // While dragging something, drop to half resolution if full-quality frames are too slow; sharpen on release.
       const k = this.interacting && this.slowFrames ? 0.5 : 1;
-      if (this.dirty || k !== this.compScale || vr.x !== this.compRect.x || vr.y !== this.compRect.y || vr.w !== this.compRect.w || vr.h !== this.compRect.h) {
+      const viewChanged = k !== this.compScale || vr.x !== this.compRect.x || vr.y !== this.compRect.y || vr.w !== this.compRect.w || vr.h !== this.compRect.h;
+      let full = this.dirty || viewChanged;
+      if (!full && this.partial) {
+        // Only part of the image changed: redraw that part (with a margin for effects that reach across pixels)
+        // into a scratch canvas and copy just the changed area into place.
+        const pad = dirtyPad(d);
+        if (!Number.isFinite(pad) || (d.anim && app.prefs.onion)) full = true;
+        else {
+          const m: Mat = [z * k, 0, 0, z * k, (dx - vr.x) * k, (dy - vr.y) * k];
+          const bounds = { x: 0, y: 0, w: this.composite.width, h: this.composite.height };
+          // A change spreads up to `pad` (shadows, glows, halftone cells), and those pixels need `pad` more around
+          // them to be drawn right: copy back the spread area, render it with a margin.
+          const pp = Math.ceil(pad * z * k) + 2;
+          const ch = roundOut(mapRect(m, this.partial));
+          const inner = intersect({ x: ch.x - pp, y: ch.y - pp, w: ch.w + pp * 2, h: ch.h + pp * 2 }, bounds);
+          if (inner) {
+            // Round the redraw area up to a few fixed sizes: the GPU reuses buffers of the same size, while a new
+            // size every brush move would make it reallocate them each time (very slow on integrated graphics).
+            const B = 128;
+            const ow = Math.min(bounds.w, Math.ceil((inner.w + pp * 2) / B) * B), oh = Math.min(bounds.h, Math.ceil((inner.h + pp * 2) / B) * B);
+            const ox = Math.max(0, Math.min(bounds.w - ow, Math.round(inner.x + inner.w / 2 - ow / 2)));
+            const oy = Math.max(0, Math.min(bounds.h - oh, Math.round(inner.y + inner.h / 2 - oh / 2)));
+            const outer = { x: ox, y: oy, w: ow, h: oh };
+            const tmp = this.partialCanvas;
+            // Exactly the redraw size: effects process their whole canvas.
+            if (tmp.width !== outer.w || tmp.height !== outer.h) { tmp.width = outer.w; tmp.height = outer.h; }
+            const t0 = performance.now();
+            renderDoc(d, tmp, [m[0], 0, 0, m[3], m[4] - outer.x, m[5] - outer.y], { screen: true });
+            const cx = ctx2d(this.composite);
+            cx.clearRect(inner.x, inner.y, inner.w, inner.h);
+            cx.drawImage(tmp, inner.x - outer.x, inner.y - outer.y, inner.w, inner.h, inner.x, inner.y, inner.w, inner.h);
+            this.noteFrame(performance.now() - t0, k);
+          }
+          this.partial = null;
+        }
+      }
+      if (full) {
+        this.partial = null;
         const cw = Math.max(1, Math.ceil(vr.w * k)), ch = Math.max(1, Math.ceil(vr.h * k));
         if (this.composite.width !== cw || this.composite.height !== ch) {
           this.composite.width = cw;

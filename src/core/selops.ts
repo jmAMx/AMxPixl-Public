@@ -4,6 +4,7 @@ import { glops } from './glops';
 import { ctx2d, newCanvas } from './layers';
 import { flatten, renderDoc } from './render';
 import { maskSelection } from './selection';
+import { WorkerPool } from './workers/pool';
 import type { Layer, SelOp, Selection } from './types';
 
 export type SelMode = 'replace' | 'add' | 'sub';
@@ -64,17 +65,29 @@ export function sampleSource(doc: Doc, allLayers: boolean, layer: Layer | null):
   return c;
 }
 
-/** Magic wand: pixels similar to the clicked one, as a soft-edged mask. Null if the point is outside the image. */
-export function wandMask(src: HTMLCanvasElement, x: number, y: number, tol: number, contiguous: boolean, antiAlias: boolean): HTMLCanvasElement | null {
+type WandReply = { mask: Uint8ClampedArray; w: number; h: number };
+let pixelPool: WorkerPool<object, WandReply> | null = null;
+
+/**
+ * Magic wand: pixels similar to the clicked one, as a soft-edged mask. Null if the point is outside the image.
+ * Reading the image back and the flood fill run in a background worker, so a big image doesn't freeze the window.
+ */
+export async function wandMask(src: HTMLCanvasElement, x: number, y: number, tol: number, contiguous: boolean, antiAlias: boolean): Promise<HTMLCanvasElement | null> {
   const W = src.width, H = src.height;
   const sx = Math.floor(x), sy = Math.floor(y);
   if (sx < 0 || sy < 0 || sx >= W || sy >= H) return null;
-  const d = ctx2d(src, true).getImageData(0, 0, W, H).data;
-  const hit = floodFill(d, W, H, sx, sy, tol, contiguous);
-  const img = new ImageData(W, H);
-  for (let i = 0; i < hit.length; i++) if (hit[i]) { const j = i * 4; img.data[j] = img.data[j + 1] = img.data[j + 2] = img.data[j + 3] = 255; }
+  let data: Uint8ClampedArray;
+  if (typeof Worker !== 'undefined') {
+    const p = (pixelPool ??= new WorkerPool<object, WandReply>(() => new Worker(new URL('./workers/pixelworker.ts', import.meta.url), { type: 'module' }), 1));
+    const bitmap = await createImageBitmap(src);
+    data = (await p.run({ type: 'wand', bitmap, x: sx, y: sy, tol, contiguous }, [bitmap])).mask;
+  } else {
+    const hit = floodFill(ctx2d(src, true).getImageData(0, 0, W, H).data, W, H, sx, sy, tol, contiguous);
+    data = new Uint8ClampedArray(W * H * 4);
+    for (let i = 0; i < hit.length; i++) if (hit[i]) data.fill(255, i * 4, i * 4 + 4);
+  }
   const c = newCanvas(W, H);
-  ctx2d(c).putImageData(img, 0, 0);
+  ctx2d(c).putImageData(new ImageData(data as Uint8ClampedArray<ArrayBuffer>, W, H), 0, 0);
   return antiAlias ? blurred(c, 0.6) : c;
 }
 
