@@ -68,6 +68,8 @@ button, select, input, textarea { font: inherit; color: inherit; }
 .ico svg { width: 100%; height: 100%; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
 
 #app { height: 100vh; display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; }
+/* Each part keeps its row, so hiding the options bar (tool options in the sidebar) leaves an empty row, not a gap. */
+#app > .menubar { grid-row: 1; } #app > .optionsbar { grid-row: 2; } #app > .main { grid-row: 3; } #app > .statusbar { grid-row: 4; }
 
 /* ---------- menu bar ---------- */
 .menubar {
