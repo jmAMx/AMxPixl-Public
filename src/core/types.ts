@@ -1,4 +1,4 @@
-import type { Xform } from './math';
+import type { Rect, Xform } from './math';
 
 export type BlendMode =
   | 'normal' | 'multiply' | 'screen' | 'overlay' | 'darken' | 'lighten' | 'color-dodge' | 'color-burn'
@@ -143,9 +143,11 @@ export interface AnimFrame { id: string; vis: Record<string, boolean>; ms?: numb
 /** Frame animation: frames play in order at `fps` (a frame's own `ms` overrides its length). */
 export interface Anim { fps: number; frames: AnimFrame[]; loop: boolean }
 
-export interface RasterLayer extends LayerBase { type: 'raster'; key: string; t: Xform; warp?: Warp | null }
-export interface TextLayer extends LayerBase { type: 'text'; t: Xform; text: TextProps }
-export interface ShapeLayer extends LayerBase { type: 'shape'; t: Xform; shape: ShapeProps }
+/** A layer with a position on the canvas. `box` is a bounding box set by hand (Move tool › Box › Custom), in its own pixels. */
+interface PlacedBase extends LayerBase { t: Xform; box?: Rect | null }
+export interface RasterLayer extends PlacedBase { type: 'raster'; key: string; warp?: Warp | null }
+export interface TextLayer extends PlacedBase { type: 'text'; text: TextProps }
+export interface ShapeLayer extends PlacedBase { type: 'shape'; shape: ShapeProps }
 export interface AdjustLayer extends LayerBase { type: 'adjust'; adj: AdjParams }
 export interface EffectLayer extends LayerBase { type: 'effect'; fx: FxParams }
 export interface GroupLayer extends LayerBase { type: 'group'; children: Layer[]; open: boolean }

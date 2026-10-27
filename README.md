@@ -59,6 +59,7 @@ One-time setup: `winget install GitHub.cli`, then `gh auth login`, and a `public
 - **Motion:** a Timeline with frames (one per layer, or a loop), onion skinning and playback. Effect layers can animate: grain, dust and glitches re-roll, scanlines and VHS tracking roll, light leaks drift, halftone dots drift, turn, pulse or ripple. Export as GIF, animated PNG, MP4 or WebM.
 - **Pixel art:** anti-aliasing can be turned off for the brush, eraser, text, shapes and selections; nearest-neighbour resampling in Image Size and Export keeps scaled pixels blocky; a pixel grid appears from 600% zoom.
 - **Safe work:** autosave with crash recovery, recent files, and `.pixl` files open by double-clicking them in Explorer.
+- **Bounding boxes** that fit the visible pixels (or the whole layer, or a box you set), with several layers transformed together.
 - **Lossless warp & perspective** for image layers, plus rulers, guides and snapping.
 - **Vector text and shapes** stay sharp at any size until you rasterize them.
 - **Fast on integrated GPUs.** Zoomed-out views draw from a cached preview pyramid, and undo data stays on the GPU.

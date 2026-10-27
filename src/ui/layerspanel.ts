@@ -203,9 +203,14 @@ export function layersPanel() {
 
     const vis = doc.shows(l);
     const r = h('div', {
-      class: 'layer-row' + (isActive ? ' active' : '') + (vis ? '' : ' hidden-layer') + (l.clip ? ' clipped' : '') + (l.type === 'group' ? ' group-row' : ''),
+      class: 'layer-row' + (isActive ? ' active' : doc.alsoSelected.includes(l.id) ? ' also' : '') + (vis ? '' : ' hidden-layer') + (l.clip ? ' clipped' : '') + (l.type === 'group' ? ' group-row' : ''),
       role: 'treeitem', 'aria-selected': String(isActive), draggable: true, style: `padding-left:${2 + depth * 14}px`,
-      onclick: () => { if (doc.activeId !== l.id) { doc.setActive(l.id, false); doc.touch('meta'); } },
+      // Ctrl+click adds or removes a layer, Shift+click selects a run of them (moved and transformed together).
+      onclick: (e: MouseEvent) => {
+        if (e.ctrlKey || e.metaKey) { doc.toggleSelected(l.id); doc.touch('meta'); return; }
+        if (e.shiftKey) { doc.selectRange(l.id); doc.touch('meta'); return; }
+        if (doc.activeId !== l.id || doc.alsoSelected.length) { doc.setActive(l.id, false); doc.touch('meta'); }
+      },
     },
     h('button', {
       class: 'eye', type: 'button', title: (vis ? 'Hide layer' : 'Show layer') + (doc.anim ? ' in this frame' : ''), 'aria-label': 'Toggle visibility',
@@ -281,7 +286,7 @@ export function layersPanel() {
     if (!d) return '';
     const s = (ls: Layer[]): unknown => ls.map((l) => [l.id, l.name, d.shows(l), l.opacity, l.blend, l.type, !!l.clip, l.mask ? [l.mask.key, l.mask.enabled] : 0,
       hasStyles(l.styles), !!l.blendIf?.on, l.type === 'raster' && !!l.warp, l.type === 'group' ? [l.open, s(l.children)] : 0]);
-    return JSON.stringify([d.activeId, d.maskEdit, s(d.layers)]);
+    return JSON.stringify([d.activeId, d.alsoSelected, d.maskEdit, s(d.layers)]);
   };
 
   const update = (kind: string) => {

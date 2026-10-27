@@ -46,7 +46,7 @@ export const DEFAULT_OPTS = {
   gradient: { kind: 'linear' as 'linear' | 'radial', toTransparent: false, opacity: 1 },
   text: { font: 'Segoe UI', size: 64, weight: 400, italic: false, align: 'left' as 'left' | 'center' | 'right', antiAlias: true },
   shape: { kind: 'rect' as 'rect' | 'ellipse' | 'line' | 'polygon' | 'star', fill: true, stroke: false, strokeWidth: 4, radius: 0, antiAlias: true, sides: 6, inner: 0.45 },
-  move: { autoSelect: false, mode: 'transform' as 'transform' | 'perspective' | 'warp' },
+  move: { autoSelect: false, mode: 'transform' as 'transform' | 'perspective' | 'warp', box: 'content' as 'content' | 'layer' | 'custom' },
   picker: { sample: 1 },
 };
 export type ToolOpts = typeof DEFAULT_OPTS;

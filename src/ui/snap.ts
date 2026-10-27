@@ -7,13 +7,14 @@ export const snapLines: { x: number[]; y: number[] } = { x: [], y: [] };
 export function clearSnapLines() { snapLines.x = []; snapLines.y = []; }
 
 /** Things worth snapping to: guides, the canvas edges and centre, and other visible layers' edges and centres. */
-export function snapTargets(excludeId?: string): { xs: number[]; ys: number[] } {
+export function snapTargets(exclude?: string | string[]): { xs: number[]; ys: number[] } {
   const doc = app.doc;
   if (!doc) return { xs: [], ys: [] };
+  const skip = new Set(typeof exclude === 'string' ? [exclude] : exclude ?? []);
   const xs = [0, doc.width / 2, doc.width], ys = [0, doc.height / 2, doc.height];
   if (app.prefs.guides) for (const g of doc.guides) (g.axis === 'x' ? xs : ys).push(g.pos);
   for (const l of visiblePlaced(doc.layers)) {
-    if (l.id === excludeId) continue;
+    if (skip.has(l.id)) continue;
     const b = doc.layerBounds(l);
     xs.push(b.x, b.x + b.w / 2, b.x + b.w);
     ys.push(b.y, b.y + b.h / 2, b.y + b.h);

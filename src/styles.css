@@ -74,7 +74,7 @@ button, select, input, textarea { font: inherit; color: inherit; }
   display: flex; align-items: center; gap: 4px; height: 36px; padding: 0 8px 0 4px;
   background: var(--panel); border-bottom: 1px solid var(--border);
 }
-.brand { display: flex; align-items: center; gap: 7px; margin-right: 10px; padding-left: 4px; }
+.brand { display: flex; align-items: center; gap: 7px; margin-right: 10px; padding-left: 2px; }
 .mono { height: 26px; width: auto; display: none; }
 .brand .logo { height: 26px; width: 26px; display: block; }
 .welcome-card .logo { width: 104px; height: 104px; margin-bottom: 4px; }
@@ -395,6 +395,7 @@ input[type="range"]:focus-visible::-webkit-slider-thumb { background: var(--acce
 }
 .layer-row:hover { background: var(--raised); }
 .layer-row.active { background: var(--accent-soft); border-left-color: var(--accent); }
+.layer-row.also { background: var(--accent-soft); border-left-color: var(--accent-line); }
 .layer-row.hidden-layer .thumb, .layer-row.hidden-layer .layer-name { opacity: .45; }
 .layer-row.dragging { opacity: .4; }
 .layer-row.drop-above { box-shadow: inset 0 2px 0 var(--accent); }

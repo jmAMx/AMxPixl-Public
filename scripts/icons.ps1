@@ -100,9 +100,9 @@ Copy-Item "$tmp\app-64.png" "$root\src-tauri\icons\64x64.png" -Force
 Copy-Item "$tmp\app-128.png" "$root\src-tauri\icons\128x128.png" -Force
 Copy-Item "$tmp\file-256.png" "$root\branding\pixl-file-256.png" -Force
 Copy-Item "$tmp\app-32.png" "$root\public\brand\favicon-32.png" -Force
-# The top bar shows the small icon at 26 CSS px; 64 px keeps it sharp on high-DPI screens.
-$i64 = Icon-Png $icon 64 $null @(0, 0, 1, 1)
-Copy-Item $i64 "$root\public\brand\pixl-icon-64.png" -Force
+# The welcome screen shows the P icon at 104 CSS px (the "Pixl" name is set beneath it); 256 px keeps it sharp.
+$i256 = Icon-Png $icon 256 $null @(0, 0, 1, 1)
+Copy-Item $i256 "$root\public\brand\pixl-icon-256.png" -Force
 $l256 = Icon-Png $logo 256 $null @(0, 0, 1, 1)
 Copy-Item $l256 "$root\public\brand\pixl-logo-256.png" -Force
 $logo.Dispose(); $icon.Dispose()

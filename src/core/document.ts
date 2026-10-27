@@ -1,5 +1,6 @@
 import { apply, invert, mapRect, roundOut, union, xformMatrix, type Rect } from './math';
 import { cropCanvas, ctx2d, layerMatrix, localBounds, newCanvas, type Pool } from './layers';
+import { pixelsChanged } from './bounds';
 import { invalidate } from './pyramid';
 import { buildMask, selOutline } from './selection';
 import type { Anim, GroupLayer, Guide, Layer, Meta, PixelTarget, PlacedLayer, RasterLayer, Selection, VPath } from './types';
@@ -159,6 +160,7 @@ export class Doc {
   /** A pixel buffer changed (painting, filters, undo); `r` limits it to a region of that buffer. */
   markPixels(key: string, notify = true, r?: Rect) {
     invalidate(this.pool.get(key), r);
+    pixelsChanged(key);
     this.dirtyKeys.add(key);
     this.noteDirty(r ? this.docRectOf(key, r) : null);
     if (notify) this.touch('pixels');
@@ -438,6 +440,39 @@ export class Doc {
   setActive(id: string | null, mask = false) {
     this.activeId = id;
     this.maskEdit = mask && !!this.active?.mask;
+    this.alsoSelected = [];
+  }
+
+  /** Layers selected along with the active one (Ctrl/Shift+click), moved and transformed together. UI state. */
+  alsoSelected: string[] = [];
+
+  /** The active layer and any others selected with it, bottom to top. */
+  selectedIds(): string[] {
+    const want = new Set([this.activeId, ...this.alsoSelected]);
+    return this.all().filter((l) => want.has(l.id)).map((l) => l.id);
+  }
+
+  /** Ctrl+click: adds a layer to the selection, or takes it out (the active layer moves to another selected one). */
+  toggleSelected(id: string) {
+    const sel = this.selectedIds();
+    if (!sel.includes(id)) { this.alsoSelected = sel; this.activeId = id; this.maskEdit = false; return; }
+    if (sel.length === 1) return;
+    const rest = sel.filter((x) => x !== id);
+    if (this.activeId === id) this.activeId = rest[rest.length - 1];
+    this.alsoSelected = rest.filter((x) => x !== this.activeId);
+  }
+
+  /** Shift+click: selects every layer from the active one to `id` in the Layers panel's order. */
+  selectRange(id: string) {
+    const order = this.all().map((l) => l.id);
+    const a = order.indexOf(this.activeId ?? id), b = order.indexOf(id);
+    if (a < 0 || b < 0) return;
+    const [lo, hi] = a < b ? [a, b] : [b, a];
+    const anchor = this.activeId;
+    this.activeId = id;
+    this.maskEdit = false;
+    this.alsoSelected = order.slice(lo, hi + 1).filter((x) => x !== id);
+    if (anchor && !this.alsoSelected.includes(anchor) && anchor !== id) this.alsoSelected.push(anchor);
   }
 
   newRasterLayer(name = this.nextName(), fill?: string): RasterLayer {

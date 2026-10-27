@@ -2,6 +2,13 @@
 
 Each version's section becomes its release notes (`scripts/release.ps1` copies it to the download page).
 
+## 0.6.4
+
+- **Bounding boxes** that fit what's on the layer. The Move tool's box hugs the visible pixels instead of the whole layer, so a small shape on a big layer gets a small box. Its handles scale it, dragging just outside a corner turns it, and X, Y, W and H in Properties give its real size and place on the canvas.
+- **Box setting** in the Move tool: **Content** (the visible pixels), **Layer** (the whole layer) or **Custom**, a box you size yourself with **Edit box**. A custom box is saved with the layer, and **Fit to content** and **Fit to layer** reset it.
+- **Several layers at once**: Ctrl+click layers in the Layers panel (Shift+click for a run of them), or Ctrl+Shift+click them on the canvas. They share one box and move, scale, turn and nudge together.
+- The top bar starts with the "Pixl" name, without the small logo, and the welcome screen shows the P icon.
+
 ## 0.6.3
 
 - **Tool groups**: right-click a tool to start a group or add it to one. A group takes one slot in the toolbox and shows the tool you used last; right-click or press and hold it to pick another. "Group Tools by Shortcut Key" sets up the usual groups in one go.

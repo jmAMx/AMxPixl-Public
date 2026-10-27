@@ -7,7 +7,9 @@ import { defaultStyles } from '../core/styles';
 import { ADJ_LABELS, HSL_BANDS, curveTable, histogram, type Histogram } from '../core/adjustments';
 import type { Doc } from '../core/document';
 import { canMove, DEFAULT_MOTION, fxDef } from '../core/effects';
-import { ctx2d, localBounds, newCanvas } from '../core/layers';
+import { layerBox } from '../core/bounds';
+import { ctx2d, layerMatrix, localBounds, newCanvas } from '../core/layers';
+import { apply } from '../core/math';
 import { renderDoc } from '../core/render';
 import type { AdjParams, AdjustLayer, Channel, CurvePts, EffectLayer, GradeWheel, Layer, LayerStyles, LevelsCh, PlacedLayer, ShapeLayer, TextLayer } from '../core/types';
 import { isPlaced } from '../core/types';
@@ -62,28 +64,36 @@ export function propertiesPanel() {
 
   const transformSection = (l: PlacedLayer) => {
     const doc = app.doc!;
-    const b = () => localBounds(l, doc.pool);
+    // X, Y, W and H describe the layer's bounding box (the Move tool's Box setting: its visible pixels by default),
+    // so they give the element's real size and place on the canvas.
+    const b = () => layerBox(l, doc.pool, app.opts.move.box, () => refresh()) ?? localBounds(l, doc.pool);
+    const corner = () => { const bb = b(); return apply(layerMatrix(l), bb.x, bb.y); };
     const size = () => {
-      if (l.type === 'shape') return { w: Math.abs(l.shape.w), h: Math.abs(l.shape.h) };
+      if (l.type === 'shape' && app.opts.move.box !== 'custom') return { w: Math.abs(l.shape.w), h: Math.abs(l.shape.h) };
       const bb = b();
       return { w: Math.abs(bb.w * l.t.sx), h: Math.abs(bb.h * l.t.sy) };
     };
     const commit = commitSelf;
-    const x = numField('X', l.t.x, (v) => { setPlacedTransform(l, { ...l.t, x: v }); commit('Move'); }, { unit: 'px' });
-    const y = numField('Y', l.t.y, (v) => { setPlacedTransform(l, { ...l.t, y: v }); commit('Move'); }, { unit: 'px' });
+    const x = numField('X', corner().x, (v) => { setPlacedTransform(l, { ...l.t, x: l.t.x + v - corner().x }); commit('Move'); }, { unit: 'px' });
+    const y = numField('Y', corner().y, (v) => { setPlacedTransform(l, { ...l.t, y: l.t.y + v - corner().y }); commit('Move'); }, { unit: 'px' });
     const setSize = (axis: 'w' | 'h', v: number) => {
+      const before = corner();
       if (l.type === 'shape') l.shape = { ...l.shape, [axis]: Math.sign(l.shape[axis] || 1) * v };
       else {
         const bb = b();
         if (axis === 'w') setPlacedTransform(l, { ...l.t, sx: Math.sign(l.t.sx) * (v / bb.w) });
         else setPlacedTransform(l, { ...l.t, sy: Math.sign(l.t.sy) * (v / bb.h) });
       }
+      // Resize from the box's top-left corner, which stays put.
+      const after = corner();
+      setPlacedTransform(l, { ...l.t, x: l.t.x + before.x - after.x, y: l.t.y + before.y - after.y });
       commit('Resize layer');
     };
     const w = numField('W', size().w, (v) => setSize('w', Math.max(1, v)), { unit: 'px' });
     const hh = numField('H', size().h, (v) => setSize('h', Math.max(1, v)), { unit: 'px' });
     const a = numField('Angle', deg(l.t.rot), (v) => { setPlacedTransform(l, { ...l.t, rot: (v * Math.PI) / 180 }); commit('Rotate'); }, { unit: '°', decimals: 1 });
-    refreshers.push(() => { x.set(l.t.x); y.set(l.t.y); const s = size(); w.set(s.w); hh.set(s.h); a.set(deg(l.t.rot)); });
+    const refresh = () => { const c = corner(); x.set(c.x); y.set(c.y); const s = size(); w.set(s.w); hh.set(s.h); a.set(deg(l.t.rot)); };
+    refreshers.push(refresh);
     let note: HTMLElement | null = null;
     if (l.type === 'raster') {
       const c = doc.canvasOf(l);

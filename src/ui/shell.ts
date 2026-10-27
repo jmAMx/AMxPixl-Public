@@ -315,7 +315,6 @@ function menubar() {
   app.on('change', syncUndo); app.on('docs', syncUndo); syncUndo();
   return h('header', { class: 'menubar' },
     h('div', { class: 'brand', title: 'AMxPixl' },
-      h('img', { class: 'logo', src: 'brand/pixl-icon-64.png', alt: '' }),
       h('span', { class: 'wordmark' }, h('span', { class: 'px-name', role: 'img', 'aria-label': 'Pixl' })),
       h('span', { class: 'app-version', title: `AMxPixl version ${__APP_VERSION__}` }, `v${__APP_VERSION__}`)),
     h('nav', { class: 'menus' }, ...buttons),
@@ -344,7 +343,7 @@ function tabs() {
 function welcome() {
   const el = h('div', { class: 'welcome' },
     h('div', { class: 'welcome-card' },
-      h('img', { class: 'logo', src: 'brand/pixl-logo-256.png', alt: '' }),
+      h('img', { class: 'logo', src: 'brand/pixl-icon-256.png', alt: '' }),
       h('h1', { class: 'wordmark big' }, h('span', { class: 'px-name', role: 'img', 'aria-label': 'Pixl' }), h('span', { class: 'dim' }, ' Editor')),
       h('p', { class: 'dim' }, 'Lossless layers, GPU adjustments, everything on this PC.'),
       h('div', { class: 'welcome-actions' },
