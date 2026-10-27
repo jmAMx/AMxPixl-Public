@@ -201,15 +201,16 @@ export function layersPanel() {
       ? h('button', { class: 'chev-btn', type: 'button', title: l.open ? 'Collapse' : 'Expand', onclick: (e: MouseEvent) => { e.stopPropagation(); l.open = !l.open; build(); } }, icon(l.open ? 'chevron' : 'chevronR'))
       : h('span', { class: 'chev-space' });
 
+    const vis = doc.shows(l);
     const r = h('div', {
-      class: 'layer-row' + (isActive ? ' active' : '') + (l.visible ? '' : ' hidden-layer') + (l.clip ? ' clipped' : '') + (l.type === 'group' ? ' group-row' : ''),
+      class: 'layer-row' + (isActive ? ' active' : '') + (vis ? '' : ' hidden-layer') + (l.clip ? ' clipped' : '') + (l.type === 'group' ? ' group-row' : ''),
       role: 'treeitem', 'aria-selected': String(isActive), draggable: true, style: `padding-left:${2 + depth * 14}px`,
       onclick: () => { if (doc.activeId !== l.id) { doc.setActive(l.id, false); doc.touch('meta'); } },
     },
     h('button', {
-      class: 'eye', type: 'button', title: l.visible ? 'Hide layer' : 'Show layer', 'aria-label': 'Toggle visibility',
-      onclick: (e: MouseEvent) => { e.stopPropagation(); setLayerProp(l.id, { visible: !l.visible }, l.visible ? 'Hide layer' : 'Show layer'); },
-    }, icon(l.visible ? 'eye' : 'eyeOff')),
+      class: 'eye', type: 'button', title: (vis ? 'Hide layer' : 'Show layer') + (doc.anim ? ' in this frame' : ''), 'aria-label': 'Toggle visibility',
+      onclick: (e: MouseEvent) => { e.stopPropagation(); setLayerProp(l.id, { visible: !vis }, vis ? 'Hide layer' : 'Show layer'); },
+    }, icon(vis ? 'eye' : 'eyeOff')),
     chevron,
     l.clip ? h('span', { class: 'clip-arrow', title: 'Clipped to the layer below' }, icon('clip')) : null,
     main, maskEl, name,
@@ -278,7 +279,7 @@ export function layersPanel() {
   const signature = () => {
     const d = app.doc;
     if (!d) return '';
-    const s = (ls: Layer[]): unknown => ls.map((l) => [l.id, l.name, l.visible, l.opacity, l.blend, l.type, !!l.clip, l.mask ? [l.mask.key, l.mask.enabled] : 0,
+    const s = (ls: Layer[]): unknown => ls.map((l) => [l.id, l.name, d.shows(l), l.opacity, l.blend, l.type, !!l.clip, l.mask ? [l.mask.key, l.mask.enabled] : 0,
       hasStyles(l.styles), !!l.blendIf?.on, l.type === 'raster' && !!l.warp, l.type === 'group' ? [l.open, s(l.children)] : 0]);
     return JSON.stringify([d.activeId, d.maskEdit, s(d.layers)]);
   };

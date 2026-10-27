@@ -71,6 +71,36 @@ function pixelStamp(color: string, d: number, flow: number) {
 }
 
 /**
+ * Fills transparent holes in `c` smoothly from the pixels around them ("pull-push"): halve it repeatedly (canvas
+ * averaging weights each pixel by its alpha), then from the smallest level up, lay each level over the enlarged
+ * one beneath it. Known pixels stay as they are; a hole takes a smooth blend of its edges at every scale.
+ */
+export function fillHoles(c: HTMLCanvasElement): HTMLCanvasElement {
+  const levels = [c];
+  while (levels.length < 14) {
+    const p = levels[levels.length - 1];
+    if (p.width <= 1 && p.height <= 1) break;
+    const n = newCanvas(Math.ceil(p.width / 2), Math.ceil(p.height / 2));
+    const x = ctx2d(n);
+    x.imageSmoothingEnabled = true;
+    x.imageSmoothingQuality = 'medium';
+    x.drawImage(p, 0, 0, n.width, n.height);
+    levels.push(n);
+  }
+  let cur = levels[levels.length - 1];
+  for (let i = levels.length - 2; i >= 0; i--) {
+    const out = cloneCanvas(levels[i]);
+    const x = ctx2d(out);
+    x.globalCompositeOperation = 'destination-over';
+    x.imageSmoothingEnabled = true;
+    x.imageSmoothingQuality = 'high';
+    x.drawImage(cur, 0, 0, out.width, out.height);
+    cur = out;
+  }
+  return cur;
+}
+
+/**
  * One brush or eraser stroke. Dabs collect in a buffer at full strength and are laid over a backup of the layer
  * at the stroke's opacity, so overlapping dabs never build past the opacity you set (like Photoshop).
  */
@@ -142,27 +172,32 @@ export class Stroke {
   /**
    * Healing, live on the GPU: keep the cloned texture but take the broad colour and light from the destination.
    * Each pixel becomes clone + (surroundings of the destination - surroundings of the source), weighted by how
-   * much was cloned. "Surroundings" is a blur that leaves out the painted area itself (the flaw being covered),
-   * so colour comes in from the edges of the stroke, much like Photoshop's healing brush. Only `rr` is rewritten.
+   * much was cloned. "Surroundings" fills the painted area (the flaw being covered) in from the stroke's edges,
+   * like Photoshop's healing brush, so even the middle of a wide stroke takes the right tone. Only `rr` is rewritten.
    */
   private healRegion(rr: Rect) {
-    // Wide strokes or scribbled patches need a wider reach to find their edges.
-    const ext = union(this.dirty, rr)!;
-    const br = Math.max(2, (this.o.size / this.pxScale) * 0.45, Math.min(ext.w, ext.h) * 0.3);
-    const pad = Math.ceil(br * 2.5);
+    const RING = 4;
+    const pad = RING * 3;
     const R = intersect({ x: rr.x - pad, y: rr.y - pad, w: rr.w + pad * 2, h: rr.h + pad * 2 }, { x: 0, y: 0, w: this.src.width, h: this.src.height });
     if (!R) return;
     const cov = cropCanvas(this.buffer, R);
-    // Cut the painted area out, then blur: the colour of what's left is a weighted average of the surroundings.
+    // Only a thin ring just outside the painted area counts as "surroundings", so a dark patch further away
+    // (or the far side of an edge) can't tint the result.
+    const spread = newCanvas(R.w, R.h);
+    const sx = ctx2d(spread);
+    sx.filter = `blur(${RING}px)`;
+    sx.drawImage(cov, 0, 0);
+    const ringGl = glops.ramp(spread, 0.004, 0.02, [1, 1, 1]);
+    const ring = ringGl ? cropCanvas(ringGl, { x: 0, y: 0, w: R.w, h: R.h }) : spread;
+    // Keep the ring, cut the painted area out, then fill the hole smoothly in from the ring.
     const around = (c: HTMLCanvasElement) => {
       const x = ctx2d(c);
+      x.setTransform(1, 0, 0, 1, 0, 0);
+      x.globalCompositeOperation = 'destination-in';
+      x.drawImage(ring, 0, 0);
       x.globalCompositeOperation = 'destination-out';
       x.drawImage(cov, 0, 0);
-      const out = newCanvas(c.width, c.height);
-      const o = ctx2d(out);
-      o.filter = `blur(${br}px)`;
-      o.drawImage(c, 0, 0);
-      return out;
+      return fillHoles(c);
     };
     const { dx, dy } = this.o.clone!;
     const C = cropCanvas(this.src, R);

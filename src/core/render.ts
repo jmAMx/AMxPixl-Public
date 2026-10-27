@@ -25,6 +25,17 @@ export interface RenderOpts {
   nearest?: boolean;
   /** Drawing the on-screen view (zoomed-in pixels show crisp). */
   screen?: boolean;
+  /** Animation frame to draw (defaults to the document's current frame). */
+  frame?: number;
+}
+
+/** Seconds into the animation at the start of `frame` (frames can have their own length). */
+export function frameTime(doc: Doc, frame: number): number {
+  const a = doc.anim;
+  if (!a) return 0;
+  let ms = 0;
+  for (let i = 0; i < Math.min(frame, a.frames.length); i++) ms += a.frames[i].ms ?? 1000 / a.fps;
+  return ms / 1000;
 }
 
 interface Env {
@@ -42,6 +53,9 @@ interface Env {
   /** Nearest-neighbour resampling (blocky pixel art). */
   nearest: boolean;
   screen: boolean;
+  frame: number;
+  /** Seconds into the animation (moves animated effects). */
+  time: number;
 }
 
 // ---------- masks ----------
@@ -80,7 +94,7 @@ function applyMask(c: HTMLCanvasElement, m: Mask, env: Env) {
 
 function filterResult(l: FilterLayer, target: HTMLCanvasElement, env: Env): HTMLCanvasElement | null {
   if (l.type === 'adjust') return glfx.apply(target, l.adj, (k) => env.doc.pool.get(k));
-  return fxEngine.apply(target, l.fx, env.scale, env.docRect);
+  return fxEngine.apply(target, l.fx, env.scale, env.docRect, env.time);
 }
 
 /** target = mix(target, result, opacity × mask), done with premultiplied adds so transparency stays exact. */
@@ -121,7 +135,7 @@ function drawFilter(l: FilterLayer, target: HTMLCanvasElement, env: Env) {
 
 // ---------- layers, groups, clipping ----------
 
-const shows = (l: Layer, env: Env) => (l.visible || env.includeHidden) && l.opacity > 0;
+const shows = (l: Layer, env: Env) => (env.doc.shows(l, env.frame) || env.includeHidden) && l.opacity > 0;
 
 /**
  * Finishes an isolated layer buffer: mask, Blend If (against what's already in `target`), styles, then composites
@@ -257,6 +271,7 @@ export function renderDoc(doc: Doc, out: HTMLCanvasElement, view: Mat, opts: Ren
     doc, view, scale: matScale(view), docRect: mapRect(view, { x: 0, y: 0, w: doc.width, h: doc.height }),
     includeHidden: !!opts.includeHidden, stopAt: opts.stopAt, out, done: false,
     nearest: opts.nearest ?? doc.resample === 'nearest', screen: !!opts.screen,
+    frame: opts.frame ?? doc.frame, time: frameTime(doc, opts.frame ?? doc.frame),
   };
   renderList(opts.layers ?? doc.layers, out, env);
   ctx.restore();

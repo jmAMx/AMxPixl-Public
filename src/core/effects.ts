@@ -26,8 +26,10 @@ export interface FxDef {
   label: string;
   group: 'Film' | 'Lens' | 'CRT & VHS' | 'Damage & Print';
   params: FxParam[];
-  /** Whether the effect uses its random seed (shows a "new variation" button). */
+  /** Whether the effect uses its random seed (shows a "new variation" button; animates by re-rolling). */
   seeded?: boolean;
+  /** Whether the shader moves with `uTime` (seconds) when the layer's motion is on. */
+  moves?: boolean;
   /** Extra blurred input: the whole image, or just its highlights above a threshold (0..1). */
   aux?: { radius: (v: V) => number; threshold?: (v: V) => number };
   uniforms: (v: V) => Uniforms;
@@ -124,7 +126,7 @@ vec4 fx(vec2 p, vec2 d) {
 }`,
   },
   {
-    kind: 'lightleak', label: 'Light Leak', group: 'Film', seeded: true,
+    kind: 'lightleak', label: 'Light Leak', group: 'Film', seeded: true, moves: true,
     params: [
       { key: 'intensity', label: 'Intensity', type: 'range', min: 0, max: 100, value: 55, unit: '%' },
       { key: 'size', label: 'Size', type: 'range', min: 10, max: 100, value: 45, unit: '%' },
@@ -139,12 +141,15 @@ vec4 fx(vec2 p, vec2 d) {
   vec2 ds = docSize(), uv = d / ds;
   float asp = ds.x / ds.y;
   vec2 dir = vec2(cos(uA.z), sin(uA.z));
-  vec2 c1 = 0.5 + dir * 0.55 + (vec2(hash1(1.0), hash1(2.0)) - 0.5) * 0.3;
-  vec2 c2 = 0.5 + dir * 0.8 + (vec2(hash1(3.0), hash1(4.0)) - 0.5) * 0.4;
+  // In motion the glow wanders and breathes (uTime is 0 for a still image).
+  vec2 wander = vec2(sin(uTime * 0.6), cos(uTime * 0.45)) * 0.08;
+  float breathe = 1.0 - 0.15 * (1.0 - cos(uTime * 1.3)) * 0.5;
+  vec2 c1 = 0.5 + dir * 0.55 + (vec2(hash1(1.0), hash1(2.0)) - 0.5) * 0.3 + wander;
+  vec2 c2 = 0.5 + dir * 0.8 + (vec2(hash1(3.0), hash1(4.0)) - 0.5) * 0.4 - wander * 0.6;
   vec2 q1 = (uv - c1) * vec2(asp, 1.0), q2 = (uv - c2) * vec2(asp, 1.0);
   float s = uA.y;
   float l1 = exp(-dot(q1, q1) / (s * s * 0.6)), l2 = exp(-dot(q2, q2) / (s * s * 0.22));
-  vec3 leak = clamp((uCol1 * l1 + uCol2 * l2 * 0.85) * uA.x * 1.5, 0.0, 1.0);
+  vec3 leak = clamp((uCol1 * l1 + uCol2 * l2 * 0.85) * uA.x * 1.5 * breathe, 0.0, 1.0);
   c.rgb = 1.0 - (1.0 - c.rgb) * (1.0 - leak);
   return c;
 }`,
@@ -234,7 +239,7 @@ vec4 fx(vec2 p, vec2 d) {
 }`,
   },
   {
-    kind: 'chromatic', label: 'Chromatic Aberration', group: 'Lens',
+    kind: 'chromatic', label: 'Chromatic Aberration', group: 'Lens', moves: true,
     params: [
       { key: 'amount', label: 'Amount', type: 'range', min: 0, max: 60, step: 0.5, value: 6, unit: 'px' },
       { key: 'mode', label: 'Type', type: 'select', value: 'radial', options: [['radial', 'Radial (lens)'], ['linear', 'Linear (shift)']] },
@@ -244,7 +249,8 @@ vec4 fx(vec2 p, vec2 d) {
     glsl: `
 vec4 fx(vec2 p, vec2 d) {
   vec2 ds = docSize();
-  vec2 off = uA.y < 0.5 ? (d - ds * 0.5) / (length(ds) * 0.5) * uA.x : vec2(cos(uA.z), sin(uA.z)) * uA.x;
+  float amt = uA.x * (1.0 + 0.35 * sin(uTime * 4.0));
+  vec2 off = uA.y < 0.5 ? (d - ds * 0.5) / (length(ds) * 0.5) * amt : vec2(cos(uA.z), sin(uA.z)) * amt;
   vec4 c = srcDoc(d);
   vec4 r = srcDoc(d + off), b = srcDoc(d - off);
   return vec4(r.r, c.g, b.b, max(c.a, max(r.a, b.a)));
@@ -277,7 +283,7 @@ vec4 fx(vec2 p, vec2 d) {
 
   // ---------- CRT & VHS ----------
   {
-    kind: 'crt', label: 'CRT Screen', group: 'CRT & VHS',
+    kind: 'crt', label: 'CRT Screen', group: 'CRT & VHS', moves: true,
     params: [
       { key: 'scan', label: 'Scanlines', type: 'range', min: 0, max: 100, value: 55, unit: '%' },
       { key: 'spacing', label: 'Line spacing', type: 'range', min: 2, max: 16, step: 0.5, value: 4, unit: 'px' },
@@ -310,7 +316,8 @@ vec4 fx(vec2 p, vec2 d) {
   vec3 c = s.rgb;
   vec3 glow = texOut(uAux, fromDoc(dd)).rgb;
   float l = lum(c);
-  float sl = pow(0.5 + 0.5 * cos(6.28318 * dd.y / uA.y), mix(2.5, 0.8, l));
+  // In motion the scanlines roll slowly down the screen.
+  float sl = pow(0.5 + 0.5 * cos(6.28318 * (dd.y - uTime * uA.y * 1.5) / uA.y), mix(2.5, 0.8, l));
   float scan = mix(1.0, sl, uA.x);
   scan = mix(1.0 - uA.x * 0.45, scan, smoothstep(1.5, 3.0, uA.y * uScale));
   vec3 mask = vec3(1.0);
@@ -323,13 +330,14 @@ vec4 fx(vec2 p, vec2 d) {
     mask = mix(vec3(1.0), 0.3 + m * 1.6, uA.z);
     mask = mix(vec3(1.0 - uA.z * 0.2), mask, smoothstep(1.0, 2.5, ms * uScale));
   }
-  c = c * scan * mask * uB.w;
+  float flick = 1.0 - 0.025 * (1.0 - cos(uTime * 47.0)) * 0.5;
+  c = c * scan * mask * uB.w * flick;
   c = 1.0 - (1.0 - c) * (1.0 - glow * uB.z);
   return vec4(c, 1.0);
 }`,
   },
   {
-    kind: 'vhs', label: 'VHS Tape', group: 'CRT & VHS', seeded: true,
+    kind: 'vhs', label: 'VHS Tape', group: 'CRT & VHS', seeded: true, moves: true,
     params: [
       { key: 'shift', label: 'Colour shift', type: 'range', min: 0, max: 30, step: 0.5, value: 4, unit: 'px' },
       { key: 'bleed', label: 'Colour bleed', type: 'range', min: 0, max: 100, value: 60, unit: '%' },
@@ -346,7 +354,7 @@ const mat3 toYIQ = mat3(0.299, 0.596, 0.211, 0.587, -0.274, -0.523, 0.114, -0.32
 const mat3 toRGB = mat3(1.0, 1.0, 1.0, 0.956, -0.272, -1.106, 0.621, -0.647, 1.703);
 vec4 fx(vec2 p, vec2 d) {
   float line = floor(d.y / 2.0);
-  float j = (vnoise(vec2(line * 0.05, 3.7)) - 0.5) * 2.0;
+  float j = (vnoise(vec2(line * 0.05, 3.7 + uTime * 3.0)) - 0.5) * 2.0;
   float tear = step(0.985 - uA.z * 0.03, hash(vec2(floor(d.y / 24.0), 3.0)));
   float shift = (j * 3.0 + tear * (hash(vec2(line, 9.0)) - 0.5) * 60.0) * uA.z;
   vec2 dd = d + vec2(shift, 0.0);
@@ -362,7 +370,8 @@ vec4 fx(vec2 p, vec2 d) {
   float streak = step(1.0 - uA.w * 0.03, hash(vec2(floor(d.x / 8.0), line)));
   col = mix(col, vec3(0.95), streak * 0.8);
   col += (hash(d + 0.37) - 0.5) * uA.w * 0.12;
-  float band = smoothstep(1.0 - 0.08 * uB.z, 1.0, vnoise(vec2(3.0, d.y / 50.0)));
+  // In motion the noise bands roll up the picture like bad tracking.
+  float band = smoothstep(1.0 - 0.08 * uB.z, 1.0, vnoise(vec2(3.0, d.y / 50.0 + uTime * 1.2)));
   col = mix(col, vec3(hash(floor(d / vec2(3.0, 1.0)))), band * 0.7 * step(0.001, uB.z));
   return vec4(col, s.a);
 }`,
@@ -449,7 +458,7 @@ vec4 fx(vec2 p, vec2 d) {
 }`,
   },
   {
-    kind: 'halftone', label: 'Halftone Dots', group: 'Damage & Print',
+    kind: 'halftone', label: 'Halftone Dots', group: 'Damage & Print', moves: true,
     params: [
       { key: 'size', label: 'Dot spacing', type: 'range', min: 3, max: 80, value: 8, unit: 'px' },
       { key: 'angle', label: 'Angle', type: 'range', min: 0, max: 90, value: 45, unit: '°' },
@@ -457,8 +466,12 @@ vec4 fx(vec2 p, vec2 d) {
       { key: 'contrast', label: 'Contrast', type: 'range', min: 50, max: 250, value: 100, unit: '%' },
       { key: 'ink', label: 'Ink', type: 'color', value: '#111111' },
       { key: 'paper', label: 'Paper', type: 'color', value: '#f4f0e6' },
+      { key: 'move', label: 'When animated', type: 'select', value: 'drift', options: [['drift', 'Dots drift'], ['rotate', 'Screen turns'], ['pulse', 'Dots pulse'], ['wave', 'Ripple']] },
     ],
-    uniforms: (v) => ({ uA: [n(v.size), (n(v.angle) * Math.PI) / 180, sel(v.mode, ['mono', 'color', 'cmyk']), n(v.contrast) / 100], uCol1: hex3(v.ink), uCol2: hex3(v.paper) }),
+    uniforms: (v) => ({
+      uA: [n(v.size), (n(v.angle) * Math.PI) / 180, sel(v.mode, ['mono', 'color', 'cmyk']), n(v.contrast) / 100],
+      uC: [sel(v.move, ['drift', 'rotate', 'pulse', 'wave']), 0, 0, 0], uCol1: hex3(v.ink), uCol2: hex3(v.paper),
+    }),
     glsl: `
 vec2 rot(vec2 v, float a) { float c = cos(a), s = sin(a); return vec2(c * v.x - s * v.y, s * v.x + c * v.y); }
 vec2 cellCenter(vec2 d, float a) { vec2 q = rot(d, -a) / uA.x; return rot((floor(q) + 0.5) * uA.x, a); }
@@ -470,23 +483,32 @@ float dotAt(vec2 d, float a, float cov) {
 }
 vec4 fx(vec2 p, vec2 d) {
   vec4 s = src(p);
+  // Motion (uTime is 0 for a still image): the dot screen slides over the picture, turns, pulses or ripples.
+  // q is where we are on the screen; the picture is read back at q - off.
+  vec2 off = uC.x < 0.5 ? vec2(uTime * uA.x * 2.0, uTime * uA.x * 0.7) : vec2(0.0);
+  if (uC.x > 2.5) off = vec2(0.0, sin(d.x / (uA.x * 6.0) + uTime * 3.0) * uA.x * 0.5);
+  float turn = uC.x > 0.5 && uC.x < 1.5 ? uTime * 0.25 : 0.0;
+  float pulse = uC.x > 1.5 && uC.x < 2.5 ? 1.0 - 0.35 * (1.0 - cos(uTime * 4.0)) * 0.5 : 1.0;
+  vec2 q = d + off;
   if (uA.z > 1.5) {
     vec3 col = vec3(1.0);
     float angs[4] = float[4](0.2618, 1.309, 0.0, 0.7854);
     for (int i = 0; i < 4; i++) {
-      vec3 cc = srcDoc(cellCenter(d, angs[i])).rgb;
+      float a = angs[i] + turn;
+      vec3 cc = srcDoc(cellCenter(q, a) - off).rgb;
       float k = 1.0 - max(cc.r, max(cc.g, cc.b));
       vec3 cmy = (1.0 - cc - k) / max(1.0 - k, 1e-3);
       float cov = i == 0 ? cmy.r : i == 1 ? cmy.g : i == 2 ? cmy.b : k;
-      float m = dotAt(d, angs[i], pow(cov, 1.0 / uA.w));
+      float m = dotAt(q, a, pow(cov, 1.0 / uA.w) * pulse);
       vec3 ink = i == 0 ? vec3(0.0, 0.68, 0.94) : i == 1 ? vec3(0.93, 0.0, 0.55) : i == 2 ? vec3(1.0, 0.94, 0.0) : vec3(0.1);
       col *= mix(vec3(1.0), ink, m);
     }
     return vec4(col * uCol2, s.a);
   }
-  vec3 cc = srcDoc(cellCenter(d, uA.y)).rgb;
-  float cov = pow(1.0 - lum(cc), 1.0 / uA.w);
-  float m = dotAt(d, uA.y, cov);
+  float a = uA.y + turn;
+  vec3 cc = srcDoc(cellCenter(q, a) - off).rgb;
+  float cov = pow(1.0 - lum(cc), 1.0 / uA.w) * pulse;
+  float m = dotAt(q, a, cov);
   vec3 ink = uA.z > 0.5 ? cc * 0.85 : uCol1;
   return vec4(mix(uCol2, ink, m), s.a);
 }`,
@@ -501,3 +523,7 @@ export function defaultFx(kind: string): FxParams {
   const def = fxDef(kind)!;
   return { kind, seed: Math.floor(Math.random() * 1000), v: Object.fromEntries(def.params.map((p) => [p.key, p.value])) };
 }
+
+/** Whether an effect can animate (re-roll its texture or move). */
+export const canMove = (kind: string) => { const d = fxDef(kind); return !!d && (!!d.seeded || !!d.moves); };
+export const DEFAULT_MOTION = { on: true, speed: 1, flicker: 12 };

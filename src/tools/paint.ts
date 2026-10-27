@@ -18,7 +18,7 @@ export function paintableTarget(doc: Doc): { target: PixelTarget; isMask: boolea
   if (!a) { toast('Add a layer first (Layer › New Layer).'); return null; }
   const pt = doc.paintTarget();
   if (pt) {
-    if (!a.visible) { toast('That layer is hidden. Show it before painting.'); return null; }
+    if (!doc.shows(a)) { toast(doc.anim ? 'That layer is hidden in this frame. Show it before painting.' : 'That layer is hidden. Show it before painting.'); return null; }
     return pt;
   }
   if (a.type === 'raster' && a.warp) toast('This layer is warped. Apply the warp first (Layer › Transform › Apply Warp) to paint on it.');

@@ -2,7 +2,7 @@ import { apply, invert, mapRect, roundOut, union, xformMatrix, type Rect } from 
 import { cropCanvas, ctx2d, layerMatrix, localBounds, newCanvas, type Pool } from './layers';
 import { invalidate } from './pyramid';
 import { buildMask, selOutline } from './selection';
-import type { GroupLayer, Guide, Layer, Meta, PixelTarget, PlacedLayer, RasterLayer, Selection } from './types';
+import type { Anim, GroupLayer, Guide, Layer, Meta, PixelTarget, PlacedLayer, RasterLayer, Selection } from './types';
 import { isPlaced } from './types';
 
 /**
@@ -57,6 +57,10 @@ export class Doc {
   quickMask: string | null = null;
   /** How layers are resampled when scaled: smooth, or nearest neighbour for blocky pixel art. */
   resample: 'smooth' | 'nearest' = 'smooth';
+  /** Frame animation, or null for a still image. */
+  anim: Anim | null = null;
+  /** The animation frame being shown and edited (UI state, not part of history). */
+  frame = 0;
 
   /** Painting goes to the active layer's mask instead of its pixels (UI state, not part of history). */
   maskEdit = false;
@@ -100,6 +104,12 @@ export class Doc {
   get activePlaced(): PlacedLayer | null { const a = this.active; return isPlaced(a) ? a : null; }
   get activeRaster(): RasterLayer | null { const a = this.active; return a?.type === 'raster' ? a : null; }
 
+  /** Whether a layer shows in animation frame `frame` (its eye, unless that frame says otherwise). */
+  shows(l: Layer, frame = this.frame): boolean {
+    const o = this.anim?.frames[frame]?.vis[l.id];
+    return o ?? l.visible;
+  }
+
   /** All layers, depth-first, bottom to top. */
   all(): Layer[] { return flatLayers(this.layers); }
 
@@ -118,7 +128,7 @@ export class Doc {
   snapshot(): Meta {
     return structuredClone({
       width: this.width, height: this.height, layers: this.layers, activeId: this.activeId,
-      selection: this.selection, counter: this.counter, guides: this.guides, quickMask: this.quickMask, resample: this.resample,
+      selection: this.selection, counter: this.counter, guides: this.guides, quickMask: this.quickMask, resample: this.resample, anim: this.anim,
     });
   }
 
@@ -127,6 +137,8 @@ export class Doc {
     this.width = c.width; this.height = c.height; this.layers = c.layers;
     this.activeId = c.activeId; this.selection = c.selection; this.counter = c.counter; this.guides = c.guides ?? []; this.quickMask = c.quickMask ?? null;
     this.resample = c.resample ?? 'smooth';
+    this.anim = c.anim ?? null;
+    this.frame = this.anim ? Math.min(this.frame, this.anim.frames.length - 1) : 0;
     if (!this.active?.mask) this.maskEdit = false;
   }
 

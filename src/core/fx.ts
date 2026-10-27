@@ -16,6 +16,7 @@ uniform vec2 uRes;
 uniform float uScale;
 uniform vec4 uDoc;
 uniform float uSeed;
+uniform float uTime;
 uniform vec4 uA, uB, uC;
 uniform vec3 uCol1, uCol2;
 vec2 fromDoc(vec2 d) { return uDoc.xy + d * uScale; }
@@ -119,7 +120,7 @@ class FXEngine {
       gl.linkProgram(p);
       if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(`${key}: ${gl.getProgramInfoLog(p)}`);
       prog = { p, u: new Map() };
-      for (const n of ['uSrc', 'uAux', 'uRes', 'uScale', 'uDoc', 'uSeed', 'uA', 'uB', 'uC', 'uCol1', 'uCol2', 'uThreshold']) prog.u.set(n, gl.getUniformLocation(p, n));
+      for (const n of ['uSrc', 'uAux', 'uRes', 'uScale', 'uDoc', 'uSeed', 'uTime', 'uA', 'uB', 'uC', 'uCol1', 'uCol2', 'uThreshold']) prog.u.set(n, gl.getUniformLocation(p, n));
     } catch (err) {
       console.error('Effect shader failed', err);
     }
@@ -137,7 +138,7 @@ class FXEngine {
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
   }
 
-  private run(prog: Prog, w: number, h: number, env: FxEnv & { doc: [number, number, number, number] }, seed: number, uni: Record<string, number[]>) {
+  private run(prog: Prog, w: number, h: number, env: FxEnv & { doc: [number, number, number, number]; time: number }, seed: number, uni: Record<string, number[]>) {
     const gl = this.gl!;
     gl.viewport(0, 0, w, h);
     gl.useProgram(prog.p);
@@ -151,6 +152,8 @@ class FXEngine {
     gl.uniform1f(prog.u.get('uScale')!, env.scale);
     gl.uniform4f(prog.u.get('uDoc')!, ...env.doc);
     gl.uniform1f(prog.u.get('uSeed')!, seed % 1000);
+    const tl = prog.u.get('uTime');
+    if (tl) gl.uniform1f(tl, env.time);
     for (const [k, v] of Object.entries(uni)) {
       const loc = prog.u.get(k);
       if (!loc) continue;
@@ -177,16 +180,20 @@ class FXEngine {
 
   /**
    * Applies an effect to `src`. `docRect` is the document's rectangle in `src` pixels and `scale` how many of
-   * those pixels one document pixel covers. Returns a canvas the same size as `src`, or null if unavailable.
+   * those pixels one document pixel covers. `time` (seconds) is where an animation is: with the effect's motion on,
+   * textures re-roll and moving parts move. Returns a canvas the same size as `src`, or null if unavailable.
    */
-  apply(src: HTMLCanvasElement, fx: FxParams, scale: number, docRect: { x: number; y: number; w: number; h: number }): HTMLCanvasElement | null {
+  apply(src: HTMLCanvasElement, fx: FxParams, scale: number, docRect: { x: number; y: number; w: number; h: number }, time = 0): HTMLCanvasElement | null {
     const def: FxDef | undefined = fxDef(fx.kind);
     if (!def || !this.gl || src.width > this.maxSize || src.height > this.maxSize) return null;
     const prog = this.program(def.kind, def.glsl);
     if (!prog) return null;
     const w = src.width, h = src.height;
     if (this.canvas.width !== w || this.canvas.height !== h) { this.canvas.width = w; this.canvas.height = h; }
-    const env = { scale, doc: [docRect.x, docRect.y, docRect.w, docRect.h] as [number, number, number, number] };
+    const m = fx.motion?.on ? fx.motion : null;
+    const env = { scale, doc: [docRect.x, docRect.y, docRect.w, docRect.h] as [number, number, number, number], time: m ? time * m.speed : 0 };
+    // Random textures (grain, dust, glitches) change `flicker` times a second.
+    const seed = m && def.seeded ? fx.seed + Math.floor(time * m.flicker) * 61 : fx.seed;
     this.upload(this.srcTex, src, 0);
     if (def.aux) {
       const radius = Math.max(0.5, def.aux.radius(fx.v) * scale);
@@ -195,7 +202,7 @@ class FXEngine {
       if (thr !== undefined) {
         const ex = this.program('__extract', EXTRACT);
         if (!ex) return null;
-        this.run(ex, w, h, env, fx.seed, { uThreshold: [thr] });
+        this.run(ex, w, h, env, seed, { uThreshold: [thr] });
         // Copy out of the GL canvas before it's reused for the final pass.
         if (this.stage.width !== w || this.stage.height !== h) { this.stage.width = w; this.stage.height = h; }
         const sx = ctx2d(this.stage);
@@ -206,7 +213,7 @@ class FXEngine {
       this.upload(this.auxTex, this.blurred(auxSrc, radius), 1);
     }
     const uni = def.uniforms(fx.v) as Record<string, number[]>;
-    this.run(prog, w, h, env, fx.seed, uni);
+    this.run(prog, w, h, env, seed, uni);
     return this.canvas;
   }
 }

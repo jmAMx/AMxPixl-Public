@@ -118,8 +118,18 @@ export interface Mask { key: string; t: Xform; enabled: boolean; density: number
 /** Anything with a pixel buffer that tools can paint on: a raster layer or a mask. */
 export interface PixelTarget { key: string; t: Xform }
 
-/** An effect layer's settings: which effect, a random seed for its texture, and its parameter values. */
-export interface FxParams { kind: string; seed: number; v: Record<string, number | string | boolean> }
+/**
+ * An effect layer's settings: which effect, a random seed for its texture, and its parameter values. With `motion`
+ * on, the effect moves over the animation's frames: grain and damage re-roll, scanlines roll, dots drift.
+ */
+export interface FxParams { kind: string; seed: number; v: Record<string, number | string | boolean>; motion?: FxMotion }
+/** `speed` scales the movement (1 = normal); `flicker` is how many times a second random textures change. */
+export interface FxMotion { on: boolean; speed: number; flicker: number }
+
+/** One animation frame: which layers it shows or hides (others follow their own eye), and how long it's held. */
+export interface AnimFrame { id: string; vis: Record<string, boolean>; ms?: number }
+/** Frame animation: frames play in order at `fps` (a frame's own `ms` overrides its length). */
+export interface Anim { fps: number; frames: AnimFrame[]; loop: boolean }
 
 export interface RasterLayer extends LayerBase { type: 'raster'; key: string; t: Xform; warp?: Warp | null }
 export interface TextLayer extends LayerBase { type: 'text'; t: Xform; text: TextProps }
@@ -160,4 +170,6 @@ export interface Meta {
   quickMask?: string | null;
   /** Nearest neighbour keeps pixel art blocky when layers or the image are scaled. Missing means smooth. */
   resample?: 'smooth' | 'nearest';
+  /** Frame animation (GIF/video), or none for a still image. */
+  anim?: Anim | null;
 }

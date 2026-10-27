@@ -68,8 +68,10 @@ void main() {
 const HEAL = HEAD + `
 void main() {
   vec4 c = at(uA), s = at(uB), d = at(uC);
-  // s and d are averages of the surroundings; where almost nothing surrounds a pixel they're unreliable.
-  float k = at(uD).a * uP.x * smoothstep(0.004, 0.05, min(s.a, d.a));
+  // How much of this pixel is new clone: on an empty layer a soft edge is already faded by its own alpha, so it
+  // takes the full correction. s and d are fills of the surroundings; where almost nothing surrounds a pixel
+  // they're unreliable.
+  float k = clamp(at(uD).a * uP.x / max(c.a, 0.001), 0.0, 1.0) * smoothstep(0.004, 0.05, min(s.a, d.a));
   o = vec4(clamp(c.rgb + (d.rgb - s.rgb) * k, 0.0, 1.0), c.a);
 }`;
 

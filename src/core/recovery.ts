@@ -73,6 +73,7 @@ export async function restoreRecovery(uid: string): Promise<Doc | null> {
   doc.counter = r.meta.counter;
   doc.guides = r.meta.guides ?? [];
   doc.resample = r.meta.resample ?? 'smooth';
+  doc.anim = r.meta.anim ?? null;
   doc.setSelection(r.meta.selection ?? null);
   doc.quickMask = r.meta.quickMask ?? null;
   doc.file = r.file;

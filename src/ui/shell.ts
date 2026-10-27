@@ -6,11 +6,12 @@ import { FILTERS } from '../core/filters';
 import { glfx } from '../core/glfx';
 import { view } from './canvasview';
 import { colorPanel } from './colorpanel';
-import { aboutDialog, canvasSizeDialog, colorRangeDialog, exportDialog, filterDialog, imageSizeDialog, modifySelectionDialog, newDocDialog, newGuideDialog, shortcutsDialog, updateDialog } from './dialogs';
+import { aboutDialog, animExportDialog, canvasSizeDialog, colorRangeDialog, exportDialog, filterDialog, imageSizeDialog, modifySelectionDialog, newDocDialog, newGuideDialog, shortcutsDialog, updateDialog } from './dialogs';
 import { h, isTyping } from './dom';
 import { historyPanel } from './historypanel';
 import { adjustmentMenuItems, effectMenuItems, layersPanel, looksMenuItems, maskMenuItems } from './layerspanel';
 import { propertiesPanel } from './properties';
+import { timelinePanel, togglePlay } from './timeline';
 import { closePopups, dialogOpen, icon, popupMenu, toast, type MenuItem } from './widgets';
 
 // ---------- menus & shortcuts ----------
@@ -47,6 +48,7 @@ const MENUS: MenuDef[] = [
       { label: 'Save', accel: 'Ctrl+S', run: () => A.saveDoc(), enabled: hasDoc },
       { label: 'Save As…', accel: 'Ctrl+Shift+S', run: () => A.saveDoc(app.doc, true), enabled: hasDoc },
       { label: 'Export Image…', accel: 'Ctrl+Shift+E', run: exportDialog, enabled: hasDoc },
+      { label: 'Export Animation (GIF / Video)…', accel: 'Ctrl+Alt+Shift+E', run: animExportDialog, enabled: hasDoc },
       'sep',
       { label: 'Close', accel: 'Ctrl+W', run: () => A.closeDoc(), enabled: hasDoc },
     ],
@@ -160,6 +162,10 @@ const MENUS: MenuDef[] = [
       { label: 'Rulers', accel: 'Ctrl+R', run: () => app.setPrefs({ rulers: !app.prefs.rulers }), checked: () => app.prefs.rulers },
       { label: 'Guides', accel: 'Ctrl+;', run: () => app.setPrefs({ guides: !app.prefs.guides }), checked: () => app.prefs.guides },
       { label: 'Snap', accel: 'Ctrl+Shift+;', run: () => app.setPrefs({ snap: !app.prefs.snap }), checked: () => app.prefs.snap },
+      { label: 'Timeline', accel: 'Ctrl+Shift+T', run: () => app.setPrefs({ dock: { ...app.prefs.dock, timeline: !app.prefs.dock.timeline } }), checked: () => !!app.prefs.dock.timeline },
+      { label: 'Play / Pause Animation', run: togglePlay, enabled: () => !!app.doc?.anim },
+      { label: 'Onion Skin', run: () => app.setPrefs({ onion: !app.prefs.onion }), checked: () => app.prefs.onion },
+      'sep',
       { label: 'Pixel Grid (600% and up)', accel: "Ctrl+'", run: () => app.setPrefs({ pixelGrid: !app.prefs.pixelGrid }), checked: () => app.prefs.pixelGrid },
       { label: 'New Guide…', run: newGuideDialog, enabled: hasDoc },
       { label: 'Clear Guides', run: A.clearGuides, enabled: () => !!app.doc?.guides.length },
@@ -298,8 +304,7 @@ function menubar() {
   app.on('change', syncUndo); app.on('docs', syncUndo); syncUndo();
   return h('header', { class: 'menubar' },
     h('div', { class: 'brand', title: 'AMxPixl' },
-      h('img', { class: 'mono for-dark', src: 'brand/pixl-dark-32.svg', alt: '' }),
-      h('img', { class: 'mono for-light', src: 'brand/pixl-light-32.svg', alt: '' }),
+      h('img', { class: 'logo', src: 'brand/pixl-mark-32.svg', alt: '' }),
       h('span', { class: 'wordmark' }, h('span', { class: 'px-name' }, 'Pixl')),
       h('span', { class: 'app-version', title: `AMxPixl version ${__APP_VERSION__}` }, `v${__APP_VERSION__}`)),
     h('nav', { class: 'menus' }, ...buttons),
@@ -374,8 +379,7 @@ function tabs() {
 function welcome() {
   const el = h('div', { class: 'welcome' },
     h('div', { class: 'welcome-card' },
-      h('img', { class: 'mono for-dark', src: 'brand/pixl-dark.svg', alt: '' }),
-      h('img', { class: 'mono for-light', src: 'brand/pixl-light.svg', alt: '' }),
+      h('img', { class: 'logo', src: 'brand/pixl-logo-256.png', alt: '' }),
       h('h1', { class: 'wordmark big' }, h('span', { class: 'px-name' }, 'Pixl'), h('span', { class: 'dim' }, ' Editor')),
       h('p', { class: 'dim' }, 'Lossless layers, GPU adjustments, everything on this PC.'),
       h('div', { class: 'welcome-actions' },
@@ -483,7 +487,7 @@ export function mountShell(root: HTMLElement) {
     optionsBar(),
     h('div', { class: 'main' },
       toolbox(),
-      h('section', { class: 'center' }, tabs(), ws),
+      h('section', { class: 'center' }, tabs(), ws, timelinePanel()),
       dock()),
     statusbar());
   window.addEventListener('keydown', onKey);

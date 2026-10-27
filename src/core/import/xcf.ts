@@ -201,7 +201,8 @@ function readFilter(r: Reader, ptr: number, wide: boolean): XcfFilter {
         const v: number[] = [];
         for (let i = 0; i + 4 <= n; i += 4) v.push(dv.getFloat32(i, true));
         f.args[name] = v;
-      } else if (t === 6 || t === 5) f.args[name] = readString(r);
+      } else if (t === 6) f.args[name] = readString(r);
+      // 5 = enum (stored as its number), 1 = int, 2 = boolean, 3 = float.
       else if (left === 8) f.args[name] = new DataView(r.buf, r.pos, 8).getFloat64(0);
       else if (left === 4) f.args[name] = t === 3 ? r.f32() : r.i32();
       else f.args[name] = left;
@@ -233,7 +234,7 @@ async function applyFilters(r: Reader, canvas: HTMLCanvasElement, filters: XcfFi
   const applied: string[] = [], skipped: string[] = [];
   for (const f of filters) {
     const before = px.d.slice();
-    if (!applyGimpFilter(px, f)) { skipped.push(f.op.split(':')[1]); continue; }
+    if (!applyGimpFilter(px, f)) { skipped.push(f.op.split(':')[1]); if (skippedFilters.push(f) > 50) skippedFilters.shift(); continue; }
     applied.push(f.op.split(':')[1]);
     let mask: Uint8ClampedArray | null = null;
     if (f.maskPtr) {
@@ -263,7 +264,9 @@ async function applyFilters(r: Reader, canvas: HTMLCanvasElement, filters: XcfFi
   return out;
 }
 
-export const __xcfDebug = { readFilter, readFilterPtrs, readString, readProps, PROP, SPACES };
+/** Filters left off during imports (for checking new ones against GIMP). */
+const skippedFilters: XcfFilter[] = [];
+export const __xcfDebug = { readFilter, readFilterPtrs, readString, readProps, PROP, SPACES, skippedFilters };
 
 /**
  * Opens a GIMP .xcf (GIMP 2.x and 3.x): layers with names, positions, opacity, visibility and blend modes, layer

@@ -1,12 +1,12 @@
 import { app } from '../app';
 import {
-  applyMask, applyWarp, clearStyles, deleteMask, editBlendIf, editStyles, flipLayer, invertMask, loadLut, rasterizeLayer, removeWarp,
-  resetTransform, setMaskProp, setPlacedTransform,
+  applyMask, applyWarp, clearStyles, createAnimation, deleteMask, editBlendIf, editStyles, flipLayer, invertMask, loadLut, rasterizeLayer,
+  removeWarp, resetTransform, setMaskProp, setPlacedTransform,
 } from '../actions';
 import { defaultStyles } from '../core/styles';
 import { ADJ_LABELS, HSL_BANDS, curveTable, histogram, type Histogram } from '../core/adjustments';
 import type { Doc } from '../core/document';
-import { fxDef } from '../core/effects';
+import { canMove, DEFAULT_MOTION, fxDef } from '../core/effects';
 import { ctx2d, localBounds, newCanvas } from '../core/layers';
 import { renderDoc } from '../core/render';
 import type { AdjParams, AdjustLayer, Channel, CurvePts, EffectLayer, GradeWheel, Layer, LayerStyles, LevelsCh, PlacedLayer, ShapeLayer, TextLayer } from '../core/types';
@@ -313,7 +313,26 @@ export function propertiesPanel() {
       h('div', { class: 'btn-row' },
         def.seeded ? h('button', { class: 'btn small', type: 'button', title: 'Re-roll the random pattern', onclick: () => { l.fx = { ...l.fx, seed: Math.floor(Math.random() * 1000) }; e.live(); e.done(); } }, icon('dice'), 'New variation') : null,
         h('button', { class: 'btn small', type: 'button', onclick: () => { l.fx = { ...l.fx, v: Object.fromEntries(def.params.map((p) => [p.key, p.value])) }; e.live(); e.done(); build(true); } }, 'Reset')),
-      h('p', { class: 'props-note' }, 'Affects everything below this layer (or only its group, or the layer it is clipped to). Add a mask to limit where it applies.'));
+      h('p', { class: 'props-note' }, 'Affects everything below this layer (or only its group, or the layer it is clipped to). Add a mask to limit where it applies.'),
+      ...(canMove(l.fx.kind) ? motionControls(l, def.seeded ?? false, e) : []));
+  };
+
+  /** Animate an effect: it moves across the animation's frames (Timeline) and in GIF/video exports. */
+  const motionControls = (l: EffectLayer, seeded: boolean, e: { live: () => void; done: () => void }): HTMLElement[] => {
+    const m = l.fx.motion ?? { ...DEFAULT_MOTION, on: false };
+    const setM = (patch: Partial<typeof m>, final: boolean) => { l.fx = { ...l.fx, motion: { ...m, ...patch } }; Object.assign(m, patch); e.live(); if (final) e.done(); };
+    const doc = app.doc!;
+    return [
+      h('div', { class: 'prop-sub' }, 'Motion'),
+      checkbox('Animate', m.on, (v) => { setM({ on: v }, true); build(true); }, 'Make this effect move over the frames of an animation'),
+      ...(m.on ? [
+        slider({ label: 'Speed', min: 0.1, max: 4, step: 0.1, value: m.speed, unit: '×', onInput: (v) => setM({ speed: v }, false), onChange: e.done }),
+        seeded ? slider({ label: 'Changes / sec', min: 1, max: 30, value: m.flicker, onInput: (v) => setM({ flicker: v }, false), onChange: e.done }) : null,
+        doc.anim ? h('p', { class: 'props-note' }, 'Press play in the Timeline to preview it.')
+          : h('div', { class: 'btn-row' }, h('span', { class: 'dim' }, 'No animation yet.'),
+            h('button', { class: 'btn small', type: 'button', onclick: () => createAnimation('loop') }, 'Make a loop')),
+      ].filter(Boolean) as HTMLElement[] : []),
+    ];
   };
 
   const maskSection = (l: Layer) => {

@@ -95,6 +95,7 @@ export async function decodePixl(blob: Blob, fallbackName: string): Promise<Doc>
   doc.counter = m.counter || doc.layers.length + 1;
   doc.guides = m.guides ?? [];
   doc.resample = m.resample ?? 'smooth';
+  doc.anim = m.anim ?? null;
   doc.resetHistory('Open');
   return doc;
 }

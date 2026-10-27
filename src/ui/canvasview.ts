@@ -1,5 +1,5 @@
 import { app } from '../app';
-import { ctx2d } from '../core/layers';
+import { ctx2d, newCanvas } from '../core/layers';
 import { intersect, invert, type Mat, type Pt } from '../core/math';
 import { renderDoc } from '../core/render';
 import type { PInfo, Tool } from '../tools/tool';
@@ -14,6 +14,8 @@ class CanvasView {
   readonly canvas = h('canvas', { class: 'view' });
   private composite = document.createElement('canvas');
   private qmTint = document.createElement('canvas');
+  private onionCanvas = document.createElement('canvas');
+  private onion: HTMLCanvasElement | null = null;
   private compRect = { x: 0, y: 0, w: 0, h: 0 };
   private compScale = 1;
   /** A pointer/slider drag is in progress somewhere in the app. */
@@ -199,6 +201,33 @@ class CanvasView {
         const t0 = performance.now();
         renderDoc(d, this.composite, [z * k, 0, 0, z * k, (dx - vr.x) * k, (dy - vr.y) * k], { screen: true });
         this.noteFrame(performance.now() - t0, k);
+        // Onion skin: the frames either side, tinted (red before, green after), for lining up motion.
+        const a = d.anim;
+        this.onion = null;
+        if (a && app.prefs.onion && !app.playing && a.frames.length > 1) {
+          const oc = this.onionCanvas;
+          if (oc.width !== this.composite.width || oc.height !== this.composite.height) { oc.width = this.composite.width; oc.height = this.composite.height; }
+          const ox = ctx2d(oc);
+          ox.clearRect(0, 0, oc.width, oc.height);
+          const tmp = newCanvas(oc.width, oc.height);
+          for (const [f, tint] of [[d.frame - 1, 'rgb(255,60,60)'], [d.frame + 1, 'rgb(40,220,120)']] as [number, string][]) {
+            if (f < 0 || f >= a.frames.length) continue;
+            // Only what that frame shows and this one doesn't, so the shared background isn't washed out.
+            const only = d.layers.filter((l) => d.shows(l, f) && !d.shows(l));
+            if (!only.length) continue;
+            renderDoc(d, tmp, [z * k, 0, 0, z * k, (dx - vr.x) * k, (dy - vr.y) * k], { screen: true, frame: f, layers: only });
+            const tx = ctx2d(tmp);
+            tx.globalCompositeOperation = 'source-atop';
+            tx.globalAlpha = 0.45;
+            tx.fillStyle = tint;
+            tx.fillRect(0, 0, tmp.width, tmp.height);
+            tx.globalCompositeOperation = 'source-over';
+            tx.globalAlpha = 1;
+            ox.globalAlpha = 0.3;
+            ox.drawImage(tmp, 0, 0);
+          }
+          this.onion = oc;
+        }
         this.compRect = vr;
         this.compScale = k;
         this.dirty = false;
@@ -206,6 +235,7 @@ class CanvasView {
       ctx.imageSmoothingEnabled = true;
       if (k === 1) ctx.drawImage(this.composite, vr.x, vr.y);
       else ctx.drawImage(this.composite, vr.x, vr.y, vr.w, vr.h);
+      if (this.onion) ctx.drawImage(this.onion, vr.x, vr.y, vr.w, vr.h);
       // Pixel grid: one line per image pixel once each pixel is big enough to see (600% and up).
       if (app.prefs.pixelGrid && d.zoom >= 6) {
         const i0 = Math.max(0, Math.floor((vr.x - dx) / z)), i1 = Math.min(d.width, Math.ceil((vr.x + vr.w - dx) / z));

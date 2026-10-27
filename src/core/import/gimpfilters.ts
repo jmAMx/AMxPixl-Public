@@ -193,15 +193,148 @@ function emboss(p: Px, a: Record<string, FilterArg>) {
 }
 
 /**
- * GEGL video degradation (approximation): each pixel keeps one colour channel in a staggered RGB pattern, like
- * a CRT's phosphors.
+ * GEGL median-blur (radius 1) as the bevel uses it: alpha takes the given percentile of its 3×3 neighbourhood,
+ * which grows the shape's edge slightly. (The colour median is skipped: the bevel blurs the colour right after.)
  */
-function videoDegradation(p: Px) {
+function median3(p: Px, alphaPct: number) {
+  const { w, h, d } = p;
+  const out = new Float32Array(w * h);
+  const v = new Float32Array(9);
+  const k = Math.min(8, Math.round((alphaPct / 100) * 8));
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    let n = 0;
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+      const xx = Math.min(w - 1, Math.max(0, x + dx)), yy = Math.min(h - 1, Math.max(0, y + dy));
+      v[n++] = d[(yy * w + xx) * 4 + 3];
+    }
+    v.sort();
+    out[y * w + x] = v[k];
+  }
+  for (let i = 0; i < out.length; i++) d[i * 4 + 3] = out[i];
+}
+
+/** SVG-style blend of `top` over `base` in linear light, premultiplied (how GEGL's blend ops work). */
+function svgBlend(base: Px, top: Px, mode: number) {
+  const b = base.d, t = top.d;
+  const f = (s: number, sa: number, dd: number, da: number) => {
+    switch (mode) {
+      case 0: return s; // replace ("none")
+      case 2: return s * dd + s * (1 - da) + dd * (1 - sa); // multiply
+      case 3: { // colour dodge
+        if (s * da + dd * sa >= sa * da) return sa * da + s * (1 - da) + dd * (1 - sa);
+        return (dd * sa) / (1 - s / Math.max(sa, 1e-6)) * (sa > 0 ? 1 : 0) + s * (1 - da) + dd * (1 - sa);
+      }
+      case 4: return Math.min(s * da, dd * sa) + s * (1 - da) + dd * (1 - sa); // darken
+      case 5: return Math.max(s * da, dd * sa) + s * (1 - da) + dd * (1 - sa); // lighten
+      case 6: return s + dd; // add
+      default: // hard light
+        return 2 * s <= sa
+          ? 2 * s * dd + s * (1 - da) + dd * (1 - sa)
+          : sa * da - 2 * (da - dd) * (sa - s) + s * (1 - da) + dd * (1 - sa);
+    }
+  };
+  for (let i = 0; i < b.length; i += 4) {
+    const sa = t[i + 3], da = b[i + 3];
+    const oa = mode === 0 ? sa : sa + da - sa * da;
+    for (let c = 0; c < 3; c++) {
+      const s = toLin(t[i + c]) * sa, dd = toLin(b[i + c]) * da;
+      const o = f(s, sa, dd, da);
+      b[i + c] = oa > 1e-6 ? toSrgb(clamp01(o / oa)) : 0;
+    }
+    b[i + 3] = clamp01(oa);
+  }
+}
+
+/** Distance (in pixels) from each pixel to the nearest transparent one, by the chosen metric (two-pass chamfer). */
+function distanceMap(p: Px, metric: number): Float32Array {
+  const { w, h, d } = p;
+  const INF = 1e9, dist = new Float32Array(w * h);
+  for (let i = 0; i < w * h; i++) dist[i] = d[i * 4 + 3] > 0.5 ? INF : 0;
+  const diag = metric === 0 ? Math.SQRT2 : metric === 1 ? 2 : 1; // euclidean (approx.), manhattan, chebyshev
+  const at = (x: number, y: number) => (x < 0 || y < 0 || x >= w || y >= h ? 0 : dist[y * w + x]);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const i = y * w + x;
+    if (!dist[i]) continue;
+    dist[i] = Math.min(dist[i], at(x - 1, y) + 1, at(x, y - 1) + 1, at(x - 1, y - 1) + diag, at(x + 1, y - 1) + diag);
+  }
+  for (let y = h - 1; y >= 0; y--) for (let x = w - 1; x >= 0; x--) {
+    const i = y * w + x;
+    if (!dist[i]) continue;
+    dist[i] = Math.min(dist[i], at(x + 1, y) + 1, at(x, y + 1) + 1, at(x + 1, y + 1) + diag, at(x - 1, y + 1) + diag);
+  }
+  return dist;
+}
+
+/**
+ * GEGL bevel (GIMP 3's Filters › Light and Shadow › Bevel). Bump: blur the layer, light the blur as a height map
+ * and blend that lighting back over it, then firm up the soft edge. Chamfer: light a distance map instead, so the
+ * edge slopes evenly. Follows GEGL's node graph; the final edge clean-up is approximated.
+ */
+function bevel(p: Px, a: Record<string, FilterArg>) {
+  const type = num(a.type, 0), mode = num(a.blendmode, 1);
+  const az = num(a.azimuth, 68), el = num(a.elevation, 25), depth = num(a.depth, 40);
+  median3(p, 80);
+  if (type === 1) {
+    gaussianBlur(p, { 'std-dev-x': num(a.radius, 3), 'std-dev-y': num(a.radius, 3) });
+    const light: Px = { w: p.w, h: p.h, d: p.d.slice() };
+    emboss(light, { azimuth: az, elevation: el, depth });
+    if (mode === 0) {
+      // No blending: the lighting itself, with its alpha boosted.
+      p.d.set(light.d);
+      for (let i = 3; i < p.d.length; i += 4) p.d[i] = clamp01(p.d[i] * 2.2);
+      return;
+    }
+    svgBlend(p, light, mode);
+    // Firm up the edge: boost alpha, then drop the faintest fringe.
+    for (let i = 3; i < p.d.length; i += 4) {
+      const al = clamp01(p.d[i] * 1.7);
+      p.d[i] = al < 0.4 ? al * Math.max(0, (al - 0.15) / 0.25) : al;
+    }
+    return;
+  }
+  // Chamfer: emboss a distance map of the shape, at 80% opacity, blended over the shape and kept inside it.
+  const dist = distanceMap(p, num(a.metric, 2));
+  const light: Px = { w: p.w, h: p.h, d: new Float32Array(p.d.length) };
+  for (let i = 0; i < dist.length; i++) {
+    const v = Math.min(1, dist[i] / 255);
+    light.d[i * 4] = light.d[i * 4 + 1] = light.d[i * 4 + 2] = v;
+    light.d[i * 4 + 3] = 1;
+  }
+  emboss(light, { azimuth: az, elevation: el, depth: Math.max(1, Math.trunc((depth / 100) * 15)) });
+  for (let i = 3; i < light.d.length; i += 4) light.d[i] = 0.8;
+  const alpha = Float32Array.from({ length: dist.length }, (_, i) => p.d[i * 4 + 3]);
+  svgBlend(p, light, mode);
+  for (let i = 0; i < alpha.length; i++) p.d[i * 4 + 3] = alpha[i];
+}
+
+/** GEGL video-degradation patterns: [width, height, which channel (0 R, 1 G, 2 B) each cell keeps]. */
+const VIDEO_PATTERNS: [number, number, string][] = ([
+  ['01 02 12 10 20 21'], // staggered
+  ['0011 0011 0022 0022 1122 1122 1100 1100 2200 2200 2211 2211'], // large staggered
+  ['0 1 2'], // striped
+  ['0 0 1 1 2 2'], // wide striped
+  ['01 01 02 02 12 12 10 10 20 20 21 21'], // long staggered
+  ['012 201 120'], // 3x3
+  ['001122 001122 220011 220011 112200 112200'], // large 3x3
+  ['220000 222002 222222 222112 221111 111111 001111 000110 000000 000220 002222 222222 112222 111221 111111 111001 110000 000000'], // hex
+  ['01200 11120 01222 00120 01112 20122 00012 20111 22012 20001 12011 22201 12000 11201 12220'], // dots
+] as [string][]).map(([rows]) => { const r = rows.split(' '); return [r[0].length, r.length, r.join('')]; });
+
+/**
+ * GEGL video degradation: a CRT-style RGB pattern. Each pixel keeps one colour channel; "additive" (the default)
+ * instead doubles that channel on top of the original, which brightens it.
+ */
+function videoDegradation(p: Px, a: Record<string, FilterArg>) {
+  const [pw, ph, cells] = VIDEO_PATTERNS[num(a.pattern, 2)] ?? VIDEO_PATTERNS[2];
+  const additive = num(a.additive, 1) !== 0, rotated = num(a.rotated, 0) !== 0;
   const { w, d } = p;
   for (let i = 0; i < d.length; i += 4) {
     const x = (i / 4) % w, y = Math.floor(i / 4 / w);
-    const keep = (x + (Math.floor(y / 2) % 2) * 2) % 3;
-    for (let c = 0; c < 3; c++) if (c !== keep) d[i + c] = 0;
+    const sel = +cells[rotated ? pw * (x % ph) + (y % pw) : pw * (y % ph) + (x % pw)];
+    for (let c = 0; c < 3; c++) {
+      const v = c === sel ? d[i + c] : 0;
+      d[i + c] = additive ? Math.min(1, v + d[i + c]) : v;
+    }
   }
 }
 
@@ -218,7 +351,8 @@ export function applyGimpFilter(p: Px, f: XcfFilter): boolean {
     case 'gegl:color-to-alpha': colorToAlpha(p, f.args, SPACES.c2a); return true;
     case 'gegl:gaussian-blur': gaussianBlur(p, f.args); return true;
     case 'gegl:emboss': emboss(p, f.args); return true;
-    case 'gegl:video-degradation': videoDegradation(p); return true;
+    case 'gegl:video-degradation': videoDegradation(p, f.args); return true;
+    case 'gegl:bevel': bevel(p, f.args); return true;
     case 'gimp:desaturate': mapRgb(p, (r, g, b) => { const l = 0.2126 * r + 0.7152 * g + 0.0722 * b; return [l, l, l]; }, true); return true;
     case 'gegl:invert-gamma': case 'gegl:invert': mapRgb(p, (r, g, b) => [1 - r, 1 - g, 1 - b], false); return true;
     default: return false;

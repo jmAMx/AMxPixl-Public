@@ -10,11 +10,13 @@ type Events = {
   options: void;
   prefs: void;
   recent: void;
+  /** The animation frame shown changed (or playback started/stopped). */
+  frame: void;
 };
 
 type Handler<T> = (v: T) => void;
 
-export interface Prefs { theme: 'dark' | 'light'; glow: boolean; dock: Record<string, boolean>; rulers: boolean; guides: boolean; snap: boolean; pixelGrid: boolean }
+export interface Prefs { theme: 'dark' | 'light'; glow: boolean; dock: Record<string, boolean>; rulers: boolean; guides: boolean; snap: boolean; pixelGrid: boolean; onion: boolean }
 
 const load = <T>(k: string, d: T): T => {
   try { const v = localStorage.getItem(k); return v ? { ...d, ...JSON.parse(v) } : d; } catch { return d; }
@@ -46,9 +48,11 @@ class App {
   tool!: Tool;
   tools: Tool[] = [];
   opts: ToolOpts = structuredClone(DEFAULT_OPTS);
-  prefs: Prefs = load<Prefs>('amxpixl.prefs', { theme: 'dark', glow: false, dock: { color: true, properties: true, layers: true, history: false }, rulers: false, guides: true, snap: true, pixelGrid: true });
+  prefs: Prefs = load<Prefs>('amxpixl.prefs', { theme: 'dark', glow: false, dock: { color: true, properties: true, layers: true, history: false }, rulers: false, guides: true, snap: true, pixelGrid: true, onion: false });
   /** Set while a modal filter preview or text edit owns the canvas. */
   busy = false;
+  /** An animation is playing in the Timeline. */
+  playing = false;
 
   private handlers = new Map<keyof Events, Set<Handler<never>>>();
 

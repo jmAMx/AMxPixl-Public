@@ -3,6 +3,8 @@ import { addGuide, colorRangeSelection, createDoc, deleteLook, exportImage, look
 import { savedLooks } from '../core/looks';
 import { colorRangeMask, sampleSource, type Modify, type SelMode } from '../core/selops';
 import { checkForUpdate, openReleasePage, type UpdateInfo } from '../core/update';
+import { ANIM_EXT, ANIM_MIME, exportAnimation, type AnimExportOptions, type AnimFormat } from '../core/animexport';
+import { saveBlob } from '../core/fileio';
 import { view } from './canvasview';
 import { cloneCanvas, ctx2d } from '../core/layers';
 import { FILTERS, maskedMerge, type FilterDef, type Params } from '../core/filters';
@@ -314,6 +316,69 @@ export function shortcutsDialog(rows: [string, string][]) {
   });
 }
 
+/** File › Export Animation: GIF, animated PNG, MP4 or WebM from the Timeline's frames. */
+export function animExportDialog() {
+  const doc = app.doc; if (!doc) return;
+  const a = doc.anim;
+  if (!a) {
+    toast('Make an animation first: View › Timeline, then "Frames from layers" or "Effects loop".');
+    if (!app.prefs.dock.timeline) app.setPrefs({ dock: { ...app.prefs.dock, timeline: true } });
+    return;
+  }
+  let format: AnimFormat = 'gif', scale = 1, background: AnimExportOptions['background'] = 'transparent', repeat = 1, busy = false;
+  const total = a.frames.reduce((t, f) => t + (f.ms ?? 1000 / a.fps), 0);
+  const info = h('p', { class: 'dialog-msg' });
+  const bgRow = h('div', { class: 'field wide' }, h('span', null, 'Background'),
+    seg([{ v: 'transparent', label: 'See-through' }, { v: 'white', label: 'White' }, { v: 'black', label: 'Black' }], background, (v) => { background = v; upd(); }));
+  const repeatF = numField('Repeat', repeat, (v) => { repeat = v; upd(); }, { min: 1, max: 50, unit: '×' });
+  const progress = h('progress', { class: 'export-progress', max: 1, value: 0 });
+  progress.hidden = true;
+  const upd = () => {
+    const video = format === 'mp4' || format === 'webm';
+    let w = Math.round(doc.width * scale), hh = Math.round(doc.height * scale);
+    if (video) { w += w % 2; hh += hh % 2; }
+    info.textContent = `${w} × ${hh} px · ${a.frames.length} frames · ${((total * (video ? repeat : 1)) / 1000).toFixed(2)} s${video ? '' : a.loop ? ' · loops' : ' · plays once'}`
+      + (video && background === 'transparent' ? ' · video has no transparency, so see-through areas become black' : '')
+      + (format === 'gif' ? ' · GIF is limited to 256 colours per frame' : '');
+    repeatF.hidden = !video;
+  };
+  upd();
+  dialog({
+    title: 'Export animation', width: 470,
+    body: [
+      h('div', { class: 'field wide' }, h('span', null, 'Format'),
+        seg([{ v: 'gif', label: 'GIF' }, { v: 'apng', label: 'Animated PNG' }, { v: 'mp4', label: 'MP4' }, { v: 'webm', label: 'WebM' }], format, (v) => { format = v; upd(); })),
+      numField('Size', 100, (v) => { scale = v / 100; upd(); }, { unit: '%', min: 1, max: 400 }),
+      bgRow, repeatF,
+      resampleField(doc.resample, (v) => { doc.resample = v; }),
+      info, progress,
+      h('p', { class: 'dialog-note' }, 'Animated PNG keeps full colour and soft transparency (most browsers, Discord). MP4 plays everywhere; WebM is smaller for the web.'),
+    ],
+    buttons: [
+      { label: 'Cancel' },
+      {
+        label: 'Export', primary: true, onClick: async () => {
+          if (busy) return false;
+          busy = true;
+          progress.hidden = false;
+          try {
+            const blob = await exportAnimation(doc, { format, scale, nearest: doc.resample === 'nearest', background, repeat, onProgress: (d, t) => { progress.value = d / t; } });
+            const ext = ANIM_EXT[format];
+            const ref = await saveBlob(blob, `${doc.name.replace(/\.[^.]+$/, '')}.${ext}`, null, { [ANIM_MIME[format]]: [`.${ext}`] });
+            if (ref !== undefined) toast(`Exported ${format.toUpperCase()} (${(blob.size / 1024 / 1024).toFixed(2)} MB)`);
+          } catch (err) {
+            toast(`Export failed: ${(err as Error).message}`, 'error');
+            busy = false;
+            progress.hidden = true;
+            return false;
+          }
+          return undefined;
+        },
+      },
+    ],
+  });
+}
+
 /** Help › Check for Updates (or `quiet` at startup: only speaks up when there is something new). */
 export async function updateDialog(quiet = false) {
   let info: UpdateInfo | null;
@@ -339,7 +404,7 @@ export function aboutDialog() {
     title: 'About AMxPixl', width: 420,
     body: [
       h('div', { class: 'about' },
-        h('img', { src: `brand/pixl-${app.prefs.theme === 'dark' ? 'dark' : 'light'}.svg`, alt: '', width: 64, height: 64 }),
+        h('img', { src: 'brand/pixl-logo-256.png', alt: '', width: 72, height: 72 }),
         h('div', null, h('strong', null, 'Pixl Editor'), h('div', { class: 'dim' }, `AMxPixl · version ${__APP_VERSION__} · an AMx app`))),
       h('p', { class: 'dialog-msg' }, 'A lightweight, non-destructive image editor. Layers keep their original pixels, adjustments run on the GPU, and everything stays on this PC.'),
     ],

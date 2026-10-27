@@ -15,7 +15,7 @@ import { flatten, renderDoc } from './core/render';
 import { invertSel, mapSel, maskSelection, selBounds } from './core/selection';
 import { colorRangeMask, combine, layerAlphaMask, modifyMask, sampleSource, wandMask, type Modify, type SelMode } from './core/selops';
 import { defaultStyles } from './core/styles';
-import type { AdjKind, AdjParams, BlendIf, GroupLayer, Guide, Layer, LayerStyles, Mask, PlacedLayer, RasterLayer, Warp } from './core/types';
+import type { AdjKind, AdjParams, Anim, AnimFrame, BlendIf, GroupLayer, Guide, Layer, LayerStyles, Mask, PlacedLayer, RasterLayer, Warp } from './core/types';
 import { initWarp, warpBounds } from './core/warp';
 import { isFilter, isPlaced } from './core/types';
 import { view } from './ui/canvasview';
@@ -238,8 +238,95 @@ export function deleteLayer(id = app.doc?.activeId) {
 
 export function setLayerProp(id: string, patch: Partial<Pick<Layer, 'name' | 'visible' | 'opacity' | 'blend' | 'clip'>>, label?: string) {
   const doc = need(); const l = doc?.layer(id); if (!doc || !l) return;
+  // In an animation the eye belongs to the current frame.
+  const f = doc.anim?.frames[doc.frame];
+  if (f && patch.visible !== undefined) {
+    const { visible, ...rest } = patch;
+    f.vis[id] = visible;
+    patch = rest;
+  }
   Object.assign(l, patch);
   if (label) doc.commit(label); else doc.touch('meta');
+}
+
+// ---------- animation ----------
+
+const frameId = () => `f${Math.random().toString(36).slice(2, 9)}`;
+
+/**
+ * Starts an animation. 'loop': frames that all show the same layers, for animated effects. 'layers': one frame per
+ * top-level layer (bottom first), each showing just that layer, plus the bottom one as a background if `keepBottom`.
+ */
+export function createAnimation(kind: 'loop' | 'layers', o: { frames?: number; fps?: number; keepBottom?: boolean } = {}) {
+  const doc = need(); if (!doc) return;
+  const fps = o.fps ?? 12;
+  let frames: AnimFrame[];
+  if (kind === 'loop') frames = Array.from({ length: o.frames ?? 24 }, () => ({ id: frameId(), vis: {} }));
+  else {
+    const content = doc.layers.filter((l) => !isFilter(l));
+    if (content.length < 2) { toast('Add at least two layers to make frames from them.'); return; }
+    const bottom = o.keepBottom ? content[0] : null;
+    const frameLayers = content.filter((l) => l !== bottom);
+    frames = frameLayers.map((show) => ({ id: frameId(), vis: Object.fromEntries(frameLayers.map((l) => [l.id, l === show])) }));
+  }
+  doc.anim = { fps, frames, loop: true };
+  doc.frame = 0;
+  doc.commit(kind === 'loop' ? 'Make animation loop' : 'Make frames from layers');
+  if (!app.prefs.dock.timeline) app.setPrefs({ dock: { ...app.prefs.dock, timeline: true } });
+}
+
+export function removeAnimation() {
+  const doc = need(); if (!doc?.anim) return;
+  doc.anim = null;
+  doc.frame = 0;
+  doc.commit('Remove animation');
+}
+
+/** Shows a frame (not an undo step). */
+export function goToFrame(i: number) {
+  const doc = app.doc; if (!doc?.anim) return;
+  const n = doc.anim.frames.length;
+  doc.frame = ((i % n) + n) % n;
+  doc.touch('meta');
+  app.emit('frame');
+}
+
+/** Adds a copy of the current frame right after it. */
+export function duplicateFrame() {
+  const doc = need(); const a = doc?.anim; if (!doc || !a) return;
+  const cur = a.frames[doc.frame];
+  a.frames.splice(doc.frame + 1, 0, { id: frameId(), vis: { ...cur.vis }, ms: cur.ms });
+  doc.frame++;
+  doc.commit('Add frame');
+}
+
+export function deleteFrame() {
+  const doc = need(); const a = doc?.anim; if (!doc || !a) return;
+  if (a.frames.length <= 1) { removeAnimation(); return; }
+  a.frames.splice(doc.frame, 1);
+  doc.frame = Math.min(doc.frame, a.frames.length - 1);
+  doc.commit('Delete frame');
+}
+
+export function moveFrame(from: number, to: number) {
+  const doc = need(); const a = doc?.anim; if (!doc || !a || from === to) return;
+  const [f] = a.frames.splice(from, 1);
+  a.frames.splice(to, 0, f);
+  doc.frame = to;
+  doc.commit('Reorder frames');
+}
+
+export function setAnim(patch: Partial<Pick<Anim, 'fps' | 'loop'>>, label: string) {
+  const doc = need(); if (!doc?.anim) return;
+  Object.assign(doc.anim, patch);
+  doc.commit(label);
+}
+
+/** A frame's own length in milliseconds, or undefined to follow the frame rate. */
+export function setFrameMs(i: number, ms: number | undefined) {
+  const doc = need(); const f = doc?.anim?.frames[i]; if (!doc || !f) return;
+  if (ms === undefined) delete f.ms; else f.ms = ms;
+  doc.commit('Frame length');
 }
 
 /** Moves a layer into `list` (the document's or a group's children) at `index`. */
