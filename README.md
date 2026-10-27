@@ -37,9 +37,11 @@ This runs the desktop app with live reload. `npm run package` builds `src-tauri/
 
 1. Bump `version` in `package.json` and add a `## <version>` section to `CHANGELOG.md`.
 2. `npm run package`
-3. Commit, then `npm run release`: it tags the version and publishes the installer on this repository's [Releases](https://github.com/jmAMx/AMxPixl-public/releases) page. Add `-- -Draft` to review it on GitHub before it goes live. The app's Help › Check for Updates reads that page.
+3. Commit, then `npm run release`. It copies the new commits onto the `public-main` branch (`npm run sync-public` does just that step) and stops if one names specific hardware. Then it tags the version, pushes `public-main` and its version tags to this repository, and publishes the installer on the [Releases](https://github.com/jmAMx/AMxPixl-public/releases) page. Add `-- -Draft` to review it on GitHub before it goes live. The app's Help › Check for Updates reads that page.
 
-One-time setup: `winget install GitHub.cli`, then `gh auth login`.
+Every version from 0.1.0 on has a `v…` tag, including ones that weren't published as releases; `CHANGELOG.md` has the notes for each.
+
+One-time setup: `winget install GitHub.cli`, then `gh auth login`, and a `public` remote pointing at this repository.
 
 ## What makes it different
 

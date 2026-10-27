@@ -1,6 +1,7 @@
 # Publishes the installer you've already built (npm run package) as a GitHub release of jmAMx/AMxPixl-public, tagged with
 # the version in package.json and with that version's CHANGELOG section as the notes. Pixl's Check for Updates reads
-# these releases (the repository has to be public for that).
+# these releases (the repository has to be public for that). The public repository's code is public-main, pushed to
+# the "public" remote; see scripts/sync-public.ps1.
 #
 #   npm run release            publish the version in package.json
 #   npm run release -- -Draft  create it as a draft to review on GitHub first
@@ -39,10 +40,15 @@ if ($visibility -ne 'PUBLIC') { Write-Warning "$repo is ${visibility}: the relea
 & $gh release view $tag --repo $repo *> $null
 if ($LASTEXITCODE -eq 0) { throw "$tag is already published. Bump the version in package.json first." }
 
-# Tag the commit being released, then publish the installer against that tag.
-if (-not (git tag --list $tag)) { git tag -a $tag -m "AMxPixl $version" }
-git push origin $tag
-if ($LASTEXITCODE -ne 0) { throw "Couldn't push the $tag tag." }
+# The public repository gets public-main (main's history with hardware specifics taken out), brought up to date
+# first; the release is tagged there, then the installer is published against that tag.
+& "$PSScriptRoot\sync-public.ps1"
+if ((git rev-parse 'public-main^{tree}') -ne (git rev-parse 'main^{tree}')) { throw 'public-main does not match main.' }
+if (-not (git tag --list $tag)) { git tag -a $tag -m "AMxPixl $version" public-main }
+git merge-base --is-ancestor $tag public-main
+if ($LASTEXITCODE -ne 0) { throw "$tag isn't on public-main, so it can't be published to the public repository." }
+git push --follow-tags public public-main:main
+if ($LASTEXITCODE -ne 0) { throw "Couldn't push public-main and its tags to $repo." }
 
 $ghArgs = @('release', 'create', $tag, $installer.FullName, '--repo', $repo, '--title', "AMxPixl $version", '--notes-file', $notes, '--verify-tag')
 if ($Draft) { $ghArgs += '--draft' }
