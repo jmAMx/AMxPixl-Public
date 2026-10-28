@@ -136,8 +136,10 @@ export function numField(label: string, value: number, onChange: (v: number) => 
     if (isNaN(v)) { inp.value = value.toFixed(dec); return; }
     if (o.min !== undefined) v = Math.max(o.min, v);
     if (o.max !== undefined) v = Math.min(o.max, v);
-    value = v;
     inp.value = v.toFixed(dec);
+    // Enter applies the value and then leaving the field fires "change" again: only a new value counts.
+    if (v === value) return;
+    value = v;
     onChange(v);
   };
   inp.addEventListener('change', commit);

@@ -132,16 +132,23 @@ class WarpGL {
    * and blend mode. `img` may be a reduced preview: scaled up by `f` it covers the layer's `fullW` x `fullH` pixels.
    */
   draw(ctx: CanvasRenderingContext2D, img: HTMLCanvasElement, f: number, fullW: number, fullH: number, w: Warp, m: Mat) {
+    this.drawMapped(ctx, img, f, fullW, fullH, (u, v) => warpPoint(w, u, v), m, w.kind === 'perspective' ? 20 : 28);
+  }
+
+  /**
+   * Like draw, for any smooth mapping: `map(u, v)` says where the point (u, v) of the image (0..1 each way) lands in
+   * the layer's pixels. Used for warp presets on text and shapes.
+   */
+  drawMapped(ctx: CanvasRenderingContext2D, img: HTMLCanvasElement, f: number, fullW: number, fullH: number, map: (u: number, v: number) => Pt, m: Mat, G = 32) {
     const gl = this.gl;
     if (!gl || !this.prog) return;
     const W = ctx.canvas.width, H = ctx.canvas.height;
     if (this.canvas.width !== W || this.canvas.height !== H) { this.canvas.width = W; this.canvas.height = H; }
-    const G = w.kind === 'perspective' ? 20 : 28;
     // A reduced preview (rounded up when halving) can extend slightly past the layer's real pixels.
     const su = fullW / (img.width * f), sv = fullH / (img.height * f);
     const pos: Pt[] = [];
     for (let i = 0; i <= G; i++) for (let j = 0; j <= G; j++) {
-      const p = warpPoint(w, j / G, i / G);
+      const p = map(j / G, i / G);
       pos.push(apply(m, p.x, p.y));
     }
     const data = new Float32Array(G * G * 6 * 4);

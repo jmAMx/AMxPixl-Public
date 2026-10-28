@@ -1,3 +1,4 @@
+import { envelopeBounds, envelopePoint } from './envelope';
 import { glops } from './glops';
 import { decompose, invert, matScale, mul, setT, xformMatrix, type Mat, type Rect, type Xform } from './math';
 import { displaySource } from './pyramid';
@@ -26,12 +27,48 @@ export function localBounds(l: PlacedLayer, pool: Pool): Rect {
       return { x: 0, y: 0, w: c?.width ?? 1, h: c?.height ?? 1 };
     }
     case 'text': {
+      if (l.envelope) return envelopeBounds(l.envelope, vectorBox(l));
       const lay = layoutText(l.text);
       return { x: lay.x, y: lay.y, w: lay.w, h: lay.h };
     }
     case 'shape':
-      return shapeBounds(l.shape);
+      return l.envelope ? envelopeBounds(l.envelope, vectorBox(l)) : shapeBounds(l.shape);
   }
+}
+
+/**
+ * A text or shape layer's box before any warp preset, with room for what reaches past it: a shape's stroke, and
+ * letters that overhang their line (italics, accents, tails), which would otherwise be cut off when warped.
+ */
+export function vectorBox(l: TextLayer | ShapeLayer): Rect {
+  if (l.type === 'text') {
+    const lay = layoutText(l.text), p = Math.ceil(l.text.size * 0.2);
+    return { x: lay.x - p, y: lay.y - p, w: lay.w + p * 2, h: lay.h + p * 2 };
+  }
+  const b = shapeBounds(l.shape), p = (l.shape.stroke ? l.shape.strokeWidth / 2 : 0) + 1;
+  return { x: b.x - p, y: b.y - p, w: b.w + p * 2, h: b.h + p * 2 };
+}
+
+const vecCache = new Map<string, { c: HTMLCanvasElement; s: number }>();
+
+/**
+ * A text or shape layer drawn flat into an image at about `want` pixels per layer pixel (a power of two, so zooming
+ * reuses it), for warping. Cached by content.
+ */
+function vectorImage(l: TextLayer | ShapeLayer, box: Rect, want: number) {
+  let s = 2 ** Math.ceil(Math.log2(Math.max(0.25, Math.min(4, want))));
+  while (s > 0.25 && Math.max(box.w, box.h) * s > 4096) s /= 2;
+  const key = `${JSON.stringify(l.type === 'text' ? l.text : l.shape)}|${s}`;
+  const hit = vecCache.get(key);
+  if (hit) return hit;
+  if (vecCache.size > 32) vecCache.clear();
+  const c = newCanvas(Math.max(1, Math.ceil(box.w * s)), Math.max(1, Math.ceil(box.h * s)));
+  const x = ctx2d(c);
+  x.setTransform(s, 0, 0, s, -box.x * s, -box.y * s);
+  if (l.type === 'text') drawText(x, l.text); else drawShape(x, l.shape);
+  const out = { c, s };
+  vecCache.set(key, out);
+  return out;
 }
 
 export function shapeBounds(s: ShapeProps): Rect {
@@ -103,6 +140,12 @@ export function drawPlaced(ctx: CanvasRenderingContext2D, l: PlacedLayer, pool: 
     if (l.warp) warpGL.draw(ctx, img, f, c.width, c.height, l.warp, m);
     else if (f === 1) ctx.drawImage(c, 0, 0);
     else ctx.drawImage(img, 0, 0, img.width * f, img.height * f);
+  } else if (l.envelope) {
+    // Warp preset: the text or shape drawn flat at the needed sharpness, then bent on the GPU.
+    const box = vectorBox(l);
+    const img = vectorImage(l, box, matScale(m));
+    const e = l.envelope;
+    warpGL.drawMapped(ctx, img.c, 1 / img.s, box.w, box.h, (u, v) => envelopePoint(e, box, u, v), m);
   } else if ((l.type === 'text' ? l.text : l.shape).antiAlias === false) {
     // Hard pixel edges: draw it once at 1:1 with edges snapped on/off, then show those pixels unsmoothed.
     const b = localBounds(l, pool);

@@ -22,6 +22,7 @@ import { colorRangeMask, combine, layerAlphaMask, modifyMask, sampleSource, wand
 import { defaultStyles } from './core/styles';
 import type { AdjKind, AdjParams, Anim, AnimFrame, BlendIf, GroupLayer, Guide, Layer, LayerStyles, Mask, PathPoint, PlacedLayer, RasterLayer, SubPath, TextLayer, VPath, Warp } from './core/types';
 import { initWarp, warpBounds } from './core/warp';
+import { envelopeMesh, type Envelope } from './core/envelope';
 import { isFilter, isPlaced } from './core/types';
 import { view } from './ui/canvasview';
 import { ask, toast } from './ui/widgets';
@@ -1099,6 +1100,61 @@ export async function loadLut(id = app.doc?.activeId) {
 export async function newLut() {
   newAdjustment('lut');
   await loadLut();
+}
+
+// ---------- warp presets ----------
+
+/** A layer as it was before a warp preset was tried on it, to put back on Cancel. */
+type EnvelopeStart = { l: PlacedLayer; envelope?: Envelope | null; warp?: Warp | null; key?: string; t: Xform; box?: Rect | null };
+
+/**
+ * Starts trying warp presets on the active layer. Text and shapes keep the preset as a setting (they stay
+ * editable). An image layer is first trimmed to what's on it, so the preset bends that and not empty canvas, and the
+ * preset becomes a mesh warp it can be fine-tuned with (Move › Warp). Returns null if the layer can't be warped.
+ */
+export async function beginEnvelope(): Promise<EnvelopeStart | null> {
+  const doc = need(); const l = doc?.activePlaced;
+  if (!doc || !l) { toast('Select an image, text or shape layer to warp.'); return null; }
+  const start: EnvelopeStart = { l, t: { ...l.t }, box: l.box ? { ...l.box } : l.box };
+  if (l.type !== 'raster') { start.envelope = l.envelope ? { ...l.envelope } : null; return start; }
+  start.warp = l.warp ? structuredClone(l.warp) : null;
+  start.key = l.key;
+  if (!l.warp) {
+    const src = doc.pool.get(l.key)!;
+    const b = roundOut(await layerBoxReady(l, doc.pool, 'content'));
+    const r = intersect({ x: b.x - 2, y: b.y - 2, w: b.w + 4, h: b.h + 4 }, { x: 0, y: 0, w: src.width, h: src.height });
+    if (r && (r.x > 0 || r.y > 0 || r.w < src.width || r.h < src.height)) {
+      const c = newCanvas(r.w, r.h);
+      ctx2d(c).drawImage(src, -r.x, -r.y);
+      const p = apply(layerMatrix(l), r.x, r.y);
+      l.key = doc.addCanvas(c);
+      l.t = { ...l.t, x: p.x, y: p.y };
+    }
+  }
+  return start;
+}
+
+/** Shows `e` on the layer being warped (null takes the preset off). */
+export function previewEnvelope(s: EnvelopeStart, e: Envelope | null) {
+  const doc = need(); if (!doc) return;
+  const l = s.l;
+  if (l.type === 'raster') l.warp = e ? envelopeMesh(e, rasterBox(doc, l)) : s.warp ?? null;
+  else l.envelope = e ? { ...e } : null;
+  doc.touch('meta');
+}
+
+export function finishEnvelope(s: EnvelopeStart, keep: boolean) {
+  const doc = need(); if (!doc) return;
+  const l = s.l;
+  if (keep) {
+    const on = l.type === 'raster' ? !!l.warp : !!l.envelope;
+    doc.commit(on ? 'Warp' : 'Remove warp');
+    return;
+  }
+  l.t = s.t;
+  l.box = s.box;
+  if (l.type === 'raster') { l.warp = s.warp ?? null; l.key = s.key!; } else l.envelope = s.envelope ?? null;
+  doc.touch('meta');
 }
 
 // ---------- warp & perspective ----------

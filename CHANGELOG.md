@@ -2,6 +2,13 @@
 
 Each version's section becomes its release notes (`scripts/release.ps1` copies it to the download page).
 
+## Next (0.7, Type & Warp, in progress)
+
+- **Warp presets** (Layer › Warp…, Ctrl+Alt+W, or Warp… in the Text tool and Properties): Arc, Arc Lower, Arc Upper, Arch, Bulge, Flag, Wave, Fish, Rise, Fisheye, Inflate, Squeeze and Twist. Each has Bend, horizontal and vertical distortion, and a vertical option, all previewed live. Text and shapes stay editable, and the warp refits when you change the words. Image layers get an editable mesh warp you can fine-tune with Move › Warp.
+- **Undo and Redo say what they'll do**: the Edit menu and the arrow buttons' tooltips read, for example, "Undo Warp" or "Redo Brush".
+- Fixed: typing a value in Properties and pressing Enter recorded the change twice in the history.
+- Fixed: new groups and shapes were numbered from one shared counter ("Group 4" for the first group).
+
 ## 0.6.7
 
 - **Open source**: Pixl is now under the MIT licence (see LICENSE and Help › About).

@@ -407,7 +407,13 @@ export class Doc {
 
   // ---------- layers ----------
 
-  nextName(base = 'Layer') { return `${base} ${this.counter++}`; }
+  /** "Layer 3", "Group 2"...: one more than the highest number already used with that name. */
+  nextName(base = 'Layer') {
+    const re = new RegExp(`^${base.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} (\\d+)$`);
+    let n = 1;
+    for (const l of this.all()) { const m = re.exec(l.name); if (m) n = Math.max(n, Number(m[1]) + 1); }
+    return `${base} ${n}`;
+  }
 
   /** Inserts above `aboveId` in the same group (or at the top of the document). */
   insertLayer(l: Layer, aboveId: string | null = this.activeId) {

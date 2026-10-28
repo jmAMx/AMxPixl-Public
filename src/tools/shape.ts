@@ -41,7 +41,7 @@ class ShapeTool implements Tool {
     const fill = !isLine && o.fill ? app.fg : null;
     const stroke = isLine || o.stroke ? (fill ? app.bg : app.fg) : null;
     const layer: ShapeLayer = {
-      id: newId(), type: 'shape', name: `${NAMES[o.kind]} ${doc.counter++}`, visible: true, opacity: 1, blend: 'normal',
+      id: newId(), type: 'shape', name: doc.nextName(NAMES[o.kind]), visible: true, opacity: 1, blend: 'normal',
       t: { x: Math.round(p.x), y: Math.round(p.y), sx: 1, sy: 1, rot: 0 },
       shape: { kind: o.kind, w: 0, h: 0, fill, stroke, strokeWidth: isLine ? Math.max(1, o.strokeWidth) : o.strokeWidth, radius: o.radius, ...(o.antiAlias ? {} : { antiAlias: false }),
         ...(o.kind === 'polygon' || o.kind === 'star' ? { sides: o.sides, inner: o.inner } : {}) },

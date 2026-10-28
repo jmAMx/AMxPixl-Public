@@ -8,6 +8,8 @@ import { ADJ_LABELS, HSL_BANDS, curveTable, histogram, type Histogram } from '..
 import type { Doc } from '../core/document';
 import { canMove, DEFAULT_MOTION, fxDef } from '../core/effects';
 import { layerBox } from '../core/bounds';
+import { envelopeLabel } from '../core/envelope';
+import { warpDialog } from './warpdialog';
 import { ctx2d, layerMatrix, localBounds, newCanvas } from '../core/layers';
 import { apply, decompose, mapRect, mul, scale, translate, union, xformMatrix, type Rect } from '../core/math';
 import { renderDoc } from '../core/render';
@@ -619,6 +621,12 @@ export function propertiesPanel() {
     if (many.length > 1 || (l.type === 'group' && many.length)) {
       kids.push(multiTransformSection(many, doc.selectedIds().length > 1 ? `Transform · ${doc.selectedIds().length} selected` : 'Transform · group contents'));
     } else if (isPlaced(l)) kids.push(transformSection(l));
+    if (l.type === 'text' || l.type === 'shape') {
+      kids.push(section('Warp', h('div', { class: 'btn-row' },
+        h('span', { class: 'dim' }, l.envelope ? envelopeLabel(l.envelope) : 'None'),
+        h('button', { class: 'btn small', type: 'button', title: 'Bend it into an arc, flag, bulge… (Layer › Warp, Ctrl+Alt+W)', onclick: () => { void warpDialog(); } }, l.envelope ? 'Edit' : 'Warp…'),
+        l.envelope ? h('button', { class: 'btn small', type: 'button', onclick: () => { l.envelope = null; commitSelf('Remove warp'); build(true); } }, 'Remove') : null)));
+    }
     if (isPlaced(l) || l.type === 'group') kids.push(stylesSection(l), blendIfSection(l));
     body.replaceChildren(...kids.filter(Boolean) as HTMLElement[]);
   };

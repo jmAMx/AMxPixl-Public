@@ -13,13 +13,15 @@ import { adjustmentMenuItems, effectMenuItems, layersPanel, looksMenuItems, mask
 import { propertiesPanel } from './properties';
 import { canvasScrollbars } from './scrollbars';
 import { optionsBar, toolbox, toolboxGrip } from './toolbox';
+import { warpDialog } from './warpdialog';
 import { timelinePanel, togglePlay } from './timeline';
 import { pathsPanel, strokePathDialog } from './pathspanel';
 import { closePopups, dialogOpen, icon, popupMenu, toast, type MenuItem } from './widgets';
 
 // ---------- menus & shortcuts ----------
 
-interface Cmd { label: string; accel?: string; alt?: string; run: () => void; enabled?: () => boolean; checked?: () => boolean; native?: boolean }
+/** A menu command; `label` can be worked out when the menu opens (e.g. "Undo Brush"). */
+interface Cmd { label: string | (() => string); accel?: string; alt?: string; run: () => void; enabled?: () => boolean; checked?: () => boolean; native?: boolean }
 type MenuDef = { title: string; items: (Cmd | 'sep' | { label: string; sub: () => MenuItem[] })[] };
 
 const hasDoc = () => !!app.doc;
@@ -58,8 +60,9 @@ const MENUS: MenuDef[] = [
   },
   {
     title: 'Edit', items: [
-      { label: 'Undo', accel: 'Ctrl+Z', run: A.undo, enabled: () => !!app.doc?.canUndo },
-      { label: 'Redo', accel: 'Ctrl+Shift+Z', alt: 'Ctrl+Y', run: A.redo, enabled: () => !!app.doc?.canRedo },
+      // Named after the step they'd undo or redo, like "Undo Brush".
+      { label: () => (app.doc?.canUndo ? `Undo ${app.doc.entries[app.doc.index - 1].label}` : 'Undo'), accel: 'Ctrl+Z', run: A.undo, enabled: () => !!app.doc?.canUndo },
+      { label: () => (app.doc?.canRedo ? `Redo ${app.doc.entries[app.doc.index].label}` : 'Redo'), accel: 'Ctrl+Shift+Z', alt: 'Ctrl+Y', run: A.redo, enabled: () => !!app.doc?.canRedo },
       'sep',
       { label: 'Cut', accel: 'Ctrl+X', run: () => A.copy(false, true), enabled: hasLayer },
       { label: 'Copy', accel: 'Ctrl+C', run: () => A.copy(), enabled: hasLayer },
@@ -107,6 +110,7 @@ const MENUS: MenuDef[] = [
       { label: 'Layer Style', sub: styleMenuItems },
       'sep',
       { label: 'Merge Down', accel: 'Ctrl+E', run: A.mergeDown, enabled: hasLayer },
+      { label: 'Warp…', accel: 'Ctrl+Alt+W', run: () => { void warpDialog(); }, enabled: () => !!app.doc?.activePlaced },
       { label: 'Trim to Content', run: () => { void A.trimLayers(); }, enabled: () => app.doc?.active?.type === 'raster' || app.doc?.active?.type === 'group' || (app.doc?.selectedIds().length ?? 0) > 1 },
       { label: 'Convert Shape to Path', run: A.shapeToPath, enabled: () => app.doc?.active?.type === 'shape' },
       { label: 'Text on Path', run: A.textOnPath, enabled: () => !!app.doc?.path },
@@ -217,7 +221,7 @@ const extraShortcuts: [string, string][] = [
 
 function showShortcuts() {
   const rows: [string, string][] = [];
-  for (const m of MENUS) for (const it of m.items) if (it !== 'sep' && 'accel' in it && it.accel) rows.push([it.accel, `${m.title} › ${it.label.replace('…', '')}`]);
+  for (const m of MENUS) for (const it of m.items) if (it !== 'sep' && 'accel' in it && it.accel) rows.push([it.accel, `${m.title} › ${(typeof it.label === 'string' ? it.label : it.label().split(' ')[0]).replace('…', '')}`]);
   shortcutsDialog([...extraShortcuts, ...rows]);
 }
 
@@ -225,7 +229,7 @@ function menuItems(def: MenuDef): MenuItem[] {
   return def.items.map((it) => {
     if (it === 'sep') return { sep: true };
     if ('sub' in it) return { label: it.label, sub: it.sub() };
-    return { label: it.label, accel: it.accel, disabled: it.enabled ? !it.enabled() : false, checked: it.checked?.(), onClick: it.run };
+    return { label: typeof it.label === 'string' ? it.label : it.label(), accel: it.accel, disabled: it.enabled ? !it.enabled() : false, checked: it.checked?.(), onClick: it.run };
   });
 }
 
@@ -325,7 +329,12 @@ function menubar() {
   app.on('prefs', drawTheme);
   const undoBtn = h('button', { class: 'icon-btn', type: 'button', title: 'Undo (Ctrl+Z)', onclick: A.undo }, icon('undo'));
   const redoBtn = h('button', { class: 'icon-btn', type: 'button', title: 'Redo (Ctrl+Shift+Z)', onclick: A.redo }, icon('redo'));
-  const syncUndo = () => { undoBtn.disabled = !app.doc?.canUndo; redoBtn.disabled = !app.doc?.canRedo; };
+  const syncUndo = () => {
+    const d = app.doc;
+    undoBtn.disabled = !d?.canUndo; redoBtn.disabled = !d?.canRedo;
+    undoBtn.title = d?.canUndo ? `Undo ${d.entries[d.index - 1].label} (Ctrl+Z)` : 'Undo (Ctrl+Z)';
+    redoBtn.title = d?.canRedo ? `Redo ${d.entries[d.index].label} (Ctrl+Shift+Z)` : 'Redo (Ctrl+Shift+Z)';
+  };
   app.on('change', syncUndo); app.on('docs', syncUndo); syncUndo();
   return h('header', { class: 'menubar' },
     h('div', { class: 'brand', title: 'AMxPixl' },

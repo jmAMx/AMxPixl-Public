@@ -6,7 +6,8 @@ import type { TextLayer, TextProps } from '../core/types';
 import { view } from '../ui/canvasview';
 import { h } from '../ui/dom';
 import { allFontsLoaded, fontList, loadInstalledFonts } from '../ui/fonts';
-import { checkbox, numField, seg } from '../ui/widgets';
+import { checkbox, icon, numField, seg } from '../ui/widgets';
+import { warpDialog } from '../ui/warpdialog';
 import { layerAt } from './move';
 import type { PInfo, Tool } from './tool';
 
@@ -61,6 +62,10 @@ class TextTool implements Tool {
       h('button', { class: 'btn small', type: 'button', title: 'Use the foreground colour for this text', onclick: () => this.style({ color: app.fg }) },
         h('span', { class: 'chip-swatch', style: `background:${app.fg}` }), 'Apply colour'),
       checkbox('Anti-alias', cur ? cur.antiAlias !== false : o.antiAlias, (v) => this.style({ antiAlias: v }), 'Turn off for hard pixel edges (pixel art and pixel fonts)'),
+      h('button', {
+        class: 'btn small', type: 'button', disabled: !this.activeText, title: 'Bend the text into an arc, flag, bulge… (it stays editable)',
+        onclick: () => { this.finish(); void warpDialog(); },
+      }, icon('warp'), 'Warp…'),
     );
   }
 

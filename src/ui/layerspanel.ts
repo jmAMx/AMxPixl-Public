@@ -230,7 +230,7 @@ export function layersPanel() {
     ti ? h('span', { class: 'layer-type', title: l.type }, icon(ti)) : null,
     hasStyles(l.styles) ? h('span', { class: 'layer-fx', title: 'Has layer styles' }, 'fx') : null,
     l.blendIf?.on ? h('span', { class: 'layer-fx', title: 'Blend If is on' }, 'BI') : null,
-    l.type === 'raster' && l.warp ? h('span', { class: 'layer-type', title: 'Warped (lossless)' }, icon('warp')) : null,
+    (l.type === 'raster' && l.warp) || ((l.type === 'text' || l.type === 'shape') && l.envelope) ? h('span', { class: 'layer-type', title: 'Warped (lossless)' }, icon('warp')) : null,
     l.blend !== 'normal' && l.blend !== 'pass-through' || l.opacity < 1 ? h('span', { class: 'layer-badge' }, l.opacity < 1 ? `${Math.round(l.opacity * 100)}%` : '', l.blend !== 'normal' && l.blend !== 'pass-through' ? ' fx' : '') : null);
 
     r.addEventListener('contextmenu', (e) => {
@@ -294,7 +294,7 @@ export function layersPanel() {
     const d = app.doc;
     if (!d) return '';
     const s = (ls: Layer[]): unknown => ls.map((l) => [l.id, l.name, d.shows(l), l.opacity, l.blend, l.type, !!l.clip, l.mask ? [l.mask.key, l.mask.enabled] : 0,
-      hasStyles(l.styles), !!l.blendIf?.on, l.type === 'raster' && !!l.warp, l.type === 'group' ? [l.open, s(l.children)] : 0]);
+      hasStyles(l.styles), !!l.blendIf?.on, (l.type === 'raster' && !!l.warp) || ((l.type === 'text' || l.type === 'shape') && !!l.envelope), l.type === 'group' ? [l.open, s(l.children)] : 0]);
     return JSON.stringify([d.activeId, d.alsoSelected, d.maskEdit, s(d.layers)]);
   };
 
