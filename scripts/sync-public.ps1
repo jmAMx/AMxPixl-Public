@@ -1,5 +1,5 @@
 # Carries new commits from main onto public-main, the history that's published to the public repository
-# (jmAMx/AMxPixl-public). Each one keeps its files, message, author and date, and version commits ("v1.2.3: ...")
+# (jmAMx/AMxPixl-Public). Each one keeps its files, message, author and date, and version commits ("v1.2.3: ...")
 # get a v1.2.3 tag. Nothing is pushed; scripts/release.ps1 does that.
 #
 #   npm run sync-public

@@ -32,8 +32,8 @@ export interface BrushOpts {
   /** Retouch brush instead of paint: changes the pixels under the stroke. `range` (dodge/burn): 0 shadows,
    * 1 midtones, 2 highlights. */
   retouch?: { mode: 'dodge' | 'burn' | 'blur' | 'sharpen' | 'smudge'; strength: number; range: number };
-  /** Symmetry: every dab is repeated mirrored across a vertical line at `x` and/or a horizontal one at `y` (document pixels). */
-  mirror?: { x?: number; y?: number };
+  /** Symmetry: every dab is repeated at each of these maps of its position (mirrors or turns, in document space). */
+  copies?: Mat[];
 }
 
 const RETOUCH_MODE = { dodge: 0, burn: 1, blur: 2, sharpen: 3 } as const;
@@ -372,13 +372,11 @@ export class Stroke {
       box.h = Math.max(a.y, b.y, c.y, d.y) - box.y;
       region = union(region, box);
     };
-    // With symmetry on, each dab is placed again mirrored across the axis (or axes).
-    const mx = this.o.mirror?.x, my = this.o.mirror?.y;
+    // With symmetry on, each dab is placed again at every mirrored or turned copy of its position.
+    const copies = this.o.copies ?? [];
     const place = (x: number, y: number, pr: number) => {
       dab(x, y, pr);
-      if (mx !== undefined) dab(2 * mx - x, y, pr);
-      if (my !== undefined) dab(x, 2 * my - y, pr);
-      if (mx !== undefined && my !== undefined) dab(2 * mx - x, 2 * my - y, pr);
+      for (const m of copies) { const q = apply(m, x, y); dab(q.x, q.y, pr); }
     };
     if (!this.last) {
       place(p.x, p.y, p.pressure);

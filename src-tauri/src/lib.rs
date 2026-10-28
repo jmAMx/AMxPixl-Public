@@ -92,7 +92,8 @@ fn write_settings(app: tauri::AppHandle, json: String) -> Result<(), String> {
 /// Opens the project's release page in the default browser (only that page, so this can't launch anything else).
 #[tauri::command]
 fn open_release_page(url: String) -> Result<(), String> {
-  if !url.starts_with("https://github.com/jmAMx/AMxPixl-public/releases") || url.contains(['"', ' ', '&', '|', '^']) {
+  // GitHub links don't care about case, so neither does this check (the API may hand back either spelling).
+  if !url.to_ascii_lowercase().starts_with("https://github.com/jmamx/amxpixl-public/releases") || url.contains(['"', ' ', '&', '|', '^']) {
     return Err("not a release page".into());
   }
   std::process::Command::new("explorer").arg(&url).spawn().map(|_| ()).map_err(|e| e.to_string())

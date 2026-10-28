@@ -2,9 +2,13 @@
 
 Each version's section becomes its release notes (`scripts/release.ps1` copies it to the download page).
 
-## Next
+## 0.6.7
 
-- Pixl is open source under the MIT licence (see LICENSE and Help › About).
+- **Open source**: Pixl is now under the MIT licence (see LICENSE and Help › About).
+- **Radial symmetry**: Mirror › Radial turns every stroke into 2–16 copies around a centre, like spokes of a wheel.
+- **Move the symmetry centre**: drag the round handle where the mirror lines cross. It snaps to guides and to the canvas middle and edges, and **Centre** puts it back in the middle.
+- **Properties for several layers**: with more than one layer (or a group) selected, X, Y, W and H show the box around all of them. Typing a position moves them all, and a size resizes them together.
+- **Trim to Content** (Layer menu, or right-click a layer): shrinks image layers' stored pixels to the area that has something in it. Nothing changes on the canvas; files get smaller and use less memory.
 
 ## 0.6.6
 

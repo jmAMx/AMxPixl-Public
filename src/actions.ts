@@ -10,7 +10,7 @@ import { clearRecovery } from './core/recovery';
 import { cloneCanvas, ctx2d, drawPlaced, follow, layerMatrix, localBounds, newCanvas } from './core/layers';
 import { savedLooks, storeLooks, type Look, type LookItem } from './core/looks';
 import { parseCube } from './core/lut';
-import { apply, decompose, invert, mapRect, matScale, mul, roundOut, setT, tidy, union, xformMatrix, type Mat, type Pt, type Rect, type Xform } from './core/math';
+import { apply, decompose, intersect, invert, mapRect, matScale, mul, roundOut, setT, tidy, union, xformMatrix, type Mat, type Pt, type Rect, type Xform } from './core/math';
 import { flatten, renderDoc } from './core/render';
 import { layerBoxReady, trimRect } from './core/bounds';
 import { Stroke } from './core/brush';
@@ -324,6 +324,39 @@ export async function distributeLayers(axis: 'h' | 'v') {
     at += size(u.box) + gap;
   }
   doc.commit(axis === 'h' ? 'Distribute horizontally' : 'Distribute vertically');
+}
+
+/**
+ * Layer › Trim to Content: shrinks the selected image layers' pixels to the area that has something in it. Nothing
+ * moves or changes on the canvas; the layers just stop carrying empty space (smaller files, less memory).
+ */
+export async function trimLayers() {
+  const doc = need(); if (!doc) return;
+  const layers = doc.selectedPlaced().filter((l): l is RasterLayer => l.type === 'raster' && !l.warp);
+  if (!layers.length) { toast('Select an image layer to trim (warped layers can\'t be trimmed until the warp is applied).'); return; }
+  const boxes = await Promise.all(layers.map((l) => layerBoxReady(l, doc.pool, 'content')));
+  if (!app.docs.includes(doc)) return;
+  let saved = 0, trimmed = 0;
+  layers.forEach((l, i) => {
+    const src = doc.pool.get(l.key);
+    if (!src) return;
+    // A 2px transparent border stays, so a turned or scaled layer's edges blend exactly as they did before.
+    const b = roundOut(boxes[i]);
+    const r = intersect({ x: b.x - 2, y: b.y - 2, w: b.w + 4, h: b.h + 4 }, { x: 0, y: 0, w: src.width, h: src.height });
+    if (!r || (r.x <= 0 && r.y <= 0 && r.w >= src.width && r.h >= src.height)) return;
+    const c = newCanvas(r.w, r.h);
+    ctx2d(c).drawImage(src, -r.x, -r.y);
+    // The new top-left is the old (r.x, r.y): same place on the canvas, same turn and scale.
+    const p = apply(layerMatrix(l), r.x, r.y);
+    saved += src.width * src.height - r.w * r.h;
+    l.key = doc.addCanvas(c);
+    l.t = { ...l.t, x: p.x, y: p.y };
+    if (l.box) l.box = { ...l.box, x: l.box.x - r.x, y: l.box.y - r.y };
+    trimmed++;
+  });
+  if (!trimmed) { toast('Nothing to trim: the layer has no empty edges.'); return; }
+  doc.commit(trimmed > 1 ? 'Trim layers' : 'Trim layer');
+  toast(`Trimmed ${trimmed} layer${trimmed > 1 ? 's' : ''}, ${Math.round(saved / 1e4) / 100} megapixels lighter.`);
 }
 
 /** Shows or hides several layers in one step (the eye of a layer that's part of a multiple selection). */

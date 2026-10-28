@@ -2,6 +2,12 @@
 
 A lightweight, non-destructive image editor. It aims to beat GIMP for everyday design and photo work and to run well on older hardware, including integrated graphics.
 
+## Download
+
+Get the latest installer from the [Releases](https://github.com/jmAMx/AMxPixl-Public/releases/latest) page and run it (Windows 10 or 11, 64-bit). It installs for your user account and doesn't need administrator rights. Help › Check for Updates tells you when a new version is out.
+
+The installer isn't code-signed yet, so Windows SmartScreen may say "Windows protected your PC" the first time. Choose **More info › Run anyway**.
+
 ## System requirements
 
 | | Minimum | Recommended |
@@ -37,7 +43,7 @@ This runs the desktop app with live reload. `npm run package` builds `src-tauri/
 
 1. Bump `version` in `package.json` and add a `## <version>` section to `CHANGELOG.md`.
 2. `npm run package`
-3. Commit, then `npm run release`. It copies the new commits onto the `public-main` branch (`npm run sync-public` does just that step) and stops if one names specific hardware. Then it tags the version, pushes `public-main` and its version tags to this repository, and publishes the installer on the [Releases](https://github.com/jmAMx/AMxPixl-public/releases) page. Add `-- -Draft` to review it on GitHub before it goes live. The app's Help › Check for Updates reads that page.
+3. Commit, then `npm run release`. It copies the new commits onto the `public-main` branch (`npm run sync-public` does just that step) and stops if one names specific hardware. Then it tags the version, pushes `public-main` and its version tags to this repository, and publishes the installer on the [Releases](https://github.com/jmAMx/AMxPixl-Public/releases) page. Add `-- -Draft` to review it on GitHub before it goes live. The app's Help › Check for Updates reads that page.
 
 Every version from 0.1.0 on has a `v…` tag, including ones that weren't published as releases; `CHANGELOG.md` has the notes for each.
 

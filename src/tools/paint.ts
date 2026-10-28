@@ -12,7 +12,7 @@ import { h } from '../ui/dom';
 import { checkbox, icon, seg, slider, toast } from '../ui/widgets';
 import { brushDialog } from '../ui/brushpanel';
 import { listTips } from '../core/tips';
-import { drawSymmetryAxes, mirrorAxes, symmetryControl } from './symmetry';
+import { drawSymmetryGuides, symmetryControl, symmetryCopies, symmetryDown, symmetryMove, symmetryUp } from './symmetry';
 import type { PInfo, Tool } from './tool';
 
 /** What painting should go to (the active layer's pixels or its mask), or null after explaining why not. */
@@ -91,6 +91,7 @@ class PaintTool implements Tool {
 
   down(p: PInfo) {
     if (p.alt && this.id === 'brush') { pickColor(p); return; }
+    if (symmetryDown(p)) return;
     const doc = app.doc!;
     const pt = paintableTarget(doc);
     if (!pt) return;
@@ -98,17 +99,19 @@ class PaintTool implements Tool {
     this.onMask = pt.isMask;
     const erase = pt.isMask ? this.id === 'eraser' || maskHides() : this.id === 'eraser';
     this.stroke = new Stroke(doc, pt.target, { color: pt.isMask ? '#ffffff' : app.fg, size: o.size, hardness: o.hardness, opacity: o.opacity, flow: o.flow, erase, pressure: o.pressure, aliased: !o.antiAlias,
-      tip: o.tip, spacing: o.spacing / 100, jitter: o.jitter, scatter: o.scatter, mirror: mirrorAxes(doc) });
+      tip: o.tip, spacing: o.spacing / 100, jitter: o.jitter, scatter: o.scatter, copies: symmetryCopies(doc) });
     if (p.shift && this.last) this.stroke.add({ x: this.last.x, y: this.last.y, pressure: p.pressure });
     this.stroke.add({ x: p.x, y: p.y, pressure: p.pressure });
   }
 
   move(p: PInfo) {
+    if (symmetryMove(p)) return;
     if (p.alt && this.id === 'brush' && !this.stroke) { pickColor(p); return; }
     this.stroke?.add({ x: p.x, y: p.y, pressure: p.pressure });
   }
 
   up(p: PInfo) {
+    if (symmetryUp()) return;
     if (!this.stroke) return;
     this.stroke.end(this.onMask ? 'Paint mask' : this.id === 'brush' ? 'Brush' : 'Eraser');
     this.stroke = null;
@@ -126,7 +129,7 @@ class PaintTool implements Tool {
     return true;
   }
 
-  overlay(ctx: CanvasRenderingContext2D) { drawSymmetryAxes(ctx); drawBrushCursor(ctx, this.o.size); }
+  overlay(ctx: CanvasRenderingContext2D) { drawSymmetryGuides(ctx); drawBrushCursor(ctx, this.o.size); }
 }
 
 // ---------- paint bucket ----------

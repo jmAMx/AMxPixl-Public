@@ -3,7 +3,7 @@ import { Stroke } from '../core/brush';
 import { view } from '../ui/canvasview';
 import { checkbox, seg, slider } from '../ui/widgets';
 import { paintableTarget } from './paint';
-import { drawSymmetryAxes, mirrorAxes, symmetryControl } from './symmetry';
+import { drawSymmetryGuides, symmetryControl, symmetryCopies, symmetryDown, symmetryMove, symmetryUp } from './symmetry';
 import type { PInfo, Tool } from './tool';
 
 type Kind = 'dodge' | 'burn' | 'blur' | 'sharpen' | 'smudge';
@@ -48,6 +48,7 @@ class RetouchTool implements Tool {
   }
 
   down(p: PInfo) {
+    if (this.id !== 'smudge' && symmetryDown(p)) return;
     const doc = app.doc!;
     const pt = paintableTarget(doc);
     if (!pt) return;
@@ -57,14 +58,18 @@ class RetouchTool implements Tool {
     this.stroke = new Stroke(doc, pt.target, {
       color: '#ffffff', size: o.size, hardness: o.hardness, opacity: 1, flow: 1, erase: false, pressure: o.pressure,
       spacing: kind === 'smudge' ? 0.08 : 0.12, retouch: { mode: kind, strength: o.strength, range: o.range },
-      mirror: kind === 'smudge' ? undefined : mirrorAxes(doc),
+      copies: kind === 'smudge' ? undefined : symmetryCopies(doc),
     });
     this.stroke.add({ x: p.x, y: p.y, pressure: p.pressure });
   }
 
-  move(p: PInfo) { this.stroke?.add({ x: p.x, y: p.y, pressure: p.pressure }); }
+  move(p: PInfo) {
+    if (symmetryMove(p)) return;
+    this.stroke?.add({ x: p.x, y: p.y, pressure: p.pressure });
+  }
 
   up() {
+    if (symmetryUp()) return;
     if (!this.stroke) return;
     this.stroke.end(this.label);
     this.stroke = null;
@@ -81,7 +86,7 @@ class RetouchTool implements Tool {
   }
 
   overlay(ctx: CanvasRenderingContext2D) {
-    if (this.id !== 'smudge') drawSymmetryAxes(ctx);
+    if (this.id !== 'smudge') drawSymmetryGuides(ctx);
     const hv = view.hover;
     if (!hv) return;
     const r = Math.max(1, (this.o.size / 2) * view.zoom);

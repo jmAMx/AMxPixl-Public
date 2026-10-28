@@ -9,7 +9,7 @@ import type { Doc } from '../core/document';
 import { canMove, DEFAULT_MOTION, fxDef } from '../core/effects';
 import { layerBox } from '../core/bounds';
 import { ctx2d, layerMatrix, localBounds, newCanvas } from '../core/layers';
-import { apply } from '../core/math';
+import { apply, decompose, mapRect, mul, scale, translate, union, xformMatrix, type Rect } from '../core/math';
 import { renderDoc } from '../core/render';
 import type { AdjParams, AdjustLayer, Channel, CurvePts, EffectLayer, GradeWheel, Layer, LayerStyles, LevelsCh, PlacedLayer, ShapeLayer, TextLayer } from '../core/types';
 import { isPlaced } from '../core/types';
@@ -112,6 +112,41 @@ export function propertiesPanel() {
         h('button', { class: 'icon-btn', type: 'button', title: 'Flip vertical', onclick: () => flipLayer('v') }, icon('flipV')),
         h('button', { class: 'btn small', type: 'button', title: 'Original size, no rotation', onclick: () => resetTransform() }, 'Reset'))),
       note);
+  };
+
+  /**
+   * X, Y, W and H of the box around several selected layers (or a group's contents): typing a position moves them
+   * all, a size resizes them all from the box's top-left corner.
+   */
+  const multiTransformSection = (layers: PlacedLayer[], title: string) => {
+    const doc = app.doc!;
+    const box = () => {
+      let u: Rect | null = null;
+      for (const l of layers) u = union(u, mapRect(layerMatrix(l), layerBox(l, doc.pool, app.opts.move.box, () => refresh()) ?? localBounds(l, doc.pool)));
+      return u!;
+    };
+    const move = (dx: number, dy: number) => {
+      for (const l of layers) setPlacedTransform(l, { ...l.t, x: l.t.x + dx, y: l.t.y + dy });
+      commitSelf('Move');
+    };
+    const resize = (kx: number, ky: number) => {
+      const b = box();
+      const g = mul(translate(b.x, b.y), mul(scale(kx, ky), translate(-b.x, -b.y)));
+      for (const l of layers) {
+        if (l.mask) l.mask.t = decompose(mul(g, xformMatrix(l.mask.t)));
+        l.t = decompose(mul(g, xformMatrix(l.t)));
+      }
+      commitSelf('Resize layers');
+    };
+    const b0 = box();
+    const x = numField('X', b0.x, (v) => move(v - box().x, 0), { unit: 'px' });
+    const y = numField('Y', b0.y, (v) => move(0, v - box().y), { unit: 'px' });
+    const w = numField('W', b0.w, (v) => resize(Math.max(1, v) / box().w, 1), { unit: 'px' });
+    const hh = numField('H', b0.h, (v) => resize(1, Math.max(1, v) / box().h), { unit: 'px' });
+    const refresh = () => { const b = box(); x.set(b.x); y.set(b.y); w.set(b.w); hh.set(b.h); };
+    refreshers.push(refresh);
+    return section(title, h('div', { class: 'grid2' }, x, y, w, hh),
+      h('p', { class: 'props-note' }, `The box around ${layers.length} layers: they move and resize together.`));
   };
 
   const colorInput = (value: string, onInput: (v: string) => void, onDone: () => void) => {
@@ -579,14 +614,18 @@ export function propertiesPanel() {
     if (l.type === 'group') kids.push(section('Group', h('p', { class: 'props-note' },
       `${l.children.length} layer${l.children.length === 1 ? '' : 's'}. With "Pass Through" blending, adjustments and effects inside the group also affect layers below it; pick any other blend mode in the Layers panel to keep them inside the group.`)));
     if (l.mask) kids.push(maskSection(l));
-    if (isPlaced(l)) kids.push(transformSection(l));
+    // Several layers (or a group): one box for all of them; otherwise the layer's own transform.
+    const many = doc.selectedPlaced();
+    if (many.length > 1 || (l.type === 'group' && many.length)) {
+      kids.push(multiTransformSection(many, doc.selectedIds().length > 1 ? `Transform · ${doc.selectedIds().length} selected` : 'Transform · group contents'));
+    } else if (isPlaced(l)) kids.push(transformSection(l));
     if (isPlaced(l) || l.type === 'group') kids.push(stylesSection(l), blendIfSection(l));
     body.replaceChildren(...kids.filter(Boolean) as HTMLElement[]);
   };
 
   const signature = () => {
     const doc = app.doc, l = doc?.active;
-    return doc && l ? `${l.id}|${l.type}|${!!l.mask}|${doc.maskEdit}|${doc.index}|${doc.entries.length}` : String(!!doc);
+    return doc && l ? `${l.id}|${doc.alsoSelected.join()}|${l.type}|${!!l.mask}|${doc.maskEdit}|${doc.index}|${doc.entries.length}` : String(!!doc);
   };
 
   // Rebuild when the selected layer or the history position changes; otherwise just refresh numbers in place

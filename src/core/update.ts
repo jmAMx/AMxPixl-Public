@@ -4,7 +4,7 @@ import { isDesktop } from './platform';
  * Update check against the public AMxPixl repository's GitHub releases (published by scripts/release.ps1). If the check
  * fails (offline, no releases yet) the quiet startup check says nothing.
  */
-const REPO = 'jmAMx/AMxPixl-public';
+const REPO = 'jmAMx/AMxPixl-Public';
 export const RELEASES_URL = `https://github.com/${REPO}/releases/latest`;
 const LAST_CHECK = 'amxpixl.updateCheck';
 
@@ -34,7 +34,7 @@ export function dueForCheck() {
 }
 
 export async function openReleasePage(url = RELEASES_URL) {
-  if (!url.startsWith(`https://github.com/${REPO}/releases`)) url = RELEASES_URL;
+  if (!url.toLowerCase().startsWith(`https://github.com/${REPO}/releases`.toLowerCase())) url = RELEASES_URL;
   if (isDesktop) {
     const { invoke } = await import('@tauri-apps/api/core');
     await invoke('open_release_page', { url });

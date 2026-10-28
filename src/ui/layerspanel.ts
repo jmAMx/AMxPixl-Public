@@ -1,6 +1,6 @@
 import { app } from '../app';
 import {
-  addMask, applyLook, applyMask, clearStyles, deleteLayer, deleteMask, duplicateLayer, groupLayer, invertMask, lookSourceLayers, mergeDown, setLayersVisible,
+  addMask, applyLook, applyMask, clearStyles, deleteLayer, deleteMask, duplicateLayer, groupLayer, invertMask, lookSourceLayers, mergeDown, setLayersVisible, trimLayers,
   moveLayer, newAdjustment, newEffect, newGroup, newLayer, newLut, rasterizeLayer, selectLayerShape, setLayerProp, setMaskProp, toggleClip, ungroup,
 } from '../actions';
 import { BUILTIN_LOOKS, savedLooks } from '../core/looks';
@@ -77,6 +77,7 @@ function layerContextMenu(l: Layer, x: number, y: number) {
     { sep: true },
     { label: 'Merge Down', accel: 'Ctrl+E', disabled: !at?.index, onClick: mergeDown },
     { label: l.type === 'group' ? 'Merge Group' : 'Rasterize', disabled: l.type === 'raster' || isFilter(l), onClick: rasterizeLayer },
+    { label: 'Trim to Content', disabled: l.type !== 'raster' && l.type !== 'group' && n < 2, onClick: () => { void trimLayers(); } },
     { label: 'Clear Layer Style', disabled: !l.styles, onClick: clearStyles },
     { sep: true },
     { label: 'Save Effects as Look…', disabled: !lookSourceLayers().length, onClick: saveLookDialog },
