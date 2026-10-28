@@ -1,6 +1,6 @@
 import { app } from '../app';
 import {
-  addMask, applyLook, applyMask, clearStyles, deleteLayer, deleteMask, duplicateLayer, groupLayer, invertMask, lookSourceLayers, mergeDown,
+  addMask, applyLook, applyMask, clearStyles, deleteLayer, deleteMask, duplicateLayer, groupLayer, invertMask, lookSourceLayers, mergeDown, setLayersVisible,
   moveLayer, newAdjustment, newEffect, newGroup, newLayer, newLut, rasterizeLayer, selectLayerShape, setLayerProp, setMaskProp, toggleClip, ungroup,
 } from '../actions';
 import { BUILTIN_LOOKS, savedLooks } from '../core/looks';
@@ -64,14 +64,15 @@ export function maskMenuItems(): MenuItem[] {
 function layerContextMenu(l: Layer, x: number, y: number) {
   const doc = app.doc!;
   const at = doc.locate(l.id);
+  const n = doc.selectedIds().length, s = n > 1 ? `${n} Layers` : 'Layer';
   popupMenu([
-    { label: 'Duplicate Layer', accel: 'Ctrl+J', onClick: duplicateLayer },
-    { label: 'Delete Layer', onClick: () => deleteLayer() },
+    { label: `Duplicate ${s}`, accel: 'Ctrl+J', onClick: duplicateLayer },
+    { label: `Delete ${s}`, onClick: () => deleteLayer() },
     { sep: true },
     { label: l.clip ? 'Release Clipping Mask' : 'Create Clipping Mask', accel: 'Ctrl+Alt+G', disabled: !l.clip && !at?.index, onClick: toggleClip },
     ...maskMenuItems(),
     { sep: true },
-    { label: 'Group Layer', accel: 'Ctrl+G', onClick: groupLayer },
+    { label: `Group ${s}`, accel: 'Ctrl+G', onClick: groupLayer },
     { label: 'Ungroup', accel: 'Ctrl+Shift+G', disabled: l.type !== 'group' && !at?.parent, onClick: ungroup },
     { sep: true },
     { label: 'Merge Down', accel: 'Ctrl+E', disabled: !at?.index, onClick: mergeDown },
@@ -214,7 +215,13 @@ export function layersPanel() {
     },
     h('button', {
       class: 'eye', type: 'button', title: (vis ? 'Hide layer' : 'Show layer') + (doc.anim ? ' in this frame' : ''), 'aria-label': 'Toggle visibility',
-      onclick: (e: MouseEvent) => { e.stopPropagation(); setLayerProp(l.id, { visible: !vis }, vis ? 'Hide layer' : 'Show layer'); },
+      onclick: (e: MouseEvent) => {
+        e.stopPropagation();
+        // The eye of one of several selected layers shows or hides them all.
+        const sel = doc.selectedIds();
+        if (sel.length > 1 && sel.includes(l.id)) setLayersVisible(sel, !vis);
+        else setLayerProp(l.id, { visible: !vis }, vis ? 'Hide layer' : 'Show layer');
+      },
     }, icon(vis ? 'eye' : 'eyeOff')),
     chevron,
     l.clip ? h('span', { class: 'clip-arrow', title: 'Clipped to the layer below' }, icon('clip')) : null,
@@ -227,7 +234,8 @@ export function layersPanel() {
 
     r.addEventListener('contextmenu', (e) => {
       e.preventDefault();
-      if (doc.activeId !== l.id) { doc.setActive(l.id, false); doc.touch('meta'); }
+      // Right-clicking one of several selected layers keeps them selected, so the menu acts on all of them.
+      if (!doc.selectedIds().includes(l.id)) { doc.setActive(l.id, false); doc.touch('meta'); }
       layerContextMenu(l, e.clientX, e.clientY);
     });
 

@@ -124,6 +124,18 @@ const MENUS: MenuDef[] = [
         { sep: true },
         { label: 'Reset Transform', onClick: () => A.resetTransform(), disabled: !app.doc?.activePlaced },
       ] },
+      { label: 'Align', sub: () => [
+        { label: 'Left Edges', onClick: () => { void A.alignLayers('left'); }, disabled: !hasLayer() },
+        { label: 'Horizontal Centres', onClick: () => { void A.alignLayers('hcenter'); }, disabled: !hasLayer() },
+        { label: 'Right Edges', onClick: () => { void A.alignLayers('right'); }, disabled: !hasLayer() },
+        { sep: true },
+        { label: 'Top Edges', onClick: () => { void A.alignLayers('top'); }, disabled: !hasLayer() },
+        { label: 'Vertical Centres', onClick: () => { void A.alignLayers('vcenter'); }, disabled: !hasLayer() },
+        { label: 'Bottom Edges', onClick: () => { void A.alignLayers('bottom'); }, disabled: !hasLayer() },
+        { sep: true },
+        { label: 'Distribute Horizontally', onClick: () => { void A.distributeLayers('h'); }, disabled: (app.doc?.selectedIds().length ?? 0) < 3 },
+        { label: 'Distribute Vertically', onClick: () => { void A.distributeLayers('v'); }, disabled: (app.doc?.selectedIds().length ?? 0) < 3 },
+      ] },
       { label: 'Arrange', sub: () => [
         { label: 'Bring to Front', accel: 'Ctrl+Shift+]', onClick: () => A.arrange('top'), disabled: !hasLayer() },
         { label: 'Bring Forward', accel: 'Ctrl+]', onClick: () => A.arrange('up'), disabled: !hasLayer() },

@@ -4,6 +4,10 @@ Each version's section becomes its release notes (`scripts/release.ps1` copies i
 
 ## 0.6.6
 
+- **Move a whole group**: select a group and the Move tool moves, scales and turns everything inside it together.
+- **Align and distribute** (Move tool options, or Layer › Align): line selected layers up by their edges or centres, or space three or more evenly. A single layer lines up with the canvas. Groups count as one item, and it lines up what you see, not the layer's full area.
+- **Several selected layers at once**: Group (Ctrl+G), Duplicate (Ctrl+J), Delete, and the eye (show/hide) work on every selected layer.
+- **Symmetry painting**: a Mirror option for the Brush, Eraser, Dodge, Burn, Blur and Sharpen tools. It mirrors strokes left/right, top/bottom or four ways across the middle of the canvas, shown by a dashed line.
 - Fixed: Lens Distortion (with transparent edges) cut off glows and anything else just past the canvas edge, leaving a hard line, most noticeably after Crop to Content. Effects that reach past the edge now see what's really there.
 - The new AMx logo in the "An AMx app" credit, in dark and light versions.
 - A tidier top bar: the version number moved to the window's title bar only, and "Pixl" lines up with the tool icons below it. The toolbox scrolls without a scrollbar, so the icons stay put in short windows.

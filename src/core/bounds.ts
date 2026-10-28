@@ -51,6 +51,14 @@ export function alphaBounds(key: string, canvas: HTMLCanvasElement, onReady?: ()
   return undefined;
 }
 
+/** layerBox, waiting for an image layer's content box if it's still being worked out. */
+export function layerBoxReady(l: PlacedLayer, pool: Map<string, HTMLCanvasElement>, mode: BoxMode): Promise<Rect> {
+  return new Promise((res) => {
+    const attempt = () => { const b = layerBox(l, pool, mode, attempt); if (b) res(b); };
+    attempt();
+  });
+}
+
 /**
  * A layer's bounding box in its own (pre-transform) pixels. 'content' hugs an image layer's visible pixels (text and
  * shapes are already tight), 'layer' is the whole layer, 'custom' is the box saved on the layer. Null only while an

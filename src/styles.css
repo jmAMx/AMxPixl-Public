@@ -250,6 +250,8 @@ input[type="range"]:focus-visible::-webkit-slider-thumb { background: var(--acce
 .opt-body.side .slider.compact { display: grid; grid-template-columns: 62px minmax(0, 1fr) auto; }
 .opt-body.side .field, .opt-body.side .opt { display: flex; justify-content: space-between; }
 .opt-body.side .opt-note { white-space: normal; }
+.align-btns { gap: 0; }
+.opt-body.side .align-btns { flex-wrap: wrap; justify-content: flex-start; }
 .opt-body.side .seg { align-self: flex-start; flex-wrap: wrap; }
 .opt-body.side .font-select, .opt-body.side select { max-width: 100%; }
 .tool:hover { background: var(--raised); }

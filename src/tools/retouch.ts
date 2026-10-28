@@ -3,6 +3,7 @@ import { Stroke } from '../core/brush';
 import { view } from '../ui/canvasview';
 import { checkbox, seg, slider } from '../ui/widgets';
 import { paintableTarget } from './paint';
+import { drawSymmetryAxes, mirrorAxes, symmetryControl } from './symmetry';
 import type { PInfo, Tool } from './tool';
 
 type Kind = 'dodge' | 'burn' | 'blur' | 'sharpen' | 'smudge';
@@ -42,6 +43,8 @@ class RetouchTool implements Tool {
       bar.append(seg([{ v: '0', label: 'Shadows' }, { v: '1', label: 'Midtones' }, { v: '2', label: 'Highlights' }], String(o.range), (v) => { o.range = Number(v); app.saveOpts(); }));
     }
     bar.append(checkbox('Pen pressure', o.pressure, (v) => { o.pressure = v; app.saveOpts(); }, 'Pressure controls size when using a drawing tablet'));
+    // Smudge carries paint along the stroke, which a mirrored copy can't share, so it has no symmetry.
+    if (this.id !== 'smudge') bar.append(symmetryControl());
   }
 
   down(p: PInfo) {
@@ -54,6 +57,7 @@ class RetouchTool implements Tool {
     this.stroke = new Stroke(doc, pt.target, {
       color: '#ffffff', size: o.size, hardness: o.hardness, opacity: 1, flow: 1, erase: false, pressure: o.pressure,
       spacing: kind === 'smudge' ? 0.08 : 0.12, retouch: { mode: kind, strength: o.strength, range: o.range },
+      mirror: kind === 'smudge' ? undefined : mirrorAxes(doc),
     });
     this.stroke.add({ x: p.x, y: p.y, pressure: p.pressure });
   }
@@ -77,6 +81,7 @@ class RetouchTool implements Tool {
   }
 
   overlay(ctx: CanvasRenderingContext2D) {
+    if (this.id !== 'smudge') drawSymmetryAxes(ctx);
     const hv = view.hover;
     if (!hv) return;
     const r = Math.max(1, (this.o.size / 2) * view.zoom);

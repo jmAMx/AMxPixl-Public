@@ -452,6 +452,21 @@ export class Doc {
     return this.all().filter((l) => want.has(l.id)).map((l) => l.id);
   }
 
+  /**
+   * The selected layers that have a place on the canvas, with a selected group standing for every image, text and
+   * shape layer inside it (so moving a group moves its contents). Bottom to top, each once; hidden ones skipped.
+   */
+  selectedPlaced(): PlacedLayer[] {
+    const out = new Map<string, PlacedLayer>();
+    const add = (l: Layer) => {
+      if (!this.shows(l)) return;
+      if (l.type === 'group') l.children.forEach(add);
+      else if (isPlaced(l)) out.set(l.id, l);
+    };
+    for (const id of this.selectedIds()) { const l = this.layer(id); if (l) add(l); }
+    return this.all().filter((l): l is PlacedLayer => out.has(l.id));
+  }
+
   /** Ctrl+click: adds a layer to the selection, or takes it out (the active layer moves to another selected one). */
   toggleSelected(id: string) {
     const sel = this.selectedIds();

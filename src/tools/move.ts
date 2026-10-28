@@ -3,9 +3,10 @@ import { visiblePlaced } from '../core/document';
 import { layerBox } from '../core/bounds';
 import { layerMatrix, localBounds, ctx2d } from '../core/layers';
 import { apply, corners, decompose, identity, invert, mapRect, mul, pointInPoly, scale, translate, union, xformMatrix, type Mat, type Pt, type Rect, type Xform } from '../core/math';
-import { isPlaced, type PlacedLayer, type RasterLayer, type ShapeProps } from '../core/types';
+import type { PlacedLayer, RasterLayer, ShapeProps } from '../core/types';
 import { warpHandles, warpPoint } from '../core/warp';
-import { applyWarp, ensureWarp, flipLayer, removeWarp, resetTransform, rotateLayer90, setPlacedTransform } from '../actions';
+import { alignLayers, applyWarp, distributeLayers, ensureWarp, flipLayer, removeWarp, resetTransform, rotateLayer90, setPlacedTransform } from '../actions';
+import type { IconName } from '../ui/icons';
 import { view } from '../ui/canvasview';
 import { h } from '../ui/dom';
 import { clearSnapLines, snapDelta, snapLines, snapTargets } from '../ui/snap';
@@ -54,7 +55,7 @@ function boxPoint(b: Rect, u: number, v: number): Pt { return { x: b.x + u * b.w
 function currentFrame(): Frame | null {
   const doc = app.doc;
   if (!doc) return null;
-  const layers = doc.selectedIds().map((id) => doc.layer(id)).filter((l): l is PlacedLayer => isPlaced(l) && l.visible);
+  const layers = doc.selectedPlaced();
   if (!layers.length) return null;
   const mode = app.opts.move.box, ready = () => view.requestOverlay();
   if (layers.length === 1) {
@@ -184,10 +185,22 @@ class MoveTool implements Tool {
       h('button', { class: 'btn small', type: 'button', title: 'Set the custom box to the visible pixels', onclick: () => this.fitCustomBox('content') }, 'Fit to content'),
       h('button', { class: 'btn small', type: 'button', title: 'Set the custom box to the whole layer', onclick: () => this.fitCustomBox('layer') }, 'Fit to layer'),
     ] : [];
+    const alignBtn = (ic: IconName, title: string, run: () => void) => h('button', { class: 'icon-btn', type: 'button', title, onclick: run }, icon(ic));
+    const align = h('span', { class: 'opt align-btns' },
+      alignBtn('alignLeft', 'Align left edges (to the canvas when one layer is selected)', () => { void alignLayers('left'); }),
+      alignBtn('alignHCenter', 'Align horizontal centres', () => { void alignLayers('hcenter'); }),
+      alignBtn('alignRight', 'Align right edges', () => { void alignLayers('right'); }),
+      alignBtn('alignTop', 'Align top edges', () => { void alignLayers('top'); }),
+      alignBtn('alignVCenter', 'Align vertical centres', () => { void alignLayers('vcenter'); }),
+      alignBtn('alignBottom', 'Align bottom edges', () => { void alignLayers('bottom'); }),
+      alignBtn('distH', 'Distribute horizontally: equal gaps between three or more layers', () => { void distributeLayers('h'); }),
+      alignBtn('distV', 'Distribute vertically: equal gaps between three or more layers', () => { void distributeLayers('v'); }));
     bar.append(
       modes,
       h('span', { class: 'opt' }, h('span', { class: 'opt-label' }, 'Box'), boxMode),
       ...custom,
+      h('span', { class: 'opt-sep' }),
+      align,
       h('span', { class: 'opt-sep' }),
       checkbox('Auto-select layer', o.autoSelect, (v) => { o.autoSelect = v; app.saveOpts(); }, 'Click picks the layer under the cursor (Ctrl+click does this any time; add Shift to add it to the selection)'),
       checkbox('Snap', app.prefs.snap, (v) => app.setPrefs({ snap: v }), 'Snap to guides, the canvas edges and centre, and other layers'),
@@ -205,7 +218,7 @@ class MoveTool implements Tool {
     app.saveOpts();
     if (v !== 'custom') this.editingBox = false;
     // A layer without a custom box starts from its content box.
-    else if (app.doc?.selectedIds().some((id) => { const l = app.doc!.layer(id); return isPlaced(l) && !l.box; })) this.fitCustomBox('content', true);
+    else if (app.doc?.selectedPlaced().some((l) => !l.box)) this.fitCustomBox('content', true);
     app.emit('tool');
     view.requestOverlay();
   }
@@ -215,9 +228,8 @@ class MoveTool implements Tool {
     const doc = app.doc;
     if (!doc) return;
     let changed = false;
-    for (const id of doc.selectedIds()) {
-      const l = doc.layer(id);
-      if (!isPlaced(l) || (onlyMissing && l.box)) continue;
+    for (const l of doc.selectedPlaced()) {
+      if (onlyMissing && l.box) continue;
       const b = layerBox(l, doc.pool, to) ?? localBounds(l, doc.pool);
       l.box = { ...b };
       changed = true;
@@ -241,7 +253,7 @@ class MoveTool implements Tool {
       if (l) {
         // Shift adds the layer to the selection (or takes it out); clicking one already selected keeps the rest.
         if (p.shift) doc.toggleSelected(l.id);
-        else if (!doc.selectedIds().includes(l.id)) doc.setActive(l.id);
+        else if (!doc.selectedPlaced().some((x) => x.id === l.id)) doc.setActive(l.id);
         doc.touch('meta');
         hit = { kind: 'move' };
       }

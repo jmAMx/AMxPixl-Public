@@ -10,9 +10,9 @@ import { clearRecovery } from './core/recovery';
 import { cloneCanvas, ctx2d, drawPlaced, follow, layerMatrix, localBounds, newCanvas } from './core/layers';
 import { savedLooks, storeLooks, type Look, type LookItem } from './core/looks';
 import { parseCube } from './core/lut';
-import { apply, decompose, invert, matScale, mul, roundOut, setT, tidy, union, xformMatrix, type Mat, type Pt, type Rect, type Xform } from './core/math';
+import { apply, decompose, invert, mapRect, matScale, mul, roundOut, setT, tidy, union, xformMatrix, type Mat, type Pt, type Rect, type Xform } from './core/math';
 import { flatten, renderDoc } from './core/render';
-import { trimRect } from './core/bounds';
+import { layerBoxReady, trimRect } from './core/bounds';
 import { Stroke } from './core/brush';
 import { glops } from './core/glops';
 import { ellipseSub, flattenSub, mapSubs, maskToSubs, polySub, rectSub, toPath2D } from './core/paths';
@@ -194,14 +194,30 @@ export function newGroup() {
   doc.commit('New group');
 }
 
-/** Puts the active layer into a new group in its place. */
+/**
+ * The selected layers, bottom to top, leaving out any inside another selected group (they go along with it). What
+ * Group, Duplicate and Delete act on when several layers are selected.
+ */
+function selectedRoots(doc: Doc): string[] {
+  const sel = new Set(doc.selectedIds());
+  const inside = (id: string) => { for (let p = doc.locate(id)?.parent; p; p = doc.locate(p.id)?.parent) if (sel.has(p.id)) return true; return false; };
+  return [...sel].filter((id) => !inside(id));
+}
+
+/** Puts the selected layers into a new group, where the top one was. */
 export function groupLayer() {
-  const doc = need(); const l = doc?.active; if (!doc || !l) return;
-  const at = doc.locate(l.id)!;
-  const g: GroupLayer = { id: newId(), type: 'group', name: doc.nextName('Group'), visible: true, opacity: 1, blend: 'pass-through', children: [l], open: true };
-  at.list.splice(at.index, 1, g);
+  const doc = need(); if (!doc) return;
+  const ids = selectedRoots(doc);
+  if (!ids.length) return;
+  const g: GroupLayer = { id: newId(), type: 'group', name: doc.nextName('Group'), visible: true, opacity: 1, blend: 'pass-through', children: [], open: true };
+  const top = doc.locate(ids[ids.length - 1])!;
+  top.list.splice(top.index + 1, 0, g);
+  for (const id of ids) {
+    const at = doc.locate(id)!;
+    g.children.push(...at.list.splice(at.index, 1));
+  }
   doc.setActive(g.id);
-  doc.commit('Group layer');
+  doc.commit(ids.length > 1 ? 'Group layers' : 'Group layer');
 }
 
 export function ungroup() {
@@ -227,18 +243,94 @@ function cloneLayer(doc: Doc, l: Layer): Layer {
   return c;
 }
 
+/** Duplicates the selected layers, each copy just above its original; the copies end up selected. */
 export function duplicateLayer() {
-  const doc = need(); const l = doc?.active; if (!doc || !l) return;
-  const copy = cloneLayer(doc, l);
-  copy.name = `${l.name} copy`;
-  doc.insertLayer(copy, l.id);
-  doc.commit('Duplicate layer');
+  const doc = need(); if (!doc) return;
+  const ids = selectedRoots(doc);
+  if (!ids.length) return;
+  const copies: string[] = [];
+  for (const id of ids) {
+    const l = doc.layer(id)!;
+    const copy = cloneLayer(doc, l);
+    copy.name = `${l.name} copy`;
+    doc.insertLayer(copy, l.id);
+    copies.push(copy.id);
+  }
+  doc.setActive(copies[copies.length - 1]);
+  doc.alsoSelected = copies.slice(0, -1);
+  doc.commit(ids.length > 1 ? 'Duplicate layers' : 'Duplicate layer');
 }
 
-export function deleteLayer(id = app.doc?.activeId) {
-  const doc = need(); if (!doc || !id) return;
-  doc.removeLayer(id);
-  doc.commit('Delete layer');
+/** Deletes one layer, or with no id, every selected layer. */
+export function deleteLayer(id?: string) {
+  const doc = need(); if (!doc) return;
+  const ids = id ? [id] : selectedRoots(doc);
+  if (!ids.length) return;
+  for (const x of ids) doc.removeLayer(x);
+  doc.commit(ids.length > 1 ? 'Delete layers' : 'Delete layer');
+}
+
+// ---------- align & distribute ----------
+
+export type AlignEdge = 'left' | 'hcenter' | 'right' | 'top' | 'vcenter' | 'bottom';
+
+/** Each selected layer, or group as a whole, with the box around what it shows (the Move tool's Box setting). */
+async function selectedUnits(doc: Doc): Promise<{ layers: PlacedLayer[]; box: Rect }[]> {
+  const units: { layers: PlacedLayer[]; box: Rect }[] = [];
+  for (const id of selectedRoots(doc)) {
+    const l = doc.layer(id)!;
+    const layers = (l.type === 'group' ? flatLayers(l.children) : [l]).filter((x): x is PlacedLayer => isPlaced(x) && doc.shows(x));
+    if (!layers.length) continue;
+    let box: Rect | null = null;
+    for (const x of layers) box = union(box, mapRect(layerMatrix(x), await layerBoxReady(x, doc.pool, app.opts.move.box)));
+    units.push({ layers, box: box! });
+  }
+  return units;
+}
+
+const shiftUnit = (layers: PlacedLayer[], dx: number, dy: number) => {
+  for (const l of layers) setPlacedTransform(l, { ...l.t, x: l.t.x + dx, y: l.t.y + dy });
+};
+
+/** Lines the selected layers up by an edge or centre: with each other, or with the canvas when there's just one. */
+export async function alignLayers(edge: AlignEdge) {
+  const doc = need(); if (!doc) return;
+  const units = await selectedUnits(doc);
+  if (!app.docs.includes(doc)) return;
+  if (!units.length) { toast('Select a layer to align.'); return; }
+  const ref = units.length > 1 ? units.reduce<Rect | null>((r, u) => union(r, u.box), null)! : { x: 0, y: 0, w: doc.width, h: doc.height };
+  for (const { layers, box: b } of units) {
+    const dx = edge === 'left' ? ref.x - b.x : edge === 'right' ? ref.x + ref.w - b.x - b.w : edge === 'hcenter' ? ref.x + (ref.w - b.w) / 2 - b.x : 0;
+    const dy = edge === 'top' ? ref.y - b.y : edge === 'bottom' ? ref.y + ref.h - b.y - b.h : edge === 'vcenter' ? ref.y + (ref.h - b.h) / 2 - b.y : 0;
+    shiftUnit(layers, dx, dy);
+  }
+  doc.commit(units.length > 1 ? 'Align layers' : 'Align to canvas');
+}
+
+/** Spaces three or more selected layers evenly between the outermost two (equal gaps). */
+export async function distributeLayers(axis: 'h' | 'v') {
+  const doc = need(); if (!doc) return;
+  const units = await selectedUnits(doc);
+  if (!app.docs.includes(doc)) return;
+  if (units.length < 3) { toast('Select three or more layers to distribute.'); return; }
+  const pos = (b: Rect) => (axis === 'h' ? b.x : b.y), size = (b: Rect) => (axis === 'h' ? b.w : b.h);
+  units.sort((a, b) => pos(a.box) - pos(b.box));
+  const first = units[0].box, last = units[units.length - 1].box;
+  const gap = (pos(last) + size(last) - pos(first) - units.reduce((s, u) => s + size(u.box), 0)) / (units.length - 1);
+  let at = pos(first);
+  for (const u of units) {
+    const d = at - pos(u.box);
+    shiftUnit(u.layers, axis === 'h' ? d : 0, axis === 'v' ? d : 0);
+    at += size(u.box) + gap;
+  }
+  doc.commit(axis === 'h' ? 'Distribute horizontally' : 'Distribute vertically');
+}
+
+/** Shows or hides several layers in one step (the eye of a layer that's part of a multiple selection). */
+export function setLayersVisible(ids: string[], visible: boolean) {
+  const doc = need(); if (!doc) return;
+  for (const id of ids) setLayerProp(id, { visible });
+  doc.commit(visible ? 'Show layers' : 'Hide layers');
 }
 
 export function setLayerProp(id: string, patch: Partial<Pick<Layer, 'name' | 'visible' | 'opacity' | 'blend' | 'clip'>>, label?: string) {

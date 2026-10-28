@@ -12,6 +12,7 @@ import { h } from '../ui/dom';
 import { checkbox, icon, seg, slider, toast } from '../ui/widgets';
 import { brushDialog } from '../ui/brushpanel';
 import { listTips } from '../core/tips';
+import { drawSymmetryAxes, mirrorAxes, symmetryControl } from './symmetry';
 import type { PInfo, Tool } from './tool';
 
 /** What painting should go to (the active layer's pixels or its mask), or null after explaining why not. */
@@ -84,6 +85,7 @@ class PaintTool implements Tool {
       slider({ label: 'Flow', min: 0.01, max: 1, step: 1, display: 100, value: o.flow, unit: '%', compact: true, onInput: (v) => { o.flow = v; }, onChange: () => app.saveOpts() }),
       checkbox('Pen pressure', o.pressure, (v) => { o.pressure = v; app.saveOpts(); }, 'Pressure controls size when using a drawing tablet'),
       checkbox('Anti-alias', o.antiAlias, (v) => { o.antiAlias = v; app.saveOpts(); }, 'Turn off to paint whole pixels with hard edges, like a pencil (pixel art)'),
+      symmetryControl(),
     );
   }
 
@@ -96,7 +98,7 @@ class PaintTool implements Tool {
     this.onMask = pt.isMask;
     const erase = pt.isMask ? this.id === 'eraser' || maskHides() : this.id === 'eraser';
     this.stroke = new Stroke(doc, pt.target, { color: pt.isMask ? '#ffffff' : app.fg, size: o.size, hardness: o.hardness, opacity: o.opacity, flow: o.flow, erase, pressure: o.pressure, aliased: !o.antiAlias,
-      tip: o.tip, spacing: o.spacing / 100, jitter: o.jitter, scatter: o.scatter });
+      tip: o.tip, spacing: o.spacing / 100, jitter: o.jitter, scatter: o.scatter, mirror: mirrorAxes(doc) });
     if (p.shift && this.last) this.stroke.add({ x: this.last.x, y: this.last.y, pressure: p.pressure });
     this.stroke.add({ x: p.x, y: p.y, pressure: p.pressure });
   }
@@ -124,7 +126,7 @@ class PaintTool implements Tool {
     return true;
   }
 
-  overlay(ctx: CanvasRenderingContext2D) { drawBrushCursor(ctx, this.o.size); }
+  overlay(ctx: CanvasRenderingContext2D) { drawSymmetryAxes(ctx); drawBrushCursor(ctx, this.o.size); }
 }
 
 // ---------- paint bucket ----------
