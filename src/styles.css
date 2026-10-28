@@ -76,8 +76,9 @@ button, select, input, textarea { font: inherit; color: inherit; }
   display: flex; align-items: center; gap: 4px; height: 36px; padding: 0 8px 0 4px;
   background: var(--panel); border-bottom: 1px solid var(--border);
 }
-/* 4px bar padding + 10px puts "Pixl" 14px in, lined up with the tool icons below (6px toolbox padding + 8px inside each button). */
-.brand { display: flex; align-items: center; gap: 7px; margin-right: 14px; padding-left: 10px; }
+/* 4px bar padding + 10px puts "Pixl" 14px in, lined up with the tool icons below (6px toolbox padding + 8px inside each
+   button). The bar's 4px gap + each menu button's 10px padding leaves the same 14px between "Pixl" and "File". */
+.brand { display: flex; align-items: center; gap: 7px; padding-left: 10px; }
 .mono { height: 26px; width: auto; display: none; }
 .brand .logo { height: 26px; width: 26px; display: block; }
 .welcome-card .logo { width: 104px; height: 104px; margin-bottom: 4px; }

@@ -10,7 +10,7 @@ Each version's section becomes its release notes (`scripts/release.ps1` copies i
 - **Symmetry painting**: a Mirror option for the Brush, Eraser, Dodge, Burn, Blur and Sharpen tools. It mirrors strokes left/right, top/bottom or four ways across the middle of the canvas, shown by a dashed line.
 - Fixed: Lens Distortion (with transparent edges) cut off glows and anything else just past the canvas edge, leaving a hard line, most noticeably after Crop to Content. Effects that reach past the edge now see what's really there.
 - The new AMx logo in the "An AMx app" credit, in dark and light versions.
-- A tidier top bar: the version number moved to the window's title bar only, and "Pixl" lines up with the tool icons below it. The toolbox scrolls without a scrollbar, so the icons stay put in short windows.
+- A tidier top bar: the version number moved to the window's title bar only, and "Pixl" lines up with the tool icons below it, with the same space between it and the menus as from the window edge. The toolbox scrolls without a scrollbar, so the icons stay put in short windows.
 
 ## 0.6.5
 
