@@ -76,7 +76,8 @@ button, select, input, textarea { font: inherit; color: inherit; }
   display: flex; align-items: center; gap: 4px; height: 36px; padding: 0 8px 0 4px;
   background: var(--panel); border-bottom: 1px solid var(--border);
 }
-.brand { display: flex; align-items: center; gap: 7px; margin-right: 10px; padding-left: 2px; }
+/* 4px bar padding + 10px puts "Pixl" 14px in, lined up with the tool icons below (6px toolbox padding + 8px inside each button). */
+.brand { display: flex; align-items: center; gap: 7px; margin-right: 14px; padding-left: 10px; }
 .mono { height: 26px; width: auto; display: none; }
 .brand .logo { height: 26px; width: 26px; display: block; }
 .welcome-card .logo { width: 104px; height: 104px; margin-bottom: 4px; }
@@ -220,6 +221,8 @@ input[type="range"]:focus-visible::-webkit-slider-thumb { background: var(--acce
 .toolbox {
   display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 6px 0;
   background: var(--panel); border-right: 1px solid var(--border); overflow-y: auto; overflow-x: hidden;
+  /* Scrolls with the wheel without a scrollbar, so the icons don't shift sideways in short windows. */
+  scrollbar-width: none;
 }
 .toolbox-grip { position: absolute; top: 0; bottom: 0; left: calc(var(--toolbox-w, 46px) - 3px); width: 6px; z-index: 5; cursor: ew-resize; }
 .toolbox-grip:hover, .toolbox-grip.drag { background: linear-gradient(to right, transparent 2px, var(--accent-line) 2px 4px, transparent 4px); }
