@@ -12,7 +12,8 @@ export async function warpDialog() {
   if (!s) return;
   const l = s.l;
   const had = l.type === 'raster' ? !!s.warp : !!s.envelope;
-  const e: Envelope = l.type !== 'raster' && s.envelope ? { ...s.envelope } : defaultEnvelope();
+  // A layer fitted into a shape starts from a plain preset here (the fit has no settings to adjust).
+  const e: Envelope = l.type !== 'raster' && s.envelope && s.envelope.style !== 'shape' ? { ...s.envelope } : defaultEnvelope();
   const show = () => previewEnvelope(s, e);
   show();
   const field = (label: string, el: HTMLElement) => h('div', { class: 'field wide' }, h('span', null, label), el);

@@ -20,9 +20,9 @@ import { shapePoints } from './core/layers';
 import { invertSel, mapSel, maskSelection, selBounds } from './core/selection';
 import { colorRangeMask, combine, layerAlphaMask, modifyMask, sampleSource, wandMask, type Modify, type SelMode } from './core/selops';
 import { defaultStyles } from './core/styles';
-import type { AdjKind, AdjParams, Anim, AnimFrame, BlendIf, GroupLayer, Guide, Layer, LayerStyles, Mask, PathPoint, PlacedLayer, RasterLayer, SubPath, TextLayer, VPath, Warp } from './core/types';
+import type { AdjKind, AdjParams, Anim, AnimFrame, BlendIf, GroupLayer, Guide, Layer, LayerStyles, Mask, PathPoint, PlacedLayer, RasterLayer, ShapeLayer, SubPath, TextLayer, VPath, Warp } from './core/types';
 import { initWarp, warpBounds } from './core/warp';
-import { envelopeMesh, type Envelope } from './core/envelope';
+import { envelopeMesh, shapeFit, type Envelope } from './core/envelope';
 import { isFilter, isPlaced } from './core/types';
 import { view } from './ui/canvasview';
 import { ask, toast } from './ui/widgets';
@@ -491,9 +491,8 @@ export function selectionToPath() {
 }
 
 /** The selected shape layer's outline as a new path (in document coordinates). */
-export function shapeToPath() {
-  const doc = need(); const l = doc?.active;
-  if (!doc || l?.type !== 'shape') { toast('Select a shape layer first.'); return; }
+/** A shape layer's outline as paths, in document coordinates. */
+function shapeOutline(l: ShapeLayer): SubPath[] {
   const s = l.shape;
   let subs: SubPath[];
   if (s.kind === 'line') subs = [polySub([{ x: 0, y: 0 }, { x: s.w, y: s.h }], false)];
@@ -504,7 +503,43 @@ export function shapeToPath() {
     else subs = [s.radius > 0 ? roundRectSub(x, y, w, h, Math.min(s.radius, w / 2, h / 2)) : rectSub(x, y, w, h)];
   }
   const m = layerMatrix(l);
-  newPath(mapSubs(subs, (px, py) => apply(m, px, py)), `${l.name} path`);
+  return mapSubs(subs, (px, py) => apply(m, px, py));
+}
+
+export function shapeToPath() {
+  const doc = need(); const l = doc?.active;
+  if (!doc || l?.type !== 'shape') { toast('Select a shape layer first.'); return; }
+  newPath(shapeOutline(l), `${l.name} path`);
+}
+
+/**
+ * Layer › Fit into Shape: bends the active layer to fill a shape, like Illustrator's envelope "Make with Top Object".
+ * The shape is another selected shape layer (which is then hidden), or else the active path. Text and shapes stay
+ * editable; an image layer gets an editable mesh warp.
+ */
+export async function fitIntoShape() {
+  const doc = need(); if (!doc) return;
+  // Two layers selected and one is a shape: like Illustrator, the upper shape is the container, the other is fitted.
+  const sel = doc.selectedIds().map((id) => doc.layer(id)).filter(isPlaced);
+  let target = doc.activePlaced;
+  let container: ShapeLayer | null = null;
+  if (sel.length === 2) {
+    const shapes = sel.filter((l): l is ShapeLayer => l.type === 'shape');
+    if (shapes.length) { container = shapes[shapes.length - 1]; target = sel.find((l) => l !== container)!; }
+  }
+  if (!target) { toast('Select the layer to fit, then a shape layer (Ctrl+click) or a path to fit it into.'); return; }
+  const outline = container ? shapeOutline(container).find((s) => s.closed) : doc.path?.subs.find((s) => s.closed && s.pts.length > 2);
+  if (!outline) { toast('Draw a closed path with the Paths tool, or select a shape layer along with this one (Ctrl+click), to fit it into.'); return; }
+  doc.setActive(target.id);
+  const s = await beginEnvelope();
+  if (!s) return;
+  // The outline in the layer's own pixels (after an image layer has been trimmed).
+  const inv = invert(layerMatrix(target));
+  const fit = shapeFit(flattenSub(outline, 2).map((p) => apply(inv, p.x, p.y)));
+  if (!fit) { finishEnvelope(s, false); toast('That shape is too small to fit into.'); return; }
+  previewEnvelope(s, { style: 'shape', bend: 0, hDistort: 0, vDistort: 0, vertical: false, fit });
+  if (container) setLayerProp(container.id, { visible: false });
+  finishEnvelope(s, true, 'Fit into shape');
 }
 
 function roundRectSub(x: number, y: number, w: number, h: number, r: number): SubPath {
@@ -1143,12 +1178,12 @@ export function previewEnvelope(s: EnvelopeStart, e: Envelope | null) {
   doc.touch('meta');
 }
 
-export function finishEnvelope(s: EnvelopeStart, keep: boolean) {
+export function finishEnvelope(s: EnvelopeStart, keep: boolean, label = 'Warp') {
   const doc = need(); if (!doc) return;
   const l = s.l;
   if (keep) {
     const on = l.type === 'raster' ? !!l.warp : !!l.envelope;
-    doc.commit(on ? 'Warp' : 'Remove warp');
+    doc.commit(on ? label : 'Remove warp');
     return;
   }
   l.t = s.t;

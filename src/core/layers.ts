@@ -1,4 +1,6 @@
-import { envelopeBounds, envelopePoint } from './envelope';
+import { alphaBox } from './alphabox';
+import { envelopeBounds, envelopePoint, type Envelope } from './envelope';
+import type { Pt } from './math';
 import { glops } from './glops';
 import { decompose, invert, matScale, mul, setT, xformMatrix, type Mat, type Rect, type Xform } from './math';
 import { displaySource } from './pyramid';
@@ -47,6 +49,34 @@ export function vectorBox(l: TextLayer | ShapeLayer): Rect {
   }
   const b = shapeBounds(l.shape), p = (l.shape.stroke ? l.shape.strokeWidth / 2 : 0) + 1;
   return { x: b.x - p, y: b.y - p, w: b.w + p * 2, h: b.h + p * 2 };
+}
+
+const inkCache = new Map<string, Rect>();
+
+/** Where a text layer's letters actually are: its layout box also holds line spacing and room for accents. */
+function textInk(l: TextLayer, box: Rect): Rect {
+  const key = JSON.stringify(l.text);
+  const hit = inkCache.get(key);
+  if (hit) return hit;
+  if (inkCache.size > 64) inkCache.clear();
+  const c = newCanvas(Math.max(1, Math.ceil(box.w)), Math.max(1, Math.ceil(box.h)));
+  const x = ctx2d(c, true);
+  x.translate(-box.x, -box.y);
+  drawText(x, l.text);
+  const r = alphaBox(x.getImageData(0, 0, c.width, c.height).data, c.width, c.height);
+  const ink = r ? { x: box.x + r.x, y: box.y + r.y, w: r.w, h: r.h } : box;
+  inkCache.set(key, ink);
+  return ink;
+}
+
+/**
+ * Where the point (u, v) of a warped text or shape layer's image (its vectorBox) lands. Fitted into a shape, it's the
+ * letters themselves that fill the outline, not the padded box around them.
+ */
+function envelopeMap(l: TextLayer | ShapeLayer, e: Envelope, box: Rect): (u: number, v: number) => Pt {
+  if (e.style !== 'shape' || l.type !== 'text') return (u, v) => envelopePoint(e, box, u, v);
+  const ink = textInk(l, box), cl = (n: number) => Math.min(1, Math.max(0, n));
+  return (u, v) => envelopePoint(e, ink, cl((box.x + u * box.w - ink.x) / ink.w), cl((box.y + v * box.h - ink.y) / ink.h));
 }
 
 const vecCache = new Map<string, { c: HTMLCanvasElement; s: number }>();
@@ -144,8 +174,7 @@ export function drawPlaced(ctx: CanvasRenderingContext2D, l: PlacedLayer, pool: 
     // Warp preset: the text or shape drawn flat at the needed sharpness, then bent on the GPU.
     const box = vectorBox(l);
     const img = vectorImage(l, box, matScale(m));
-    const e = l.envelope;
-    warpGL.drawMapped(ctx, img.c, 1 / img.s, box.w, box.h, (u, v) => envelopePoint(e, box, u, v), m);
+    warpGL.drawMapped(ctx, img.c, 1 / img.s, box.w, box.h, envelopeMap(l, l.envelope, box), m);
   } else if ((l.type === 'text' ? l.text : l.shape).antiAlias === false) {
     // Hard pixel edges: draw it once at 1:1 with edges snapped on/off, then show those pixels unsmoothed.
     const b = localBounds(l, pool);
