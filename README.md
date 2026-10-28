@@ -78,3 +78,9 @@ One-time setup: `winget install GitHub.cli`, then `gh auth login`, and a `public
 ## File format
 
 `.pixl` = `PIXL` magic, a version, a JSON header (layers, transforms, adjustments) and one PNG per raster layer.
+
+## Licence
+
+[MIT](LICENSE) © 2026 AutoMatrix Solutions LLC.
+
+The Pixl and AMx names and logos are AutoMatrix Solutions LLC's brand, not part of the MIT licence: forks should use their own. Bundled third-party parts keep their own licences: the Rajdhani font (SIL Open Font License) and the libraries listed in `package.json` and `src-tauri/Cargo.toml`.

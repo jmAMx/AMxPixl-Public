@@ -3,7 +3,7 @@ name = "amxpixl"
 version = "0.1.0"
 description = "AMxPixl (Pixl Editor)"
 authors = ["AutoMatrix Solutions LLC"]
-license = "UNLICENSED"
+license = "MIT"
 edition = "2024"
 rust-version = "1.90"
 

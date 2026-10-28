@@ -2,6 +2,10 @@
 
 Each version's section becomes its release notes (`scripts/release.ps1` copies it to the download page).
 
+## Next
+
+- Pixl is open source under the MIT licence (see LICENSE and Help › About).
+
 ## 0.6.6
 
 - **Move a whole group**: select a group and the Move tool moves, scales and turns everything inside it together.

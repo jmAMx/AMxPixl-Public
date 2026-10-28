@@ -410,6 +410,7 @@ export function aboutDialog() {
         h('img', { src: 'brand/pixl-logo-256.png', alt: '', width: 72, height: 72 }),
         h('div', null, h('strong', null, 'Pixl Editor'), h('div', { class: 'dim' }, `AMxPixl · version ${__APP_VERSION__} · an AMx app`))),
       h('p', { class: 'dialog-msg' }, 'A lightweight, non-destructive image editor. Layers keep their original pixels, adjustments run on the GPU, and everything stays on this PC.'),
+      h('p', { class: 'dialog-msg dim' }, '© 2026 AutoMatrix Solutions LLC · Free and open source under the MIT licence.'),
     ],
     buttons: [{ label: 'Close', primary: true }],
   });
