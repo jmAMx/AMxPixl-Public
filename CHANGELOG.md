@@ -2,6 +2,11 @@
 
 Each version's section becomes its release notes (`scripts/release.ps1` copies it to the download page).
 
+## 0.6.6
+
+- Fixed: Lens Distortion (with transparent edges) cut off glows and anything else just past the canvas edge, leaving a hard line, most noticeably after Crop to Content. Effects that reach past the edge now see what's really there.
+- The new AMx logo in the "An AMx app" credit, in dark and light versions.
+
 ## 0.6.5
 
 - **Crop to Content** (Image menu, Ctrl+Alt+X, or the button in Canvas Size) trims the empty space around the image. Empty means transparent, or, on an opaque image, the plain colour of its top-left corner.

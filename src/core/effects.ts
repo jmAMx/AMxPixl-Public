@@ -33,6 +33,11 @@ export interface FxDef {
   /** Extra blurred input: the whole image, or just its highlights above a threshold (0..1). */
   aux?: { radius: (v: V) => number; threshold?: (v: V) => number };
   uniforms: (v: V) => Uniforms;
+  /**
+   * How far past the canvas edge the effect reads, as a fraction of the canvas size. The image is then rendered with
+   * that much margin, so what's just outside the frame (a glow, the rest of a layer) is pulled in instead of nothing.
+   */
+  reach?: (v: V) => number;
   /** GLSL defining `vec4 fx(vec2 p, vec2 d)`: p = output pixel, d = document pixel. */
   glsl: string;
 }
@@ -251,6 +256,8 @@ vec4 fx(vec2 p, vec2 d) {
       { key: 'edges', label: 'Edges', type: 'select', value: 'transparent', options: [['transparent', 'Transparent'], ['black', 'Black'], ['stretch', 'Stretch']] },
     ],
     uniforms: (v) => ({ uA: [n(v.amount) / 200, n(v.zoom) / 100, sel(v.edges, ['transparent', 'black', 'stretch']), 0] }),
+    // The farthest sample is a corner: (1 + barrel) / zoom of the way out from the centre.
+    reach: (v) => (v.edges === 'transparent' ? Math.max(0, ((1 + Math.max(0, n(v.amount) / 200)) / (n(v.zoom) / 100) - 1) / 2) : 0),
     glsl: `
 vec4 fx(vec2 p, vec2 d) {
   vec2 ds = docSize();
@@ -261,9 +268,13 @@ vec4 fx(vec2 p, vec2 d) {
   vec2 nd = nn * (1.0 + uA.x * r2) / uA.y;
   vec2 dd = (nd + 1.0) * 0.5 * ds;
   bool outside = dd.x < 0.0 || dd.y < 0.0 || dd.x > ds.x || dd.y > ds.y;
-  if (outside && uA.z < 0.5) return vec4(0.0);
-  if (outside && uA.z < 1.5) return vec4(0.0, 0.0, 0.0, 1.0);
-  return srcDoc(clamp(dd, vec2(0.5), ds - 0.5));
+  if (!outside || uA.z > 1.5) return srcDoc(clamp(dd, vec2(0.5), ds - 0.5));
+  if (uA.z > 0.5) return vec4(0.0, 0.0, 0.0, 1.0);
+  // Transparent edges: past the canvas, whatever is really there (the image is rendered with a margin for this),
+  // and nothing beyond what was rendered.
+  vec2 o = fromDoc(dd);
+  if (o.x < 0.0 || o.y < 0.0 || o.x > uRes.x || o.y > uRes.y) return vec4(0.0);
+  return srcDoc(dd);
 }`,
   },
   {

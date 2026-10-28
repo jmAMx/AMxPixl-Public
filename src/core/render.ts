@@ -4,7 +4,7 @@ import { fxEngine } from './fx';
 import { glfx } from './glfx';
 import { glops } from './glops';
 import { ctx2d, drawPlaced, newCanvas } from './layers';
-import { identity, mapRect, matScale, mul, setT, xformMatrix, type Mat, type Rect } from './math';
+import { identity, mapRect, matScale, mul, setT, translate, xformMatrix, type Mat, type Rect } from './math';
 import { displaySource } from './pyramid';
 import { acquire, composite, gco as gcoOf, like, release } from './scratch';
 import { applyStyles, hasStyles } from './styles';
@@ -291,6 +291,27 @@ function renderList(list: Layer[], target: HTMLCanvasElement, env: Env) {
  * target's resolution, so on-screen previews stay fast regardless of image size.
  */
 export function renderDoc(doc: Doc, out: HTMLCanvasElement, view: Mat, opts: RenderOpts = {}) {
+  const pad = opts.clip === false ? 0 : overscan(doc, out, view, opts);
+  if (pad > 0) {
+    // Render with a margin past the canvas (unclipped) so effects can read beyond its edge, then keep the canvas.
+    const big = acquire(out.width + pad * 2, out.height + pad * 2);
+    renderDoc(doc, big, mul(translate(pad, pad), view), { ...opts, clip: false });
+    const x = ctx2d(out);
+    x.setTransform(1, 0, 0, 1, 0, 0);
+    x.globalCompositeOperation = 'source-over';
+    x.globalAlpha = 1;
+    x.clearRect(0, 0, out.width, out.height);
+    x.save();
+    setT(x, view);
+    x.beginPath();
+    x.rect(0, 0, doc.width, doc.height);
+    x.clip();
+    x.setTransform(1, 0, 0, 1, 0, 0);
+    x.drawImage(big, -pad, -pad);
+    x.restore();
+    release(big);
+    return;
+  }
   const ctx = ctx2d(out);
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.globalCompositeOperation = 'source-over';
@@ -312,6 +333,23 @@ export function renderDoc(doc: Doc, out: HTMLCanvasElement, view: Mat, opts: Ren
   };
   renderList(opts.layers ?? doc.layers, out, env);
   ctx.restore();
+}
+
+/**
+ * Margin (output pixels) to render past the canvas for effect layers that read beyond its edge (FxDef.reach): the
+ * largest reach of any showing effect layer, kept within what the GPU can take.
+ */
+function overscan(doc: Doc, out: HTMLCanvasElement, view: Mat, opts: RenderOpts): number {
+  let reach = 0;
+  for (const l of flatLayers(opts.layers ?? doc.layers)) {
+    if (l.type !== 'effect' || !(opts.includeHidden || doc.shows(l, opts.frame ?? doc.frame))) continue;
+    const r = fxDef(l.fx.kind)?.reach?.(l.fx.v) ?? 0;
+    if (Number.isFinite(r)) reach = Math.max(reach, r);
+  }
+  if (!reach) return 0;
+  const pad = Math.ceil(Math.min(reach, 0.5) * Math.max(doc.width, doc.height) * matScale(view));
+  const room = Math.floor((fxEngine.maxSize - Math.max(out.width, out.height)) / 2);
+  return Math.max(0, Math.min(pad, room, 2048));
 }
 
 /** Full-resolution flattened image of the document (optionally scaled). */
