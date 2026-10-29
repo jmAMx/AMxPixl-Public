@@ -10,6 +10,7 @@ import { acquire, composite, gco as gcoOf, like, release } from './scratch';
 import { applyStyles, hasStyles } from './styles';
 import type { BlendIf, BlendMode, FilterLayer, Layer, LayerStyles, Mask } from './types';
 import { isDepth, isFilter, isPlaced } from './types';
+import { pixelVersion } from './bounds';
 
 export { gco } from './scratch';
 
@@ -105,16 +106,43 @@ interface Env {
   depth?: HTMLCanvasElement;
 }
 
+/**
+ * Depth maps drawn recently, kept while nothing they show has changed: the depth layers (their pixels, place,
+ * visibility...), the view and the frame. Dragging an effect's slider or playing an animation then reuses the map
+ * instead of drawing the depth layers again for every frame. The two most recent (a full view and a partial redraw).
+ */
+const keptDepth: { doc: Doc; sig: string; canvas: HTMLCanvasElement }[] = [];
+
+/** Everything a depth map depends on, as text to compare. */
+function depthSignature(env: Env, w: number, h: number): string {
+  const parts: unknown[] = [w, h, env.view, env.frame, env.includeHidden, env.nearest];
+  for (const l of flatLayers(env.doc.layers)) {
+    if (l.type !== 'group' && !isDepth(l)) continue;
+    const m = l.mask;
+    parts.push([l.id, env.doc.shows(l, env.frame), l.opacity, l.blend, l.clip, l.styles, l.blendIf, m && [m.key, pixelVersion(m.key), m.enabled, m.density, m.feather, m.t],
+      l.type === 'raster' ? [l.key, pixelVersion(l.key), l.t, l.warp] : null]);
+  }
+  return JSON.stringify(parts);
+}
+
 /** The document's depth map in target pixels: its depth layers drawn over black (far). */
 function depthMap(env: Env, like: HTMLCanvasElement): HTMLCanvasElement {
   if (env.depth) return env.depth;
-  const c = acquire(like.width, like.height);
+  const sig = depthSignature(env, like.width, like.height);
+  const kept = keptDepth.find((k) => k.doc === env.doc && k.sig === sig);
+  if (kept) return (env.depth = kept.canvas);
+  // Reuse the older map's canvas when it's the same size.
+  const old = keptDepth.length >= 2 ? keptDepth.shift()! : null;
+  const c = old && old.canvas.width === like.width && old.canvas.height === like.height ? old.canvas : newCanvas(like.width, like.height);
   const x = ctx2d(c);
+  x.setTransform(1, 0, 0, 1, 0, 0);
+  x.globalCompositeOperation = 'copy';
   x.fillStyle = '#000';
   x.fillRect(0, 0, c.width, c.height);
+  x.globalCompositeOperation = 'source-over';
   renderList(env.doc.layers, c, { ...env, depthPass: true, out: c, done: false, stopAt: undefined, depth: undefined });
-  env.depth = c;
-  return c;
+  keptDepth.push({ doc: env.doc, sig, canvas: c });
+  return (env.depth = c);
 }
 
 // ---------- masks ----------
@@ -372,7 +400,6 @@ export function renderDoc(doc: Doc, out: HTMLCanvasElement, view: Mat, opts: Ren
     composite(out, g, 'normal', 1, 'copy', 'grayscale(1)');
     release(g);
   }
-  if (env.depth) release(env.depth);
   ctx.restore();
 }
 

@@ -160,21 +160,50 @@ export function edt(inside: Uint8Array, W: number, H: number): Float32Array {
 // ---------- meshes ----------
 
 /**
- * A mesh: triangles of vertices [x, y, z, nx, ny, nz, u, v, kind, tx, ty] in layer pixels (z toward the viewer), and
- * its extent. `kind` 1 = always drawn (sides, revolved surfaces); 0 and 2 = the front and back faces, cut out by the
- * picture's own edges. (tx, ty) is where a texture goes, in pixels across the surface: the faces' own position, the
- * distance around the outline and back from the front on Extrude's sides, around and down on a revolved surface.
- * `area` is the region a texture is fitted to: its centre and size in those pixels.
+ * A mesh: vertices [x, y, z, nx, ny, nz, u, v, kind, tx, ty] in layer pixels (z toward the viewer), shared by the
+ * triangles in `index` (three vertex numbers each, `count` in all), and its extent. `kind` 1 = always drawn (sides,
+ * revolved surfaces); 0 and 2 = the front and back faces, cut out by the picture's own edges. (tx, ty) is where a
+ * texture goes, in pixels across the surface: the faces' own position, the distance around the outline and back from
+ * the front on Extrude's sides, around and down on a revolved surface. `area` is the region a texture is fitted to:
+ * its centre and size in those pixels.
  */
-interface Mesh { data: Float32Array; count: number; lo: [number, number, number]; hi: [number, number, number]; area: [number, number, number, number] }
+interface Mesh { data: Float32Array; index: Uint32Array; count: number; lo: [number, number, number]; hi: [number, number, number]; area: [number, number, number, number] }
 const STRIDE = 11;
 const meshCache = new Map<string, Mesh>();
 
-function finish(data: number[], area: [number, number, number, number]): Mesh {
-  const lo: [number, number, number] = [Infinity, Infinity, Infinity], hi: [number, number, number] = [-Infinity, -Infinity, -Infinity];
-  for (let i = 0; i < data.length; i += STRIDE) for (let k = 0; k < 3; k++) { lo[k] = Math.min(lo[k], data[i + k]); hi[k] = Math.max(hi[k], data[i + k]); }
-  if (!data.length) { lo.fill(0); hi.fill(1); }
-  return { data: new Float32Array(data), count: data.length / STRIDE, lo, hi, area };
+/**
+ * Collects a mesh: each vertex once, and triangles naming them (neighbouring triangles share their corners instead of
+ * repeating them, so a mesh builds several times faster and the GPU works out each corner once).
+ */
+class MeshBuilder {
+  private v = new Float32Array(STRIDE * 8192);
+  private nv = 0;
+  private ix = new Uint32Array(8192 * 3);
+  private ni = 0;
+
+  vert(x: number, y: number, z: number, nx: number, ny: number, nz: number, u: number, v: number, kind: number, tx: number, ty: number): number {
+    if ((this.nv + 1) * STRIDE > this.v.length) { const n = new Float32Array(this.v.length * 2); n.set(this.v); this.v = n; }
+    const a = this.v, o = this.nv * STRIDE;
+    a[o] = x; a[o + 1] = y; a[o + 2] = z; a[o + 3] = nx; a[o + 4] = ny; a[o + 5] = nz;
+    a[o + 6] = u; a[o + 7] = v; a[o + 8] = kind; a[o + 9] = tx; a[o + 10] = ty;
+    return this.nv++;
+  }
+
+  tri(a: number, b: number, c: number) {
+    if (this.ni + 3 > this.ix.length) { const n = new Uint32Array(this.ix.length * 2); n.set(this.ix); this.ix = n; }
+    this.ix[this.ni++] = a; this.ix[this.ni++] = b; this.ix[this.ni++] = c;
+  }
+
+  finish(area: [number, number, number, number]): Mesh {
+    const lo: [number, number, number] = [Infinity, Infinity, Infinity], hi: [number, number, number] = [-Infinity, -Infinity, -Infinity];
+    const a = this.v;
+    for (let i = 0; i < this.nv; i++) {
+      const o = i * STRIDE;
+      for (let k = 0; k < 3; k++) { const c = a[o + k]; if (c < lo[k]) lo[k] = c; if (c > hi[k]) hi[k] = c; }
+    }
+    if (!this.nv) { lo.fill(0); hi.fill(1); }
+    return { data: a.slice(0, this.nv * STRIDE), index: this.ix.slice(0, this.ni), count: this.ni, lo, hi, area };
+  }
 }
 
 /**
@@ -218,65 +247,96 @@ function rimOf(g: Grid): Rim {
  * surfaces end on it (only triangles inside it), meeting there to close the shape; otherwise they're cut out by the
  * picture's edges.
  */
-function heightSurfaces(g: Grid, h: Float32Array, W: number, H: number, out: number[], back: 0 | 2, rim?: Rim) {
+function heightSurfaces(g: Grid, h: Float32Array, W: number, H: number, out: MeshBuilder, back: 0 | 2, rim?: Rim) {
   const { gw, gh, cx, cy } = g;
   const at = (i: number, j: number) => h[Math.min(gh - 1, Math.max(0, j)) * gw + Math.min(gw - 1, Math.max(0, i))];
   const ins = (i: number, j: number) => i >= 0 && j >= 0 && i < gw && j < gh && g.inside[j * gw + i] === 1;
   const used = (i: number, j: number) => ins(i, j) || !!rim?.on[j * gw + i];
-  const vert = (i: number, j: number, side: 1 | -1) => {
+  // Each grid sample's vertex on this side, made the first time a triangle needs it.
+  const made = new Int32Array(gw * gh);
+  let side: 1 | -1 = 1;
+  const vert = (i: number, j: number) => {
     const k = j * gw + i;
+    if (made[k] >= 0) return made[k];
+    const kind = side > 0 ? 0 : back;
     if (rim?.on[k]) {
       // On the rim: upright, facing outward.
       const x = rim.pos[k * 2], y = rim.pos[k * 2 + 1];
-      return [x, y, 0, rim.nrm[k * 2], rim.nrm[k * 2 + 1], 0, x / W, y / H, side > 0 ? 0 : back, x, y];
+      return (made[k] = out.vert(x, y, 0, rim.nrm[k * 2], rim.nrm[k * 2 + 1], 0, x / W, y / H, kind, x, y));
     }
     // Outward: both surfaces slope away from the middle; only the facing (z) flips for the back.
     const dx = (at(i + 1, j) - at(i - 1, j)) / (2 * cx), dy = (at(i, j + 1) - at(i, j - 1)) / (2 * cy);
-    const n = [-dx, -dy, side], l = Math.hypot(n[0], n[1], n[2]);
+    const l = Math.hypot(dx, dy, 1);
     const x = g.x0 + i * cx, y = g.y0 + j * cy;
-    return [x, y, at(i, j) * side, n[0] / l, n[1] / l, n[2] / l, x / W, y / H, side > 0 ? 0 : back, x, y];
+    return (made[k] = out.vert(x, y, at(i, j) * side, -dx / l, -dy / l, side / l, x / W, y / H, kind, x, y));
   };
-  for (const side of [1, -1] as const) {
+  for (const s of [1, -1] as const) {
+    side = s;
+    made.fill(-1);
     for (let j = 0; j < gh - 1; j++) for (let i = 0; i < gw - 1; i++) {
       if (rim) {
         // Each half of the cell whose corners are all inside or on the rim.
         const A = used(i, j), B = used(i + 1, j), C = used(i, j + 1), D = used(i + 1, j + 1);
         if (!(A || B || C || D)) continue;
-        const a = vert(i, j, side), b = vert(i + 1, j, side), c = vert(i, j + 1, side), d = vert(i + 1, j + 1, side);
         // Split the cell along whichever diagonal keeps the most of it.
-        if (A && B && C && D) out.push(...a, ...b, ...c, ...b, ...d, ...c);
-        else if (A && B && C) out.push(...a, ...b, ...c);
-        else if (B && D && C) out.push(...b, ...d, ...c);
-        else if (A && B && D) out.push(...a, ...b, ...d);
-        else if (A && D && C) out.push(...a, ...d, ...c);
+        if (A && B && C && D) { const b = vert(i + 1, j), c = vert(i, j + 1); out.tri(vert(i, j), b, c); out.tri(b, vert(i + 1, j + 1), c); }
+        else if (A && B && C) out.tri(vert(i, j), vert(i + 1, j), vert(i, j + 1));
+        else if (B && D && C) out.tri(vert(i + 1, j), vert(i + 1, j + 1), vert(i, j + 1));
+        else if (A && B && D) out.tri(vert(i, j), vert(i + 1, j), vert(i + 1, j + 1));
+        else if (A && D && C) out.tri(vert(i, j), vert(i + 1, j + 1), vert(i, j + 1));
         continue;
       }
       // Only cells at or next to the silhouette (the rest is cut away anyway).
       let near = false;
       for (let dj = -1; dj <= 2 && !near; dj++) for (let di = -1; di <= 2 && !near; di++) near = ins(i + di, j + dj);
       if (!near) continue;
-      const a = vert(i, j, side), b = vert(i + 1, j, side), c = vert(i, j + 1, side), d = vert(i + 1, j + 1, side);
-      out.push(...a, ...b, ...c, ...b, ...d, ...c);
+      const b = vert(i + 1, j), c = vert(i, j + 1);
+      out.tri(vert(i, j), b, c);
+      out.tri(b, vert(i + 1, j + 1), c);
     }
   }
 }
+
+/**
+ * The parts of a shape that only depend on the picture, kept for as long as its silhouette is: while a slider
+ * changes the depth, roundness or bevel, the mesh is rebuilt from these instead of from scratch.
+ */
+const shapeParts = new WeakMap<Grid, { rim?: Rim; dist?: Float32Array; contours?: Pt[][] }>();
+const partsOf = (g: Grid) => { let p = shapeParts.get(g); if (!p) shapeParts.set(g, (p = {})); return p; };
 
 /** Inflate: rounded on both sides, steep at the edge and levelling off toward the middle. */
 function inflateMesh(g: Grid, m: Model3D, W: number, H: number): Mesh {
   const radius = Math.max(1, g.maxD - 0.5), rr = radius * (0.15 + 0.85 * (m.round / 100));
   const depth = (m.depth / 100) * radius * Math.min(g.cx, g.cy);
+  const parts = partsOf(g);
+  const rim = (parts.rim ??= rimOf(g));
+  const dist = (parts.dist ??= edgeDistance(g, rim));
   let h: Float32Array = new Float32Array(g.d.length);
+  for (let k = 0; k < h.length; k++) {
+    if (!g.inside[k]) continue;
+    const u = Math.min(1, dist[k] / rr);
+    h[k] = depth * Math.sqrt(Math.max(0, 1 - (1 - u) * (1 - u)));
+  }
+  // Soften the crease where the distances from opposite edges meet (the middle of a stroke) into a smooth crown.
+  h = smooth(g, h, 3, 1.2);
+  const out = new MeshBuilder();
+  heightSurfaces(g, h, W, H, out, 0, rim);
+  return out.finish([W / 2, H / 2, W, H]);
+}
+
+/** How far each inside sample is from the picture's edge, in samples. */
+function edgeDistance(g: Grid, rim: Rim): Float32Array {
   const { gw, gh } = g;
-  const rim = rimOf(g);
+  const dist = new Float32Array(g.d.length);
   // The rim as short segments (between neighbouring rim samples), in sample units.
   const rx = (k: number) => (rim.pos[k * 2] - g.x0) / g.cx, ry = (k: number) => (rim.pos[k * 2 + 1] - g.y0) / g.cy;
   const BAND = 5;
-  for (let k = 0; k < h.length; k++) {
+  for (let k = 0; k < dist.length; k++) {
     if (!g.inside[k]) continue;
     // Distance in from the edge. Near it (where the rounding is steep), measured to the rim itself, which sits on
     // the picture's edge between samples; a distance counted in whole samples would step along slanted edges and
     // show as ripples. Further in, the grid's distance is close enough (and the surface is nearly flat there).
-    let dist = g.d[k] - 0.5;
+    dist[k] = g.d[k] - 0.5;
     if (g.d[k] <= BAND) {
       const i = k % gw, j = (k - i) / gw;
       let best = Infinity;
@@ -295,16 +355,10 @@ function inflateMesh(g: Grid, m: Model3D, W: number, H: number): Mesh {
           }
         }
       }
-      if (best < Infinity) dist = best;
+      if (best < Infinity) dist[k] = best;
     }
-    const u = Math.min(1, dist / rr);
-    h[k] = depth * Math.sqrt(Math.max(0, 1 - (1 - u) * (1 - u)));
   }
-  // Soften the crease where the distances from opposite edges meet (the middle of a stroke) into a smooth crown.
-  h = smooth(g, h, 3, 1.2);
-  const out: number[] = [];
-  heightSurfaces(g, h, W, H, out, 0, rim);
-  return finish(out, [W / 2, H / 2, W, H]);
+  return dist;
 }
 
 /** Averages a height field with its neighbours `passes` times, inside the silhouette, past `edge` samples in. */
@@ -447,7 +501,7 @@ function extrudeMesh(g: Grid, src: HTMLCanvasElement, m: Model3D, W: number, H: 
       h[i] += bh * (1 - (1 - u) * (1 - u));
     }
   }
-  const out: number[] = [];
+  const out = new MeshBuilder();
   heightSurfaces(g, h, W, H, out, 2);
   // How high the face is at a point, read off its triangles exactly as they're drawn (each grid cell split from its
   // top-right to its bottom-left corner). With a bevel, the face is already partway up its rise where the picture's
@@ -458,8 +512,10 @@ function extrudeMesh(g: Grid, src: HTMLCanvasElement, m: Model3D, W: number, H: 
     const ha = at(i, j), hb = at(i + 1, j), hc = at(i, j + 1), hd = at(i + 1, j + 1);
     return fx + fy <= 1 ? ha + fx * (hb - ha) + fy * (hc - ha) : hd + (1 - fx) * (hc - hd) + (1 - fy) * (hb - hd);
   };
-  // The sides, along the picture's edge, coloured from the picture just inside it.
-  for (const pts of contours(src)) {
+  // The sides, along the picture's edge, coloured from the picture just inside it. (The outline is traced once per
+  // picture, not again for every change of thickness or bevel.)
+  const parts = partsOf(g);
+  for (const pts of (parts.contours ??= contours(src))) {
     const top = pts.map((p) => faceH(p.x, p.y));
     const n = pts.length;
     // Each segment's outward normal: (dy, -dx) keeps the inside on the right; contours() runs that way.
@@ -493,12 +549,13 @@ function extrudeMesh(g: Grid, src: HTMLCanvasElement, m: Model3D, W: number, H: 
       run += Math.hypot(q.x - p.x, q.y - p.y);
       // Colour from just inside the edge.
       const ua = (p.x - s.x * 1.5) / W, va = (p.y - s.y * 1.5) / H, ub = (q.x - s.x * 1.5) / W, vb = (q.y - s.y * 1.5) / H;
-      const A = [p.x, p.y, ta, na.x, na.y, 0, ua, va, 1, r0, 0], B = [q.x, q.y, tb, nb.x, nb.y, 0, ub, vb, 1, run, 0];
-      const C = [q.x, q.y, -tb, nb.x, nb.y, 0, ub, vb, 1, run, 2 * tb], D = [p.x, p.y, -ta, na.x, na.y, 0, ua, va, 1, r0, 2 * ta];
-      out.push(...A, ...B, ...C, ...A, ...C, ...D);
+      const A = out.vert(p.x, p.y, ta, na.x, na.y, 0, ua, va, 1, r0, 0), B = out.vert(q.x, q.y, tb, nb.x, nb.y, 0, ub, vb, 1, run, 0);
+      const C = out.vert(q.x, q.y, -tb, nb.x, nb.y, 0, ub, vb, 1, run, 2 * tb), D = out.vert(p.x, p.y, -ta, na.x, na.y, 0, ua, va, 1, r0, 2 * ta);
+      out.tri(A, B, C);
+      out.tri(A, C, D);
     }
   }
-  return finish(out, [W / 2, H / 2, W, H]);
+  return out.finish([W / 2, H / 2, W, H]);
 }
 
 /** Revolve: each row of the silhouette becomes a ring around an upright axis through the picture's middle. */
@@ -537,33 +594,45 @@ function revolveMesh(g: Grid, src: HTMLCanvasElement, m: Model3D, W: number, H: 
   };
   const ro = soft(outer, 2), ri = soft(inner, 2);
   const N = 72;
-  const out: number[] = [];
+  const out = new MeshBuilder();
   // A texture wraps once around the widest part, like a label, centred on the front (three quarters of the way
   // round, as the texture's position runs).
   let widest = 1;
   for (let j = 0; j < gh; j++) if (has[j]) widest = Math.max(widest, ro[j]);
   const C = 2 * Math.PI * widest;
-  const ring = (j: number, r: number, k: number, slope: number, sign: 1 | -1) => {
-    const t = (k / N) * Math.PI * 2, c = Math.cos(t), s = Math.sin(t);
-    // Normal: outward from the axis, tipped by how the radius changes with height.
-    const nx = c * sign, ny = -slope * sign, nz = s * sign, l = Math.hypot(nx, ny, nz) || 1;
-    // Colour from the picture just inside its edge on this row.
-    // (Around runs against the angle, so seen from the front it reads left to right.)
-    return [axisX + r * c, Y(j), r * s, nx / l, ny / l, nz / l, Math.min(1, Math.max(0, (axisX + Math.max(0, r - 1.5)) / W)), Y(j) / H, 1, (1 - k / N) * C, Y(j)];
-  };
   const slopeAt = (r: Float32Array, j: number) => {
     const a = has[j - 1] ? r[j - 1] : r[j], b = has[j + 1] ? r[j + 1] : r[j];
     return (b - a) / (2 * cy);
+  };
+  // One ring of vertices per row and surface, made when first needed and shared by the bands above and below it.
+  const rings = [new Map<number, number>(), new Map<number, number>()];
+  const ring = (j: number, r: Float32Array, sign: 1 | -1): number => {
+    const made = rings[sign > 0 ? 0 : 1];
+    const hit = made.get(j);
+    if (hit !== undefined) return hit;
+    const slope = slopeAt(r, j), y = Y(j), rr = r[j];
+    // Colour from the picture just inside its edge on this row.
+    const u = Math.min(1, Math.max(0, (axisX + Math.max(0, rr - 1.5)) / W));
+    let first = -1;
+    for (let k = 0; k <= N; k++) {
+      const t = (k / N) * Math.PI * 2, c = Math.cos(t), s = Math.sin(t);
+      // Normal: outward from the axis, tipped by how the radius changes with height.
+      const nx = c * sign, ny = -slope * sign, nz = s * sign, l = Math.hypot(nx, ny, nz) || 1;
+      // (Around runs against the angle, so seen from the front it reads left to right.)
+      const v = out.vert(axisX + rr * c, y, rr * s, nx / l, ny / l, nz / l, u, y / H, 1, (1 - k / N) * C, y);
+      if (k === 0) first = v;
+    }
+    made.set(j, first);
+    return first;
   };
   for (let j = 0; j < gh - 1; j++) {
     if (!has[j] || !has[j + 1]) continue;
     for (const [r, sign] of [[ro, 1], [ri, -1]] as const) {
       if (sign === -1 && (ri[j] <= 0 || ri[j + 1] <= 0)) continue;
-      const sa = slopeAt(r, j), sb = slopeAt(r, j + 1);
+      const a0 = ring(j, r, sign), c0 = ring(j + 1, r, sign);
       for (let k = 0; k < N; k++) {
-        const a = ring(j, r[j], k, sa, sign), b = ring(j, r[j], k + 1, sa, sign);
-        const c = ring(j + 1, r[j + 1], k, sb, sign), d = ring(j + 1, r[j + 1], k + 1, sb, sign);
-        out.push(...a, ...b, ...c, ...b, ...d, ...c);
+        out.tri(a0 + k, a0 + k + 1, c0 + k);
+        out.tri(a0 + k + 1, c0 + k + 1, c0 + k);
       }
     }
   }
@@ -572,16 +641,22 @@ function revolveMesh(g: Grid, src: HTMLCanvasElement, m: Model3D, W: number, H: 
     if (!has[j]) continue;
     for (const [end, ny] of [[!has[j - 1], -1], [!has[j + 1], 1]] as const) {
       if (!end) continue;
+      const y = Y(j), v = y / H;
+      // The texture lies flat across a cap, as if seen from above.
+      const P = (r: number, k: number) => {
+        const t = (k / N) * Math.PI * 2;
+        return out.vert(axisX + r * Math.cos(t), y, r * Math.sin(t), 0, ny, 0, Math.min(1, (axisX + Math.max(0, r - 1.5)) / W), v, 1, (3 * C) / 4 + r * Math.cos(t), y + r * Math.sin(t));
+      };
+      let pi = P(ri[j], 0), po = P(ro[j], 0);
       for (let k = 0; k < N; k++) {
-        const t0 = (k / N) * Math.PI * 2, t1 = ((k + 1) / N) * Math.PI * 2, y = Y(j), v = y / H;
-        // The texture lies flat across a cap, as if seen from above.
-        const P = (r: number, t: number) => [axisX + r * Math.cos(t), y, r * Math.sin(t), 0, ny, 0, Math.min(1, (axisX + Math.max(0, r - 1.5)) / W), v, 1, (3 * C) / 4 + r * Math.cos(t), y + r * Math.sin(t)];
-        const a = P(ri[j], t0), b = P(ri[j], t1), c = P(ro[j], t0), d = P(ro[j], t1);
-        out.push(...a, ...b, ...c, ...b, ...d, ...c);
+        const qi = P(ri[j], k + 1), qo = P(ro[j], k + 1);
+        out.tri(pi, qi, po);
+        out.tri(qi, qo, po);
+        pi = qi; po = qo;
       }
     }
   }
-  return finish(out, [(3 * C) / 4, H / 2, C, H]);
+  return out.finish([(3 * C) / 4, H / 2, C, H]);
 }
 
 function meshFor(src: HTMLCanvasElement, m: Model3D, key: string): Mesh {
@@ -733,6 +808,8 @@ class ModelGL {
   private tx: WebGLTexture | null = null;
   private txKey = '';
   private buf: WebGLBuffer | null = null;
+  /** The mesh's triangles (vertex numbers). */
+  private ibuf: WebGLBuffer | null = null;
   private bufMesh: Mesh | null = null;
   private u: Record<string, WebGLUniformLocation | null> = {};
 
@@ -762,6 +839,7 @@ class ModelGL {
     this.bled = mk(gl.CLAMP_TO_EDGE);
     this.tx = mk(gl.REPEAT);
     this.buf = gl.createBuffer();
+    this.ibuf = gl.createBuffer();
     this.gl = gl;
     this.prog = p;
     return gl;
@@ -789,7 +867,12 @@ class ModelGL {
     gl.depthFunc(gl.LESS);
     gl.useProgram(this.prog);
     gl.bindBuffer(gl.ARRAY_BUFFER, this.buf);
-    if (this.bufMesh !== mesh) { gl.bufferData(gl.ARRAY_BUFFER, mesh.data, gl.STATIC_DRAW); this.bufMesh = mesh; }
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.ibuf);
+    if (this.bufMesh !== mesh) {
+      gl.bufferData(gl.ARRAY_BUFFER, mesh.data, gl.STATIC_DRAW);
+      gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, mesh.index, gl.STATIC_DRAW);
+      this.bufMesh = mesh;
+    }
     const tk = `${key}|${W}x${H}`;
     if (this.texKey !== tk) {
       gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
@@ -863,14 +946,14 @@ class ModelGL {
     gl.enableVertexAttribArray(3); gl.vertexAttribPointer(3, 1, gl.FLOAT, false, F, 32);
     gl.enableVertexAttribArray(4); gl.vertexAttribPointer(4, 2, gl.FLOAT, false, F, 36);
     gl.uniform1i(this.u.uPass, 0);
-    gl.drawArrays(gl.TRIANGLES, 0, mesh.count);
+    gl.drawElements(gl.TRIANGLES, mesh.count, gl.UNSIGNED_INT, 0);
     // The faces' soft edges, blended over what's already drawn behind them (without hiding anything else).
     gl.uniform1i(this.u.uPass, 1);
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
     gl.depthFunc(gl.LEQUAL);
     gl.depthMask(false);
-    gl.drawArrays(gl.TRIANGLES, 0, mesh.count);
+    gl.drawElements(gl.TRIANGLES, mesh.count, gl.UNSIGNED_INT, 0);
     gl.depthMask(true);
     gl.disable(gl.BLEND);
     gl.disable(gl.DEPTH_TEST);

@@ -1,4 +1,4 @@
-import opentype from 'opentype.js';
+import type opentype from 'opentype.js';
 import { corner } from './paths';
 import { isDesktop, readPath } from './platform';
 import { layoutText } from './text';
@@ -66,8 +66,14 @@ async function fontFileFromBrowser(family: string, weight: number, italic: boole
 
 const loaded = new Map<string, opentype.Font | null>();
 
+/**
+ * The font file reader, loaded the first time it's needed: it's large (about a third of the app's own code), and
+ * only Text to Outlines uses it, so leaving it out of start-up makes Pixl open faster.
+ */
+const reader = () => import('opentype.js').then((m) => m.default);
+
 /** A font from a font file's bytes (.ttf / .otf / .woff). */
-export const fontFromFile = (buf: ArrayBuffer) => opentype.parse(buf);
+export const fontFromFile = async (buf: ArrayBuffer) => (await reader()).parse(buf);
 
 /** The font for a text style, or null if its file can't be found or read. */
 export async function loadFont(family: string, weight: number, italic: boolean): Promise<opentype.Font | null> {
@@ -76,7 +82,7 @@ export async function loadFont(family: string, weight: number, italic: boolean):
   let font: opentype.Font | null = null;
   try {
     const buf = isDesktop ? await fontFileFromWindows(family, weight, italic) : await fontFileFromBrowser(family, weight, italic);
-    font = buf ? opentype.parse(buf) : null;
+    font = buf ? await fontFromFile(buf) : null;
   } catch { font = null; }
   loaded.set(key, font);
   return font;

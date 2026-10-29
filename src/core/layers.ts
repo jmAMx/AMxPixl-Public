@@ -177,16 +177,21 @@ export function drawPlaced(ctx: CanvasRenderingContext2D, l: PlacedLayer, pool: 
       // A 3D layer: its picture rendered as a lit 3D object (flat if WebGL2 isn't available).
       const r = renderModel(c, l.model, l.key, s, false, l.model.texture ? pool.get(l.model.texture.key) : null);
       if (r) {
+        // (Rendered at the next power of two up, so this only ever shrinks it by under half: see below.)
         ctx.imageSmoothingEnabled = true;
-        ctx.imageSmoothingQuality = 'high';
+        ctx.imageSmoothingQuality = 'low';
         ctx.drawImage(r.canvas, r.box.x, r.box.y, r.box.w, r.box.h);
         return;
       }
     }
-    // On screen past 200%, show crisp pixels (like Photoshop's pixel view); otherwise smooth, high-quality
-    // resampling. Nearest neighbour (pixel art) is always crisp and reads the original pixels directly.
+    // On screen past 200%, show crisp pixels (like Photoshop's pixel view); otherwise smooth. Nearest neighbour
+    // (pixel art) is always crisp and reads the original pixels directly.
+    // Plain (bilinear) smoothing: the pre-shrunk copies (displaySource) mean an image is never drawn at under half
+    // its size, where bilinear already averages every pixel and looks the same as "high". "High" isn't free: when
+    // the result goes on to an adjustment or effect layer, the browser rebuilds each image's mipmaps to hand it
+    // over (~11 ms per large layer on integrated graphics), for no visible difference.
     ctx.imageSmoothingEnabled = !nearest && !(screen && s >= 2);
-    ctx.imageSmoothingQuality = 'high';
+    ctx.imageSmoothingQuality = 'low';
     const { img, f } = nearest ? { img: c, f: 1 } : displaySource(c, s);
     if (l.warp) warpGL.draw(ctx, img, f, c.width, c.height, l.warp, m);
     else if (f === 1) ctx.drawImage(c, 0, 0);

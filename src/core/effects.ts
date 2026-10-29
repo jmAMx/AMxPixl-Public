@@ -611,9 +611,13 @@ vec4 fx(vec2 p, vec2 d) {
   float z0 = depth(p);
   vec4 acc = vec4(0.0);
   float wsum = 0.0;
-  // A disc of samples (golden-angle spiral), premultiplied so transparent edges blend right.
-  for (int i = 0; i < 40; i++) {
-    float t = (float(i) + 0.5) / 40.0;
+  // A disc of samples (golden-angle spiral), premultiplied so transparent edges blend right. As many as the
+  // disc's area needs to keep them about 2.5 pixels apart: a slight blur takes a few, a big one up to 64 (smoother
+  // than a fixed count, and cheaper where little blurs).
+  int n = int(clamp(0.5 * r0 * r0, 8.0, 64.0));
+  for (int i = 0; i < 64; i++) {
+    if (i >= n) break;
+    float t = (float(i) + 0.5) / float(n);
     float r = sqrt(t) * r0, a = float(i) * 2.39996;
     vec2 q = p + vec2(cos(a), sin(a)) * r;
     vec4 s = src(q);

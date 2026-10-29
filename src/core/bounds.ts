@@ -20,6 +20,9 @@ let pool: WorkerPool<object, { rect: Rect | null }> | null = null;
 /** Called whenever a pixel buffer changes, so its box is worked out again. */
 export function pixelsChanged(key: string) { versions.set(key, (versions.get(key) ?? 0) + 1); }
 
+/** How many times a pixel buffer has changed (to tell whether something drawn from it is out of date). */
+export const pixelVersion = (key: string) => versions.get(key) ?? 0;
+
 async function scan(canvas: HTMLCanvasElement, type: 'bounds' | 'trim' = 'bounds'): Promise<Rect | null> {
   if (typeof Worker === 'undefined') return (type === 'trim' ? trimBox : alphaBox)(ctx2d(canvas, true).getImageData(0, 0, canvas.width, canvas.height).data, canvas.width, canvas.height);
   pool ??= new WorkerPool(() => new Worker(new URL('./workers/pixelworker.ts', import.meta.url), { type: 'module' }), 1);
