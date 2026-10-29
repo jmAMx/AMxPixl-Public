@@ -4,6 +4,8 @@ Each version's section becomes its release notes (`scripts/release.ps1` copies i
 
 ## 0.8.1
 
+- **GPU use in the status bar**: "GPU" now shows how busy the graphics processor is with Pixl's work, as Task Manager counts it, and hovering it also gives the whole PC's figure. It updates every 1.5 seconds while Pixl is on screen, and reading it costs about a millisecond each time.
+- The zoom percentage in the status bar has a magnifier icon, so it isn't mistaken for the GPU figure next to it.
 - Fixed: an Extrude with a Bevel had a gap between its sides and the front and back, most visible at the corners when turned. The sides now rise to meet the bevelled face, so the object is solid at any bevel.
 
 ## 0.8.0

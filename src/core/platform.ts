@@ -9,6 +9,16 @@ const core = () => import('@tauri-apps/api/core');
 
 export const fileName = (path: string) => path.split(/[\\/]/).pop() || path;
 
+/**
+ * How busy the graphics processor is, from Windows' performance counters: [Pixl's share, whole PC] in percent (the
+ * busiest engine, as Task Manager counts it). Null in a browser, until the first reading, or without the counters.
+ */
+export async function gpuUsage(): Promise<[number, number] | null> {
+  if (!isDesktop) return null;
+  const { invoke } = await core();
+  return invoke<[number, number] | null>('gpu_usage');
+}
+
 export async function readPath(path: string): Promise<File> {
   const { invoke } = await core();
   const buf = await invoke<ArrayBuffer>('read_file', { path });

@@ -1,6 +1,8 @@
 use std::sync::Mutex;
 use tauri::{Emitter, Manager};
 
+mod gpu;
+
 /// Files passed on the command line (double-clicked in Explorer) that the window hasn't picked up yet.
 struct OpenFiles(Mutex<Vec<String>>);
 
@@ -115,6 +117,13 @@ fn write_settings(app: tauri::AppHandle, json: String) -> Result<(), String> {
   std::fs::rename(&tmp, &path).map_err(|e| e.to_string())
 }
 
+/// How busy the graphics processor is: (Pixl's share, whole PC) in percent, or null until there's a reading (or on
+/// systems without the counters). See gpu.rs.
+#[tauri::command]
+fn gpu_usage() -> Option<(f64, f64)> {
+  gpu::usage()
+}
+
 /// Opens the project's release page in the default browser (only that page, so this can't launch anything else).
 #[tauri::command]
 fn open_release_page(url: String) -> Result<(), String> {
@@ -149,7 +158,7 @@ pub fn run() {
       }
       Ok(())
     })
-    .invoke_handler(tauri::generate_handler![take_open_files, read_file, write_file, read_settings, write_settings, font_files, open_release_page])
+    .invoke_handler(tauri::generate_handler![take_open_files, read_file, write_file, read_settings, write_settings, font_files, open_release_page, gpu_usage])
     .run(tauri::generate_context!())
     .expect("error while running AMxPixl");
 }

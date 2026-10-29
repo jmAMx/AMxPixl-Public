@@ -18,6 +18,7 @@ import { warpDialog } from './warpdialog';
 import { timelinePanel, togglePlay } from './timeline';
 import { pathsPanel, strokePathDialog } from './pathspanel';
 import { closePopups, dialogOpen, icon, popupMenu, toast, type MenuItem } from './widgets';
+import { gpuUsage, isDesktop } from '../core/platform';
 
 // ---------- menus & shortcuts ----------
 
@@ -441,11 +442,28 @@ function statusbar() {
   const hint = h('span', { class: 'st-hint' });
   const pos = h('span', { class: 'st-pos' });
   const size = h('span', { class: 'st-size' });
-  const zoom = h('input', { class: 'st-zoom', type: 'text', title: 'Zoom (type a value)', spellcheck: false });
+  const zoom = h('input', { class: 'st-zoom', type: 'text', title: 'Zoom (type a value)', spellcheck: false, 'aria-label': 'Zoom' });
   zoom.addEventListener('change', () => { const v = parseFloat(zoom.value); if (v > 0) view.setZoom(v / 100); syncZoom(); });
   zoom.addEventListener('keydown', (e) => { if (e.key === 'Enter') zoom.blur(); });
-  const gpu = h('span', { class: 'st-gpu', title: glfx.ok ? `Adjustments run on the GPU (max texture ${glfx.maxSize}px)` : 'WebGL2 unavailable: adjustment layers are disabled' }, glfx.ok ? 'GPU' : 'GPU off');
+  const zoomBox = h('label', { class: 'st-zoombox', title: 'Zoom (type a value)' }, icon('zoom'), zoom);
+  // The GPU: whether Pixl can use it, and (on the desktop) how busy it is.
+  const gpuNote = glfx.ok ? `Adjustments, effects and 3D run on the GPU (largest image it takes: ${glfx.maxSize} px).` : 'WebGL2 isn\'t available, so adjustment and effect layers are off.';
+  const gpuUse = h('span', { class: 'st-gpu-use' });
+  const gpu = h('span', { class: 'st-gpu', title: gpuNote }, glfx.ok ? 'GPU' : 'GPU off', gpuUse);
   gpu.classList.toggle('bad', !glfx.ok);
+  if (glfx.ok && isDesktop) {
+    // Every 1.5 s while the window is showing (the reading stops on its own when nothing asks).
+    const poll = async () => {
+      if (document.visibilityState !== 'visible') return;
+      const u = await gpuUsage().catch(() => null);
+      if (!u) return;
+      const [mine, all] = u.map((v) => Math.round(v));
+      gpuUse.textContent = ` ${mine}%`;
+      gpu.title = `GPU use by Pixl: ${mine}% (whole PC: ${all}%), the busiest part of the graphics processor, as Task Manager counts it.\n${gpuNote}`;
+    };
+    setInterval(() => { void poll(); }, 1500);
+    void poll();
+  }
   const syncZoom = () => { if (document.activeElement !== zoom) zoom.value = app.doc ? `${+(app.doc.zoom * 100).toFixed(1)}%` : ''; };
   const sync = () => {
     hint.textContent = app.tool?.hint ?? '';
@@ -457,7 +475,7 @@ function statusbar() {
   view.onCursor = (p) => { pos.textContent = p && app.doc ? `${Math.floor(p.x)}, ${Math.floor(p.y)}` : ''; };
   app.on('tool', sync); app.on('docs', sync); app.on('view', syncZoom); app.on('change', sync);
   sync();
-  return h('footer', { class: 'statusbar' }, hint, h('span', { class: 'grow' }), pos, size, zoom, gpu);
+  return h('footer', { class: 'statusbar' }, hint, h('span', { class: 'grow' }), pos, size, zoomBox, gpu);
 }
 
 function dock() {

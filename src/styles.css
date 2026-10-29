@@ -469,8 +469,12 @@ input[type="range"]:focus-visible::-webkit-slider-thumb { background: var(--acce
 }
 .st-hint { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .st-pos { min-width: 70px; text-align: right; font-variant-numeric: tabular-nums; }
+.st-zoombox { display: inline-flex; align-items: center; gap: 4px; }
+.st-zoombox svg { width: 13px; height: 13px; opacity: .8; }
 .st-zoom { width: 62px; height: 18px; font-size: 11.5px; text-align: right; }
 .st-gpu { color: var(--accent); font-weight: 600; letter-spacing: .05em; }
+.st-gpu-use { display: inline-block; min-width: 3.4em; font-variant-numeric: tabular-nums; letter-spacing: 0; }
+.st-gpu-use:empty { min-width: 0; }
 .st-gpu.bad { color: var(--danger); }
 
 /* ---------- dialogs ---------- */
