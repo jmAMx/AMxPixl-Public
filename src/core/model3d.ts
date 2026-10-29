@@ -80,9 +80,9 @@ function rotation(m: Model3D): number[] {
 
 /**
  * The silhouette sampled on a grid: coverage (0-1), which samples are inside, and how far each is from the edge (in
- * samples).
+ * samples). Sample (i, j) is at layer pixel (x0 + i·cx, y0 + j·cy); the grid reaches a sample past the picture.
  */
-interface Grid { gw: number; gh: number; cx: number; cy: number; a: Float32Array; inside: Uint8Array; d: Float32Array; maxD: number }
+interface Grid { gw: number; gh: number; cx: number; cy: number; x0: number; y0: number; a: Float32Array; inside: Uint8Array; d: Float32Array; maxD: number }
 const gridCache = new Map<string, Grid>();
 
 function silhouette(src: HTMLCanvasElement, key: string): Grid {
@@ -93,17 +93,22 @@ function silhouette(src: HTMLCanvasElement, key: string): Grid {
   const W = src.width, H = src.height;
   // About every 2.5 pixels, between 64 and 320 samples along the long side.
   const cell = Math.max(W, H) / Math.min(320, Math.max(64, Math.max(W, H) / 2.5));
-  const gw = Math.max(2, Math.round(W / cell) + 1), gh = Math.max(2, Math.round(H / cell) + 1);
+  // Plus an empty sample all round: a shape touching the picture's border still has outside samples beyond it.
+  const nw = Math.max(2, Math.round(W / cell) + 1), nh = Math.max(2, Math.round(H / cell) + 1);
+  const gw = nw + 2, gh = nh + 2;
   const c = document.createElement('canvas'); c.width = gw; c.height = gh;
   const x = c.getContext('2d', { willReadFrequently: true })!;
-  x.drawImage(src, 0, 0, gw, gh);
+  // Sample (i, j) sits at layer pixel ((i - 1)·cx, (j - 1)·cy), so its coverage is measured there: pixel centres
+  // line up with the grid's points (the picture spanning nw - 1 by nh - 1 pixels, a sample and a half in).
+  x.drawImage(src, 1.5, 1.5, nw - 1, nh - 1);
   const px = x.getImageData(0, 0, gw, gh).data;
   const a = new Float32Array(gw * gh), inside = new Uint8Array(gw * gh);
   for (let i = 0; i < gw * gh; i++) { a[i] = px[i * 4 + 3] / 255; inside[i] = px[i * 4 + 3] >= 128 ? 1 : 0; }
   const d = edt(inside, gw, gh);
   let maxD = 0;
   for (let i = 0; i < d.length; i++) if (d[i] > maxD) maxD = d[i];
-  const g = { gw, gh, cx: W / (gw - 1), cy: H / (gh - 1), a, inside, d, maxD };
+  const cx = W / (nw - 1), cy = H / (nh - 1);
+  const g = { gw, gh, cx, cy, x0: -cx, y0: -cy, a, inside, d, maxD };
   gridCache.set(ck, g);
   return g;
 }
@@ -173,22 +178,79 @@ function finish(data: number[], area: [number, number, number, number]): Mesh {
 }
 
 /**
- * Front and back surfaces of a height field over the silhouette (`h` per grid sample; the back mirrors it). `back`
- * is the back face's kind: 2 when sides hide its edge, 0 to give it soft edges like the front.
+ * The silhouette's rim on the grid: each outside sample next to the inside, moved onto the picture's edge (where its
+ * coverage crosses half), with the outward direction there. Front and back meet on it, closing the shape.
  */
-function heightSurfaces(g: Grid, h: Float32Array, W: number, H: number, out: number[], back: 0 | 2) {
+interface Rim { on: Uint8Array; pos: Float32Array; nrm: Float32Array }
+
+function rimOf(g: Grid): Rim {
+  const { gw, gh, a } = g;
+  const on = new Uint8Array(gw * gh), pos = new Float32Array(gw * gh * 2), nrm = new Float32Array(gw * gh * 2);
+  const A = (i: number, j: number) => a[Math.min(gh - 1, Math.max(0, j)) * gw + Math.min(gw - 1, Math.max(0, i))];
+  for (let j = 0; j < gh; j++) for (let i = 0; i < gw; i++) {
+    const k = j * gw + i;
+    if (g.inside[k]) continue;
+    // Only samples right beside the inside (left, right, above, below): one that only touches it corner to corner is
+    // too far out to move onto the edge, and would poke out as a spike. Its cells use just their inner triangle.
+    let sx = 0, sy = 0, n = 0;
+    for (const [di, dj] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const ii = i + di, jj = j + dj;
+      if (ii >= 0 && jj >= 0 && ii < gw && jj < gh && g.inside[jj * gw + ii]) { sx += di; sy += dj; n++; }
+    }
+    if (!n) continue;
+    // Coverage rises toward the inside; follow it to where it reaches half (at most a sample in).
+    const gx = (A(i + 1, j) - A(i - 1, j)) / 2, gy = (A(i, j + 1) - A(i, j - 1)) / 2, len = Math.hypot(gx, gy);
+    let ux: number, uy: number, t: number;
+    if (len > 0.05 && gx * sx + gy * sy >= 0) { ux = gx / len; uy = gy / len; t = Math.min(0.95, Math.max(0, (0.5 - a[k]) / len)); }
+    else if (sx || sy) { const l = Math.hypot(sx, sy); ux = sx / l; uy = sy / l; t = 0; }
+    // (Inside on opposite sides, a one-sample gap: no way is "in", so any will do.)
+    else { ux = 1; uy = 0; t = 0; }
+    on[k] = 1;
+    pos[k * 2] = g.x0 + (i + ux * t) * g.cx; pos[k * 2 + 1] = g.y0 + (j + uy * t) * g.cy;
+    nrm[k * 2] = -ux; nrm[k * 2 + 1] = -uy;
+  }
+  return { on, pos, nrm };
+}
+
+/**
+ * Front and back surfaces of a height field over the silhouette (`h` per grid sample; the back mirrors it). `back`
+ * is the back face's kind: 2 when sides hide its edge, 0 to give it soft edges like the front. With a `rim`, the
+ * surfaces end on it (only triangles inside it), meeting there to close the shape; otherwise they're cut out by the
+ * picture's edges.
+ */
+function heightSurfaces(g: Grid, h: Float32Array, W: number, H: number, out: number[], back: 0 | 2, rim?: Rim) {
   const { gw, gh, cx, cy } = g;
   const at = (i: number, j: number) => h[Math.min(gh - 1, Math.max(0, j)) * gw + Math.min(gw - 1, Math.max(0, i))];
   const ins = (i: number, j: number) => i >= 0 && j >= 0 && i < gw && j < gh && g.inside[j * gw + i] === 1;
+  const used = (i: number, j: number) => ins(i, j) || !!rim?.on[j * gw + i];
   const vert = (i: number, j: number, side: 1 | -1) => {
+    const k = j * gw + i;
+    if (rim?.on[k]) {
+      // On the rim: upright, facing outward.
+      const x = rim.pos[k * 2], y = rim.pos[k * 2 + 1];
+      return [x, y, 0, rim.nrm[k * 2], rim.nrm[k * 2 + 1], 0, x / W, y / H, side > 0 ? 0 : back, x, y];
+    }
     // Outward: both surfaces slope away from the middle; only the facing (z) flips for the back.
     const dx = (at(i + 1, j) - at(i - 1, j)) / (2 * cx), dy = (at(i, j + 1) - at(i, j - 1)) / (2 * cy);
     const n = [-dx, -dy, side], l = Math.hypot(n[0], n[1], n[2]);
-    const x = i * cx, y = j * cy;
+    const x = g.x0 + i * cx, y = g.y0 + j * cy;
     return [x, y, at(i, j) * side, n[0] / l, n[1] / l, n[2] / l, x / W, y / H, side > 0 ? 0 : back, x, y];
   };
   for (const side of [1, -1] as const) {
     for (let j = 0; j < gh - 1; j++) for (let i = 0; i < gw - 1; i++) {
+      if (rim) {
+        // Each half of the cell whose corners are all inside or on the rim.
+        const A = used(i, j), B = used(i + 1, j), C = used(i, j + 1), D = used(i + 1, j + 1);
+        if (!(A || B || C || D)) continue;
+        const a = vert(i, j, side), b = vert(i + 1, j, side), c = vert(i, j + 1, side), d = vert(i + 1, j + 1, side);
+        // Split the cell along whichever diagonal keeps the most of it.
+        if (A && B && C && D) out.push(...a, ...b, ...c, ...b, ...d, ...c);
+        else if (A && B && C) out.push(...a, ...b, ...c);
+        else if (B && D && C) out.push(...b, ...d, ...c);
+        else if (A && B && D) out.push(...a, ...b, ...d);
+        else if (A && D && C) out.push(...a, ...d, ...c);
+        continue;
+      }
       // Only cells at or next to the silhouette (the rest is cut away anyway).
       let near = false;
       for (let dj = -1; dj <= 2 && !near; dj++) for (let di = -1; di <= 2 && !near; di++) near = ins(i + di, j + dj);
@@ -205,22 +267,43 @@ function inflateMesh(g: Grid, m: Model3D, W: number, H: number): Mesh {
   const depth = (m.depth / 100) * radius * Math.min(g.cx, g.cy);
   let h: Float32Array = new Float32Array(g.d.length);
   const { gw, gh } = g;
-  const out4 = (k: number) => {
-    const i = k % gw, j = (k - i) / gw;
-    return i === 0 || j === 0 || i === gw - 1 || j === gh - 1 || !g.inside[k - 1] || !g.inside[k + 1] || !g.inside[k - gw] || !g.inside[k + gw];
-  };
+  const rim = rimOf(g);
+  // The rim as short segments (between neighbouring rim samples), in sample units.
+  const rx = (k: number) => (rim.pos[k * 2] - g.x0) / g.cx, ry = (k: number) => (rim.pos[k * 2 + 1] - g.y0) / g.cy;
+  const BAND = 5;
   for (let k = 0; k < h.length; k++) {
     if (!g.inside[k]) continue;
-    // Distance in from the edge. Next to the edge, the coverage places it between samples (a sample half covered
-    // sits on it); otherwise the edge would sit at the same half-sample everywhere and step along slanted edges.
-    const dist = out4(k) ? Math.max(0, g.a[k] - 0.5) : g.d[k] - 0.5;
+    // Distance in from the edge. Near it (where the rounding is steep), measured to the rim itself, which sits on
+    // the picture's edge between samples; a distance counted in whole samples would step along slanted edges and
+    // show as ripples. Further in, the grid's distance is close enough (and the surface is nearly flat there).
+    let dist = g.d[k] - 0.5;
+    if (g.d[k] <= BAND) {
+      const i = k % gw, j = (k - i) / gw;
+      let best = Infinity;
+      for (let jj = Math.max(0, j - BAND - 1); jj <= Math.min(gh - 1, j + BAND + 1); jj++) {
+        for (let ii = Math.max(0, i - BAND - 1); ii <= Math.min(gw - 1, i + BAND + 1); ii++) {
+          const r = jj * gw + ii;
+          if (!rim.on[r]) continue;
+          const px = rx(r), py = ry(r);
+          best = Math.min(best, Math.hypot(i - px, j - py));
+          for (const [di, dj] of [[1, 0], [0, 1], [1, 1], [1, -1]]) {
+            const i2 = ii + di, j2 = jj + dj;
+            if (i2 < 0 || j2 < 0 || i2 >= gw || j2 >= gh || !rim.on[j2 * gw + i2]) continue;
+            const qx = rx(j2 * gw + i2), qy = ry(j2 * gw + i2), sx = qx - px, sy = qy - py;
+            const t = Math.min(1, Math.max(0, ((i - px) * sx + (j - py) * sy) / (sx * sx + sy * sy || 1)));
+            best = Math.min(best, Math.hypot(i - px - sx * t, j - py - sy * t));
+          }
+        }
+      }
+      if (best < Infinity) dist = best;
+    }
     const u = Math.min(1, dist / rr);
     h[k] = depth * Math.sqrt(Math.max(0, 1 - (1 - u) * (1 - u)));
   }
   // Soften the crease where the distances from opposite edges meet (the middle of a stroke) into a smooth crown.
   h = smooth(g, h, 3, 1.2);
   const out: number[] = [];
-  heightSurfaces(g, h, W, H, out, 0);
+  heightSurfaces(g, h, W, H, out, 0, rim);
   return finish(out, [W / 2, H / 2, W, H]);
 }
 
@@ -411,6 +494,8 @@ function extrudeMesh(g: Grid, src: HTMLCanvasElement, m: Model3D, W: number, H: 
 /** Revolve: each row of the silhouette becomes a ring around an upright axis through the picture's middle. */
 function revolveMesh(g: Grid, src: HTMLCanvasElement, m: Model3D, W: number, H: number): Mesh {
   const { gh, cy } = g;
+  // Row j's height in the picture (the grid starts a row above it, so the first and last rows are empty).
+  const Y = (j: number) => g.y0 + j * cy;
   const axisX = pivotX(W, m);
   // How far each row reaches from the axis (outer), and where a gap around the axis ends (inner, for hollow parts).
   // Each row's edges, read from the picture in detail and placed between pixels where the coverage crosses half (so
@@ -420,7 +505,7 @@ function revolveMesh(g: Grid, src: HTMLCanvasElement, m: Model3D, W: number, H: 
   const row = new Float32Array(PW);
   const lx = (i: number) => (i - 0.5) / s;
   for (let j = 0; j < gh; j++) {
-    const fy = Math.min(PH - 1, Math.max(0, j * cy * s + 0.5)), j0 = Math.floor(fy), j1 = Math.min(PH - 1, j0 + 1), t = fy - j0;
+    const fy = Math.min(PH - 1, Math.max(0, Y(j) * s + 0.5)), j0 = Math.floor(fy), j1 = Math.min(PH - 1, j0 + 1), t = fy - j0;
     for (let i = 0; i < PW; i++) row[i] = val[j0 * PW + i] * (1 - t) + val[j1 * PW + i] * t;
     const cross = (i: number, i2: number) => lx(i) + (lx(i2) - lx(i)) * ((row[i] - 0.5) / Math.max(1e-6, row[i] - row[i2]));
     // Only the right of a middle axis counts (the picture is drawn whole, so its left half mirrors it).
@@ -454,7 +539,7 @@ function revolveMesh(g: Grid, src: HTMLCanvasElement, m: Model3D, W: number, H: 
     const nx = c * sign, ny = -slope * sign, nz = s * sign, l = Math.hypot(nx, ny, nz) || 1;
     // Colour from the picture just inside its edge on this row.
     // (Around runs against the angle, so seen from the front it reads left to right.)
-    return [axisX + r * c, j * cy, r * s, nx / l, ny / l, nz / l, Math.min(1, Math.max(0, (axisX + Math.max(0, r - 1.5)) / W)), (j * cy) / H, 1, (1 - k / N) * C, j * cy];
+    return [axisX + r * c, Y(j), r * s, nx / l, ny / l, nz / l, Math.min(1, Math.max(0, (axisX + Math.max(0, r - 1.5)) / W)), Y(j) / H, 1, (1 - k / N) * C, Y(j)];
   };
   const slopeAt = (r: Float32Array, j: number) => {
     const a = has[j - 1] ? r[j - 1] : r[j], b = has[j + 1] ? r[j + 1] : r[j];
@@ -478,7 +563,7 @@ function revolveMesh(g: Grid, src: HTMLCanvasElement, m: Model3D, W: number, H: 
     for (const [end, ny] of [[!has[j - 1], -1], [!has[j + 1], 1]] as const) {
       if (!end) continue;
       for (let k = 0; k < N; k++) {
-        const t0 = (k / N) * Math.PI * 2, t1 = ((k + 1) / N) * Math.PI * 2, y = j * cy, v = y / H;
+        const t0 = (k / N) * Math.PI * 2, t1 = ((k + 1) / N) * Math.PI * 2, y = Y(j), v = y / H;
         // The texture lies flat across a cap, as if seen from above.
         const P = (r: number, t: number) => [axisX + r * Math.cos(t), y, r * Math.sin(t), 0, ny, 0, Math.min(1, (axisX + Math.max(0, r - 1.5)) / W), v, 1, (3 * C) / 4 + r * Math.cos(t), y + r * Math.sin(t)];
         const a = P(ri[j], t0), b = P(ri[j], t1), c = P(ro[j], t0), d = P(ro[j], t1);
@@ -563,7 +648,10 @@ void main() {
   // Faces are cut out by the picture's own edges; sides and revolved surfaces are always solid. Pass 0 draws it all
   // solid (faces cut where they're half covered), pass 1 adds the faces' soft edges over whatever is behind them.
   bool solid = vSolid > 0.5 && vSolid < 1.5;
-  float a = solid ? 1.0 : smoothstep(0.3, 0.7, texture(uTex, vUV).a);
+  // (Inflate's surfaces end on the picture's edge themselves, so they aren't cut out.)
+  // (Nothing past the picture's border, where its edge pixels would otherwise repeat.)
+  vec2 inPic = step(vec2(0.0), vUV) * step(vUV, vec2(1.0));
+  float a = solid || uKind == 0 ? 1.0 : smoothstep(0.3, 0.7, texture(uTex, vUV).a) * inPic.x * inPic.y;
   if (uPass == 0) { if (a < 0.5) discard; a = 1.0; }
   // (Only the face turned toward the viewer: the other one's edge would peek out past the sides.)
   else if (solid || a < 0.01 || a > 0.99 || (vSolid > 1.5 ? -uR[2][2] : uR[2][2]) < 0.0) discard;
