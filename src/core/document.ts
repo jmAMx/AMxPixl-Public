@@ -185,7 +185,7 @@ export class Doc {
   private docRectOf(key: string, r: Rect): Rect | null {
     if (key === this.quickMask) return r;
     for (const l of this.all()) {
-      if (l.type === 'raster' && l.key === key) return l.warp ? null : mapRect(xformMatrix(l.t), r);
+      if (l.type === 'raster' && l.key === key) return l.warp || l.model ? null : mapRect(xformMatrix(l.t), r);
       if (l.mask?.key === key) return mapRect(xformMatrix(l.mask.t), r);
     }
     return null;
@@ -322,8 +322,8 @@ export class Doc {
     if (qm && a) return { target: qm, isMask: true, layer: a };
     if (!a) return null;
     if (this.maskEdit && a.mask) return { target: a.mask, isMask: true, layer: a };
-    // A warped layer's pixels don't line up with the canvas until the warp is applied.
-    if (a.type === 'raster' && !a.warp) return { target: a, isMask: false, layer: a };
+    // A warped or 3D layer's pixels don't line up with the canvas until it's applied (rasterized).
+    if (a.type === 'raster' && !a.warp && !a.model) return { target: a, isMask: false, layer: a };
     return null;
   }
 

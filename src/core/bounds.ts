@@ -66,7 +66,7 @@ export function layerBoxReady(l: PlacedLayer, pool: Map<string, HTMLCanvasElemen
  */
 export function layerBox(l: PlacedLayer, pool: Map<string, HTMLCanvasElement>, mode: BoxMode, onReady?: () => void): Rect | null {
   if (mode === 'custom' && l.box) return l.box;
-  if (mode === 'layer' || l.type !== 'raster' || l.warp) return localBounds(l, pool);
+  if (mode === 'layer' || l.type !== 'raster' || l.warp || l.model) return localBounds(l, pool);
   const c = pool.get(l.key);
   if (!c) return localBounds(l, pool);
   const r = alphaBounds(l.key, c, onReady);

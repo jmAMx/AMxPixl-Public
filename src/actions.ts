@@ -24,6 +24,8 @@ import type { AdjKind, AdjParams, Anim, AnimFrame, BlendIf, GroupLayer, Guide, L
 import { initWarp, warpBounds } from './core/warp';
 import { envelopeMesh, shapeFit, type Envelope } from './core/envelope';
 import { loadFont, outlineText } from './core/outline';
+import { defaultModel, renderModel, type Model3D } from './core/model3d';
+import { alphaBox } from './core/alphabox';
 import { isFilter, isPlaced } from './core/types';
 import { view } from './ui/canvasview';
 import { ask, toast } from './ui/widgets';
@@ -334,7 +336,7 @@ export async function distributeLayers(axis: 'h' | 'v') {
  */
 export async function trimLayers() {
   const doc = need(); if (!doc) return;
-  const layers = doc.selectedPlaced().filter((l): l is RasterLayer => l.type === 'raster' && !l.warp);
+  const layers = doc.selectedPlaced().filter((l): l is RasterLayer => l.type === 'raster' && !l.warp && !l.model);
   if (!layers.length) { toast('Select an image layer to trim (warped layers can\'t be trimmed until the warp is applied).'); return; }
   const boxes = await Promise.all(layers.map((l) => layerBoxReady(l, doc.pool, 'content')));
   if (!app.docs.includes(doc)) return;
@@ -512,6 +514,57 @@ export function shapeToPath() {
   const doc = need(); const l = doc?.active;
   if (!doc || l?.type !== 'shape') { toast('Select a shape layer first.'); return; }
   newPath(shapeOutline(l), `${l.name} path`);
+}
+
+// ---------- 3D layers ----------
+
+/**
+ * Layer › 3D › Inflate: makes a 3D layer from the active layer (image, text or shape). Its picture, as it looks on
+ * the canvas without layer styles, becomes the 3D object's front and silhouette; the original is kept, hidden.
+ */
+export function make3D() {
+  const doc = need(); const l = doc?.activePlaced;
+  if (!doc || !l) { toast('Select an image, text or shape layer to make 3D.'); return; }
+  if (l.type === 'raster' && l.model) { toast('This is already a 3D layer: change it in Properties › 3D.'); return; }
+  const b = roundOut(doc.layerBounds(l));
+  if (b.w * b.h > 6000 * 6000) { toast('That layer is too big to make 3D. Scale it down first.'); return; }
+  const c = newCanvas(Math.max(1, b.w), Math.max(1, b.h));
+  renderDoc(doc, c, [1, 0, 0, 1, -b.x, -b.y], { layers: [{ ...l, visible: true, opacity: 1, blend: 'normal', mask: null, clip: false, styles: null, blendIf: null }], includeHidden: true, clip: false });
+  const r = alphaBox(ctx2d(c, true).getImageData(0, 0, c.width, c.height).data, c.width, c.height);
+  if (!r) { toast('That layer is empty, so there\'s nothing to make 3D.'); return; }
+  const pic = newCanvas(r.w, r.h);
+  ctx2d(pic).drawImage(c, -r.x, -r.y);
+  const layer: RasterLayer = {
+    id: newId(), type: 'raster', name: `${l.name} 3D`, visible: true, opacity: l.opacity, blend: l.blend,
+    key: doc.addCanvas(pic), t: { x: b.x + r.x, y: b.y + r.y, sx: 1, sy: 1, rot: 0 }, model: defaultModel(),
+  };
+  doc.insertLayer(layer, l.id);
+  setLayerProp(l.id, { visible: false });
+  doc.setActive(layer.id);
+  doc.commit('Make 3D');
+}
+
+/** Changes the active 3D layer's settings; `label` records it as a step (otherwise it's a live preview). */
+export function setModel(patch: Partial<Model3D>, label?: string) {
+  const doc = need(); const l = doc?.activeRaster;
+  if (!doc || !l?.model) return;
+  l.model = { ...l.model, ...patch };
+  if (label) doc.commit(label); else doc.touch('meta');
+}
+
+/** Bakes the active 3D layer, as it looks now, into ordinary pixels you can paint on. */
+export function rasterize3D() {
+  const doc = need(); const l = doc?.activeRaster;
+  if (!doc || !l?.model) return;
+  const r = renderModel(doc.canvasOf(l), l.model, l.key, 1);
+  if (!r) { toast('3D needs WebGL2, which isn\'t available here.', 'error'); return; }
+  const p = apply(layerMatrix(l), r.box.x, r.box.y);
+  // The render may be at a slightly different size from its box; keep the box's size on the canvas.
+  const k = r.box.w / r.canvas.width;
+  l.key = doc.addCanvas(cloneCanvas(r.canvas));
+  l.t = { ...l.t, x: p.x, y: p.y, sx: l.t.sx * k, sy: l.t.sy * k };
+  l.model = null;
+  doc.commit('Rasterize 3D');
 }
 
 /**
@@ -1027,6 +1080,7 @@ function needTarget(doc: Doc, verb: string) {
   const pt = doc.paintTarget();
   if (pt) return pt;
   const l = doc.active;
+  if (l?.type === 'raster' && l.model) { toast('This is a 3D layer. Rasterize it first (Properties › 3D › Rasterize).'); return null; }
   if (l?.type === 'raster' && l.warp) { toast('This layer is warped. Apply the warp first (Layer › Transform › Apply Warp).'); return null; }
   toast(!l ? 'Select a layer first.' : isFilter(l) || l.type === 'group'
     ? `Can't ${verb} a ${l.type === 'group' ? 'group' : l.type === 'effect' ? 'effect' : 'adjustment'} layer (add a mask to paint where it applies).`
@@ -1179,6 +1233,7 @@ type EnvelopeStart = { l: PlacedLayer; envelope?: Envelope | null; warp?: Warp |
 export async function beginEnvelope(): Promise<EnvelopeStart | null> {
   const doc = need(); const l = doc?.activePlaced;
   if (!doc || !l) { toast('Select an image, text or shape layer to warp.'); return null; }
+  if (l.type === 'raster' && l.model) { toast('3D layers can\'t be warped. Rasterize it first (Properties › 3D › Rasterize).'); return null; }
   const start: EnvelopeStart = { l, t: { ...l.t }, box: l.box ? { ...l.box } : l.box };
   if (l.type !== 'raster') { start.envelope = l.envelope ? { ...l.envelope } : null; return start; }
   start.warp = l.warp ? structuredClone(l.warp) : null;
@@ -1230,6 +1285,7 @@ export function ensureWarp(kind: Warp['kind']): RasterLayer | null {
   const doc = need(); const l = doc?.active;
   if (!doc || !l) return null;
   if (l.type !== 'raster') { toast(l.type === 'text' || l.type === 'shape' ? 'Rasterize this layer to warp it.' : 'Select an image layer to warp.'); return null; }
+  if (l.model) { toast('3D layers turn with Rotate 3D instead. Rasterize it first to warp it.'); return null; }
   if (l.warp?.kind !== kind) { l.warp = initWarp(kind, rasterBox(doc, l), l.warp); doc.touch('meta'); }
   return l;
 }

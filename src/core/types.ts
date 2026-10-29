@@ -1,4 +1,5 @@
 import type { Envelope } from './envelope';
+import type { Model3D } from './model3d';
 import type { Rect, Xform } from './math';
 
 export type BlendMode =
@@ -149,7 +150,8 @@ export interface Anim { fps: number; frames: AnimFrame[]; loop: boolean }
 
 /** A layer with a position on the canvas. `box` is a bounding box set by hand (Move tool › Box › Custom), in its own pixels. */
 interface PlacedBase extends LayerBase { t: Xform; box?: Rect | null }
-export interface RasterLayer extends PlacedBase { type: 'raster'; key: string; warp?: Warp | null }
+/** `model`: a 3D layer, its picture turned into a lit 3D object (see model3d.ts); it can't be painted on. */
+export interface RasterLayer extends PlacedBase { type: 'raster'; key: string; warp?: Warp | null; model?: Model3D | null }
 /** `envelope`: a warp preset (arc, flag, bulge...) bending the text or shape; it stays editable and refits to edits. */
 export interface TextLayer extends PlacedBase { type: 'text'; text: TextProps; envelope?: Envelope | null }
 export interface ShapeLayer extends PlacedBase { type: 'shape'; shape: ShapeProps; envelope?: Envelope | null }

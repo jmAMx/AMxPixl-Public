@@ -111,6 +111,11 @@ const MENUS: MenuDef[] = [
       'sep',
       { label: 'Merge Down', accel: 'Ctrl+E', run: A.mergeDown, enabled: hasLayer },
       { label: 'Warp…', accel: 'Ctrl+Alt+W', run: () => { void warpDialog(); }, enabled: () => !!app.doc?.activePlaced },
+      { label: '3D', sub: () => [
+        { label: 'Inflate', onClick: A.make3D, disabled: !app.doc?.activePlaced || !!app.doc.activeRaster?.model },
+        { label: 'Rotate 3D', onClick: () => { app.setTool('move'); app.opts.move.mode = 'rotate3d'; app.emit('tool'); }, disabled: !app.doc?.activeRaster?.model },
+        { label: 'Rasterize 3D', onClick: A.rasterize3D, disabled: !app.doc?.activeRaster?.model },
+      ] },
       { label: 'Text to Outlines', run: () => { void A.textToOutlines(); }, enabled: () => app.doc?.active?.type === 'text' },
       { label: 'Fit into Shape', run: () => { void A.fitIntoShape(); }, enabled: () => !!app.doc?.activePlaced && (!!app.doc.path || (app.doc.selectedIds().length === 2)) },
       { label: 'Trim to Content', run: () => { void A.trimLayers(); }, enabled: () => app.doc?.active?.type === 'raster' || app.doc?.active?.type === 'group' || (app.doc?.selectedIds().length ?? 0) > 1 },

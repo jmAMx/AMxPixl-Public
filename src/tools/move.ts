@@ -5,7 +5,8 @@ import { layerMatrix, localBounds, ctx2d } from '../core/layers';
 import { apply, corners, decompose, identity, invert, mapRect, mul, pointInPoly, scale, translate, union, xformMatrix, type Mat, type Pt, type Rect, type Xform } from '../core/math';
 import type { PlacedLayer, RasterLayer, ShapeProps } from '../core/types';
 import { warpHandles, warpPoint } from '../core/warp';
-import { alignLayers, applyWarp, distributeLayers, ensureWarp, flipLayer, removeWarp, resetTransform, rotateLayer90, setPlacedTransform } from '../actions';
+import { alignLayers, applyWarp, distributeLayers, ensureWarp, flipLayer, removeWarp, resetTransform, rotateLayer90, setModel, setPlacedTransform } from '../actions';
+import type { Model3D } from '../core/model3d';
 import type { IconName } from '../ui/icons';
 import { view } from '../ui/canvasview';
 import { h } from '../ui/dom';
@@ -82,7 +83,8 @@ export function layerAt(x: number, y: number): PlacedLayer | null {
     const b = localBounds(l, doc.pool);
     const lp = apply(invert(layerMatrix(l)), x, y);
     if (lp.x < b.x || lp.y < b.y || lp.x >= b.x + b.w || lp.y >= b.y + b.h) continue;
-    if (l.type === 'raster') {
+    // An image layer counts where it has pixels (a 3D layer's turned shape doesn't match its picture: its box counts).
+    if (l.type === 'raster' && !l.model && !l.warp) {
       const a = ctx2d(doc.canvasOf(l), false).getImageData(Math.floor(lp.x), Math.floor(lp.y), 1, 1).data[3];
       if (a < 12) continue;
     }
@@ -98,7 +100,8 @@ class MoveTool implements Tool {
 
   get hint() {
     const m = app.opts.move.mode;
-    return m === 'perspective' ? 'Drag the corners to fit the layer into a perspective · Enter when done · lossless until you Apply'
+    return m === 'rotate3d' ? 'Drag to turn the 3D layer (left/right turns, up/down tilts) · Shift+drag spins it · Enter when done'
+      : m === 'perspective' ? 'Drag the corners to fit the layer into a perspective · Enter when done · lossless until you Apply'
       : m === 'warp' ? 'Drag the grid points to bend the layer · Enter when done · lossless until you Apply'
         : this.boxEditable ? 'Drag the handles to resize the box, or inside it to move the box · the layer stays put'
           : 'Drag to move · corner handles scale (Shift = free) · outside a corner rotates · Ctrl+click layers to transform several together · arrows nudge';
@@ -109,8 +112,11 @@ class MoveTool implements Tool {
   activate() { app.opts.move.mode = 'transform'; }
   deactivate() { app.opts.move.mode = 'transform'; clearSnapLines(); }
 
-  private setMode(m: 'transform' | 'perspective' | 'warp') {
-    if (m !== 'transform' && !ensureWarp(m === 'warp' ? 'mesh' : 'perspective')) { app.emit('tool'); return; }
+  /** A turn of the active 3D layer in progress: where it started and the settings then. */
+  private turn: { x: number; y: number; m: Model3D } | null = null;
+
+  private setMode(m: 'transform' | 'perspective' | 'warp' | 'rotate3d') {
+    if ((m === 'perspective' || m === 'warp') && !ensureWarp(m === 'warp' ? 'mesh' : 'perspective')) { app.emit('tool'); return; }
     app.opts.move.mode = m;
     app.emit('tool');
     view.requestOverlay();
@@ -142,6 +148,7 @@ class MoveTool implements Tool {
   }
 
   cursor(p: PInfo | null) {
+    if (this.mode === 'rotate3d') return this.turn ? 'grabbing' : 'grab';
     if (this.mode !== 'transform') {
       const l = app.doc?.activeRaster;
       if (this.wdrag) return 'grabbing';
@@ -163,7 +170,19 @@ class MoveTool implements Tool {
 
   options(bar: HTMLElement) {
     const o = app.opts.move;
-    const modes = seg([{ v: 'transform', label: 'Transform' }, { v: 'perspective', label: 'Perspective', icon: undefined }, { v: 'warp', label: 'Warp' }], o.mode, (v) => this.setMode(v));
+    const is3D = !!app.doc?.activeRaster?.model;
+    const modes = seg([
+      { v: 'transform', label: 'Transform' },
+      ...(is3D ? [{ v: 'rotate3d' as const, label: 'Rotate 3D', title: 'Drag on the canvas to turn the 3D layer' }]
+        : [{ v: 'perspective' as const, label: 'Perspective' }, { v: 'warp' as const, label: 'Warp' }]),
+    ], o.mode, (v) => this.setMode(v));
+    if (o.mode === 'rotate3d') {
+      bar.append(modes,
+        h('button', { class: 'btn small primary', type: 'button', onclick: () => this.setMode('transform') }, 'Done'),
+        h('button', { class: 'btn small', type: 'button', onclick: () => setModel({ rotX: 0, rotY: 0, rotZ: 0 }, 'Face front') }, 'Face front'),
+        h('span', { class: 'opt-note' }, 'Drag to turn it · Shift+drag spins it · the light stays put, so it shades as it turns.'));
+      return;
+    }
     if (o.mode !== 'transform') {
       bar.append(modes,
         h('button', { class: 'btn small primary', type: 'button', onclick: () => this.setMode('transform') }, 'Done'),
@@ -240,6 +259,11 @@ class MoveTool implements Tool {
 
   down(p: PInfo) {
     const doc = app.doc!;
+    if (this.mode === 'rotate3d') {
+      const m = doc.activeRaster?.model;
+      if (m) this.turn = { x: p.sx, y: p.sy, m: { ...m } };
+      return;
+    }
     if (this.mode !== 'transform') {
       const l = ensureWarp(this.mode === 'warp' ? 'mesh' : 'perspective');
       if (!l) return;
@@ -294,6 +318,13 @@ class MoveTool implements Tool {
   }
 
   move(p: PInfo) {
+    if (this.turn) {
+      // Half a degree per screen pixel; angles stay within -180..180.
+      const t = this.turn, dx = p.sx - t.x, dy = p.sy - t.y;
+      const wrap = (v: number) => Math.round(((((v + 180) % 360) + 360) % 360) - 180);
+      setModel(p.shift ? { rotZ: wrap(t.m.rotZ + dx * 0.5) } : { rotY: wrap(t.m.rotY + dx * 0.5), rotX: wrap(t.m.rotX - dy * 0.5) });
+      return;
+    }
     if (this.wdrag) {
       const w = this.wdrag;
       const lp = apply(invert(layerMatrix(w.layer)), p.x, p.y);
@@ -378,6 +409,7 @@ class MoveTool implements Tool {
 
   up() {
     clearSnapLines();
+    if (this.turn) { this.turn = null; app.doc?.commit('Rotate 3D'); return; }
     if (this.wdrag) {
       const w = this.wdrag;
       this.wdrag = null;

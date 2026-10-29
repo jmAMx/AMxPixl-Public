@@ -1,6 +1,6 @@
 import { app } from '../app';
 import {
-  applyMask, applyWarp, clearStyles, createAnimation, deleteMask, editBlendIf, editStyles, flipLayer, invertMask, loadLut, rasterizeLayer,
+  applyMask, applyWarp, clearStyles, createAnimation, deleteMask, editBlendIf, editStyles, flipLayer, invertMask, loadLut, rasterize3D, rasterizeLayer,
   removeWarp, resetTransform, setMaskProp, setPlacedTransform,
 } from '../actions';
 import { defaultStyles } from '../core/styles';
@@ -13,7 +13,8 @@ import { warpDialog } from './warpdialog';
 import { ctx2d, layerMatrix, localBounds, newCanvas } from '../core/layers';
 import { apply, decompose, mapRect, mul, scale, translate, union, xformMatrix, type Rect } from '../core/math';
 import { renderDoc } from '../core/render';
-import type { AdjParams, AdjustLayer, Channel, CurvePts, EffectLayer, GradeWheel, Layer, LayerStyles, LevelsCh, PlacedLayer, ShapeLayer, TextLayer } from '../core/types';
+import type { AdjParams, AdjustLayer, Channel, CurvePts, EffectLayer, GradeWheel, Layer, LayerStyles, LevelsCh, PlacedLayer, RasterLayer, ShapeLayer, TextLayer } from '../core/types';
+import type { Model3D } from '../core/model3d';
 import { isPlaced } from '../core/types';
 import { h } from './dom';
 import { allFontsLoaded, fontList, loadInstalledFonts } from './fonts';
@@ -203,6 +204,36 @@ export function propertiesPanel() {
       slider({ label: 'Stroke width', min: 0, max: 200, step: 0.5, value: s.strokeWidth, unit: 'px', onInput: (v) => set({ strokeWidth: v }, false), onChange: e.done }),
       s.kind === 'rect' ? slider({ label: 'Corner radius', min: 0, max: 1000, value: s.radius, unit: 'px', onInput: (v) => set({ radius: v }, false), onChange: e.done }) : null,
       h('button', { class: 'btn small', type: 'button', onclick: () => rasterizeLayer() }, 'Rasterize shape'));
+  };
+
+  /** A 3D layer: its shape, turn, light and finish. */
+  const modelSection = (l: RasterLayer) => {
+    const e = edit(l, 'Change 3D');
+    const set = (patch: Partial<Model3D>, final = true) => { l.model = { ...l.model!, ...patch }; e.live(); if (final) e.done(); };
+    const m = l.model!;
+    const sl = (label: string, min: number, max: number, value: number, unit: string, apply: (v: number) => Partial<Model3D>) =>
+      slider({ label, min, max, value, unit, onInput: (v) => set(apply(Math.round(v)), false), onChange: e.done });
+    const light = (k: keyof Model3D['light']) => (v: number) => ({ light: { ...l.model!.light, [k]: v } });
+    return section('3D',
+      h('p', { class: 'props-note' }, 'Turn it with Move › Rotate 3D (drag on the canvas) or the sliders.'),
+      sl('Depth', 0, 200, m.depth, '%', (v) => ({ depth: v })),
+      sl('Roundness', 0, 100, m.round, '%', (v) => ({ round: v })),
+      h('div', { class: 'prop-sub' }, 'Turn'),
+      sl('Tilt (X)', -180, 180, m.rotX, '°', (v) => ({ rotX: v })),
+      sl('Turn (Y)', -180, 180, m.rotY, '°', (v) => ({ rotY: v })),
+      sl('Spin (Z)', -180, 180, m.rotZ, '°', (v) => ({ rotZ: v })),
+      h('div', { class: 'prop-sub' }, 'Light'),
+      sl('Direction', 0, 360, m.light.az, '°', light('az')),
+      sl('Height', 0, 90, m.light.el, '°', light('el')),
+      sl('Strength', 0, 200, m.light.strength, '%', light('strength')),
+      sl('Ambient', 0, 100, m.light.ambient, '%', light('ambient')),
+      h('div', { class: 'prop-sub' }, 'Surface'),
+      seg([{ v: 'matte', label: 'Matte' }, { v: 'plastic', label: 'Plastic' }, { v: 'metal', label: 'Metal' }], m.material, (v) => set({ material: v })),
+      h('div', { class: 'prop-line' }, checkbox('Solid colour', !!m.color, (v) => set({ color: v ? (l.model!.color ?? app.fg) : null }), 'Off: the layer\'s own picture covers it'),
+        colorInput(m.color ?? app.fg, (v) => set({ color: v }, false), e.done)),
+      h('div', { class: 'btn-row' },
+        h('button', { class: 'btn small', type: 'button', onclick: () => set({ rotX: 0, rotY: 0, rotZ: 0 }) }, 'Face front'),
+        h('button', { class: 'btn small', type: 'button', title: 'Bake it as it looks now into pixels you can paint on', onclick: () => rasterize3D() }, 'Rasterize')));
   };
 
   const adjSection = (l: AdjustLayer) => {
@@ -610,6 +641,7 @@ export function propertiesPanel() {
     refreshers = [];
     if (!doc || !l) { body.replaceChildren(h('div', { class: 'empty-note' }, doc ? 'Select a layer to see its properties.' : 'No image open')); return; }
     const kids: (HTMLElement | null)[] = [];
+    if (l.type === 'raster' && l.model) kids.push(modelSection(l));
     if (l.type === 'text') kids.push(textSection(l));
     if (l.type === 'shape') kids.push(shapeSection(l));
     if (l.type === 'adjust') kids.push(adjSection(l));

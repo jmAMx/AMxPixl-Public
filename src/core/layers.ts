@@ -3,6 +3,7 @@ import { envelopeBounds, envelopePoint, type Envelope } from './envelope';
 import type { Pt } from './math';
 import { glops } from './glops';
 import { pathBounds, toPath2D } from './paths';
+import { modelBox, renderModel } from './model3d';
 import { decompose, invert, matScale, mul, setT, xformMatrix, type Mat, type Rect, type Xform } from './math';
 import { displaySource } from './pyramid';
 import { drawText, layoutText } from './text';
@@ -27,6 +28,7 @@ export function localBounds(l: PlacedLayer, pool: Pool): Rect {
     case 'raster': {
       if (l.warp) return warpBounds(l.warp);
       const c = pool.get(l.key);
+      if (l.model && c) return modelBox(c, l.model, l.key);
       return { x: 0, y: 0, w: c?.width ?? 1, h: c?.height ?? 1 };
     }
     case 'text': {
@@ -171,6 +173,16 @@ export function drawPlaced(ctx: CanvasRenderingContext2D, l: PlacedLayer, pool: 
     const c = pool.get(l.key);
     if (!c) return;
     const s = matScale(m);
+    if (l.model) {
+      // A 3D layer: its picture rendered as a lit 3D object (flat if WebGL2 isn't available).
+      const r = renderModel(c, l.model, l.key, s);
+      if (r) {
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+        ctx.drawImage(r.canvas, r.box.x, r.box.y, r.box.w, r.box.h);
+        return;
+      }
+    }
     // On screen past 200%, show crisp pixels (like Photoshop's pixel view); otherwise smooth, high-quality
     // resampling. Nearest neighbour (pixel art) is always crisp and reads the original pixels directly.
     ctx.imageSmoothingEnabled = !nearest && !(screen && s >= 2);
