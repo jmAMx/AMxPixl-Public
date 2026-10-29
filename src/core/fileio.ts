@@ -58,6 +58,7 @@ export async function encodePixl(doc: Doc): Promise<Blob> {
   // Every pixel buffer in use: raster layers anywhere in the tree, plus layer masks.
   const keys = flatLayers(meta.layers).flatMap((l) => [
     l.type === 'raster' ? l.key : null, l.mask?.key ?? null, l.type === 'adjust' && l.adj.kind === 'lut' ? l.adj.key : null,
+    l.type === 'raster' ? l.model?.texture?.key ?? null : null,
   ]);
   for (const key of keys) {
     if (!key || index[key]) continue;

@@ -1,7 +1,7 @@
 import { app } from '../app';
 import {
   applyMask, applyWarp, clearStyles, createAnimation, deleteMask, depthFrom3D, editBlendIf, editStyles, flipLayer, invertMask, loadLut, newDepthLayer,
-  rasterize3D, rasterizeLayer, removeWarp, resetTransform, setMaskProp, setPlacedTransform, toggleDepthLayer,
+  rasterize3D, rasterizeLayer, removeWarp, resetTransform, setMaskProp, setPlacedTransform, textureFromFile, textureFromLayer, toggleDepthLayer,
 } from '../actions';
 import { flatLayers } from '../core/document';
 import { defaultStyles } from '../core/styles';
@@ -19,7 +19,7 @@ import type { Model3D } from '../core/model3d';
 import { isDepth, isPlaced } from '../core/types';
 import { h } from './dom';
 import { allFontsLoaded, fontList, loadInstalledFonts } from './fonts';
-import { checkbox, icon, numField, seg, slider } from './widgets';
+import { checkbox, icon, numField, popupMenu, seg, slider } from './widgets';
 
 const deg = (r: number) => (r * 180) / Math.PI;
 
@@ -207,6 +207,43 @@ export function propertiesPanel() {
       h('button', { class: 'btn small', type: 'button', onclick: () => rasterizeLayer() }, 'Rasterize shape'));
   };
 
+  /** A 3D layer's texture: an image file or another layer laid over its surface, with its fit and look. */
+  const textureControls = (l: RasterLayer, m: Model3D, set: (patch: Partial<Model3D>, final?: boolean) => void, e: { done: () => void }): (HTMLElement | null)[] => {
+    const tx = m.texture;
+    const choose = (ev: MouseEvent) => {
+      const others = flatLayers(app.doc!.layers).filter((o): o is PlacedLayer => isPlaced(o) && o.id !== l.id && !isDepth(o));
+      popupMenu([
+        { label: 'Image file…', onClick: () => { void textureFromFile(); } },
+        { label: 'From layer', sub: others.length ? others.map((o) => ({ label: o.name, onClick: () => textureFromLayer(o.id) })) : [{ label: 'No other layers', disabled: true }] },
+      ], ev.clientX, ev.clientY);
+    };
+    const head = h('div', { class: 'prop-sub', title: 'An image laid over the surface: wood, stone, fabric, a label…' }, 'Texture');
+    if (!tx) {
+      return [head, h('div', { class: 'btn-row' }, h('span', { class: 'dim' }, 'None'),
+        h('button', { class: 'btn small', type: 'button', title: 'An image file, or a copy of another layer (which gets hidden)', onclick: choose }, 'Add texture…'))];
+    }
+    const tset = (patch: Partial<NonNullable<Model3D['texture']>>, final = true) => set({ texture: { ...l.model!.texture!, ...patch } }, final);
+    const tsl = (label: string, min: number, max: number, value: number, unit: string, key: 'scale' | 'x' | 'y' | 'rotate' | 'amount' | 'bump', title?: string) => {
+      const s = slider({ label, min, max, value, unit, onInput: (v) => tset({ [key]: Math.round(v) }, false), onChange: e.done });
+      if (title) s.title = title;
+      return s;
+    };
+    return [head,
+      h('div', { class: 'btn-row' }, h('span', { class: 'dim', title: tx.name }, tx.name.length > 18 ? `${tx.name.slice(0, 17)}…` : tx.name),
+        h('button', { class: 'btn small', type: 'button', onclick: choose }, 'Change…'),
+        h('button', { class: 'btn small', type: 'button', onclick: () => { set({ texture: null }); build(true); } }, 'Remove')),
+      seg([{ v: 'replace', label: 'Cover', title: 'The texture\'s own colours cover the surface' }, { v: 'multiply', label: 'Multiply', title: 'Darkens the colours underneath by the texture, keeping them' }], tx.blend, (v) => tset({ blend: v })),
+      m.kind === 'extrude' ? seg([{ v: 'all', label: 'All over' }, { v: 'faces', label: 'Front & back' }, { v: 'sides', label: 'Sides' }], tx.where, (v) => tset({ where: v })) : null,
+      tsl('Amount', 0, 100, tx.amount, '%', 'amount'),
+      tsl('Size', 10, 400, tx.scale, '%', 'scale', '100% covers the front (or wraps once round a revolved shape)'),
+      tsl('Move across', -100, 100, tx.x, '%', 'x'),
+      tsl('Move down', -100, 100, tx.y, '%', 'y'),
+      tsl('Turn', -180, 180, tx.rotate, '°', 'rotate'),
+      tsl('Bump', 0, 100, tx.bump, '%', 'bump', 'Light parts of the texture stand out from the surface'),
+      checkbox('Repeat (tile)', tx.tile, (v) => tset({ tile: v }), 'Repeat the image past its edges, for small patterns'),
+    ];
+  };
+
   /** A 3D layer: its shape, turn, light and finish. */
   const modelSection = (l: RasterLayer) => {
     const e = edit(l, 'Change 3D');
@@ -242,6 +279,7 @@ export function propertiesPanel() {
       seg([{ v: 'matte', label: 'Matte' }, { v: 'plastic', label: 'Plastic' }, { v: 'metal', label: 'Metal' }], m.material, (v) => set({ material: v })),
       h('div', { class: 'prop-line' }, checkbox('Solid colour', !!m.color, (v) => set({ color: v ? (l.model!.color ?? app.fg) : null }), 'Off: the layer\'s own picture covers it'),
         colorInput(m.color ?? app.fg, (v) => set({ color: v }, false), e.done)),
+      ...textureControls(l, m, set, e),
       h('div', { class: 'btn-row' },
         h('button', { class: 'btn small', type: 'button', onclick: () => set({ rotX: 0, rotY: 0, rotZ: 0 }) }, 'Face front'),
         h('button', { class: 'btn small', type: 'button', title: 'A depth layer from it as it\'s turned now, for depth effects (Layer › Depth)', onclick: () => depthFrom3D() }, 'Depth map'),

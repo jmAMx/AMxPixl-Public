@@ -2,7 +2,7 @@ import { app } from './app';
 import { defaultAdj, ADJ_LABELS } from './core/adjustments';
 import { Doc, flatLayers, newId } from './core/document';
 import { defaultFx, fxDef } from './core/effects';
-import { baseName, canvasBlob, decodeImage, decodePixl, docFromCanvas, encodePixl, extOf, PIXL_ACCEPT, saveBlob, type Picked } from './core/fileio';
+import { baseName, canvasBlob, decodeImage, decodePixl, docFromCanvas, encodePixl, extOf, pickFiles, PIXL_ACCEPT, saveBlob, type Picked } from './core/fileio';
 import { importPsd } from './core/import/psd';
 import { importXcf } from './core/import/xcfimport';
 import { addRecent, openRecent, removeRecent, type RecentEntry } from './core/recent';
@@ -24,7 +24,7 @@ import type { AdjKind, AdjParams, Anim, AnimFrame, BlendIf, GroupLayer, Guide, L
 import { initWarp, warpBounds } from './core/warp';
 import { envelopeMesh, shapeFit, type Envelope } from './core/envelope';
 import { loadFont, outlineText } from './core/outline';
-import { defaultModel, renderModel, type Model3D } from './core/model3d';
+import { defaultModel, defaultTexture, renderModel, type Model3D, type ModelTexture } from './core/model3d';
 import { alphaBox } from './core/alphabox';
 import { isFilter, isPlaced } from './core/types';
 import { view } from './ui/canvasview';
@@ -557,7 +557,7 @@ export function setModel(patch: Partial<Model3D>, label?: string) {
 export function rasterize3D() {
   const doc = need(); const l = doc?.activeRaster;
   if (!doc || !l?.model) return;
-  const r = renderModel(doc.canvasOf(l), l.model, l.key, 1);
+  const r = renderModel(doc.canvasOf(l), l.model, l.key, 1, false, l.model.texture ? doc.pool.get(l.model.texture.key) : null);
   if (!r) { toast('3D needs WebGL2, which isn\'t available here.', 'error'); return; }
   const p = apply(layerMatrix(l), r.box.x, r.box.y);
   // The render may be at a slightly different size from its box; keep the box's size on the canvas.
@@ -566,6 +566,67 @@ export function rasterize3D() {
   l.t = { ...l.t, x: p.x, y: p.y, sx: l.t.sx * k, sy: l.t.sy * k };
   l.model = null;
   doc.commit('Rasterize 3D');
+}
+
+/** A texture image, no bigger than the GPU handles comfortably (2048 px on its long side). */
+function textureImage(c: HTMLCanvasElement): HTMLCanvasElement {
+  const k = Math.min(1, 2048 / Math.max(c.width, c.height));
+  if (k >= 1) return c;
+  const out = newCanvas(Math.max(1, Math.round(c.width * k)), Math.max(1, Math.round(c.height * k)));
+  const x = ctx2d(out);
+  x.imageSmoothingQuality = 'high';
+  x.drawImage(c, 0, 0, out.width, out.height);
+  return out;
+}
+
+function applyTexture(doc: Doc, l: RasterLayer, img: HTMLCanvasElement, name: string) {
+  if (!l.model) return;
+  const old = l.model.texture;
+  const key = doc.addCanvas(textureImage(img));
+  // A new image keeps the fit and look already set up.
+  l.model = { ...l.model, texture: old ? { ...old, key, name } : defaultTexture(key, name) };
+  doc.commit(old ? 'Change 3D texture' : 'Add 3D texture');
+}
+
+/** Properties › 3D › Texture: an image file laid over the active 3D layer's surface. */
+export async function textureFromFile() {
+  const doc = need(); const l = doc?.activeRaster;
+  if (!doc || !l?.model) return;
+  const [p] = await pickFiles('image', false);
+  if (!p) return;
+  try {
+    const img = await decodeImage(p.file);
+    if (!app.docs.includes(doc) || !l.model) return;
+    applyTexture(doc, l, img, baseName(p.file.name));
+  } catch (err) { toast(`Couldn't open ${p.file.name}: ${(err as Error).message}`, 'error'); }
+}
+
+/**
+ * Properties › 3D › Texture › From layer: a copy of another layer, as it looks without layer styles, laid over the
+ * active 3D layer's surface. The source layer is hidden (a copy is kept, so it can be changed or deleted).
+ */
+export function textureFromLayer(id: string) {
+  const doc = need(); const l = doc?.activeRaster;
+  const at = doc?.locate(id), src = at ? at.list[at.index] : null;
+  if (!doc || !l?.model || !isPlaced(src)) return;
+  const b = roundOut(doc.layerBounds(src));
+  if (b.w < 1 || b.h < 1) { toast('That layer is empty.'); return; }
+  const c = newCanvas(Math.min(b.w, 8192), Math.min(b.h, 8192));
+  renderDoc(doc, c, [1, 0, 0, 1, -b.x, -b.y], { layers: [{ ...src, visible: true, opacity: 1, blend: 'normal', mask: null, clip: false, styles: null, blendIf: null }], includeHidden: true, clip: false });
+  const r = alphaBox(ctx2d(c, true).getImageData(0, 0, c.width, c.height).data, c.width, c.height);
+  if (!r) { toast('That layer is empty.'); return; }
+  const pic = newCanvas(r.w, r.h);
+  ctx2d(pic).drawImage(c, -r.x, -r.y);
+  setLayerProp(src.id, { visible: false });
+  applyTexture(doc, l, pic, src.name);
+}
+
+/** Changes the active 3D layer's texture settings; `label` records it as a step (otherwise a live preview). */
+export function setTexture(patch: Partial<ModelTexture> | null, label?: string) {
+  const doc = need(); const l = doc?.activeRaster;
+  if (!doc || !l?.model?.texture) return;
+  l.model = { ...l.model, texture: patch ? { ...l.model.texture, ...patch } : null };
+  if (label) doc.commit(label); else doc.touch('meta');
 }
 
 // ---------- depth ----------

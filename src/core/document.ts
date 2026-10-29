@@ -295,6 +295,7 @@ export class Doc {
         if (l.type === 'raster') live.add(l.key);
         if (l.mask) live.add(l.mask.key);
         if (l.type === 'adjust' && l.adj.kind === 'lut' && l.adj.key) live.add(l.adj.key);
+        if (l.type === 'raster' && l.model?.texture) live.add(l.model.texture.key);
       });
       for (const op of m.selection?.ops ?? []) if (op.key) live.add(op.key);
       if (m.quickMask) live.add(m.quickMask);

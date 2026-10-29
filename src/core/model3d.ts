@@ -24,7 +24,40 @@ export interface Model3D {
   material: 'matte' | 'plastic' | 'metal';
   /** A solid colour, or null to use the layer's own picture. */
   color: string | null;
+  /** An image laid over the surface (wood, stone, a label), on top of the picture or colour. */
+  texture?: ModelTexture | null;
 }
+
+/**
+ * A 3D layer's texture. The image is a copy kept with the document (`key`). It's fitted to cover the front (Inflate,
+ * Extrude) or to wrap once round the widest part like a label (Revolve), keeping its proportions, then scaled, moved
+ * and turned.
+ */
+export interface ModelTexture {
+  key: string;
+  /** Where it came from (a layer's or file's name), to show in Properties. */
+  name: string;
+  /** Size, % of the fitted size. */
+  scale: number;
+  /** Offset, % of the fitted area. */
+  x: number; y: number;
+  /** Turn, degrees. */
+  rotate: number;
+  /** Repeat it past its edges (Extrude's sides always repeat it). */
+  tile: boolean;
+  /** Replace the colour underneath, or multiply with it (keeps the picture's shading and colour). */
+  blend: 'replace' | 'multiply';
+  /** How strongly it shows, 0-100. */
+  amount: number;
+  /** Raised by its light areas, 0-100 (0 = flat). */
+  bump: number;
+  /** Extrude: on every surface, only the front and back, or only the sides. */
+  where: 'all' | 'faces' | 'sides';
+}
+
+export const defaultTexture = (key: string, name: string): ModelTexture => ({
+  key, name, scale: 100, x: 0, y: 0, rotate: 0, tile: false, blend: 'replace', amount: 100, bump: 0, where: 'all',
+});
 
 export const defaultModel = (kind: Model3D['kind'] = 'inflate'): Model3D => ({
   kind, depth: kind === 'extrude' ? 30 : 60, round: 70, bevel: 30, axis: 'centre',
@@ -122,19 +155,21 @@ export function edt(inside: Uint8Array, W: number, H: number): Float32Array {
 // ---------- meshes ----------
 
 /**
- * A mesh: triangles of vertices [x, y, z, nx, ny, nz, u, v, kind] in layer pixels (z toward the viewer), and its
- * extent. `kind` 1 = always drawn (sides, revolved surfaces); 0 and 2 = the front and back faces, cut out by the
- * picture's own edges.
+ * A mesh: triangles of vertices [x, y, z, nx, ny, nz, u, v, kind, tx, ty] in layer pixels (z toward the viewer), and
+ * its extent. `kind` 1 = always drawn (sides, revolved surfaces); 0 and 2 = the front and back faces, cut out by the
+ * picture's own edges. (tx, ty) is where a texture goes, in pixels across the surface: the faces' own position, the
+ * distance around the outline and back from the front on Extrude's sides, around and down on a revolved surface.
+ * `area` is the region a texture is fitted to: its centre and size in those pixels.
  */
-interface Mesh { data: Float32Array; count: number; lo: [number, number, number]; hi: [number, number, number] }
-const STRIDE = 9;
+interface Mesh { data: Float32Array; count: number; lo: [number, number, number]; hi: [number, number, number]; area: [number, number, number, number] }
+const STRIDE = 11;
 const meshCache = new Map<string, Mesh>();
 
-function finish(data: number[]): Mesh {
+function finish(data: number[], area: [number, number, number, number]): Mesh {
   const lo: [number, number, number] = [Infinity, Infinity, Infinity], hi: [number, number, number] = [-Infinity, -Infinity, -Infinity];
   for (let i = 0; i < data.length; i += STRIDE) for (let k = 0; k < 3; k++) { lo[k] = Math.min(lo[k], data[i + k]); hi[k] = Math.max(hi[k], data[i + k]); }
   if (!data.length) { lo.fill(0); hi.fill(1); }
-  return { data: new Float32Array(data), count: data.length / STRIDE, lo, hi };
+  return { data: new Float32Array(data), count: data.length / STRIDE, lo, hi, area };
 }
 
 /**
@@ -150,7 +185,7 @@ function heightSurfaces(g: Grid, h: Float32Array, W: number, H: number, out: num
     const dx = (at(i + 1, j) - at(i - 1, j)) / (2 * cx), dy = (at(i, j + 1) - at(i, j - 1)) / (2 * cy);
     const n = [-dx, -dy, side], l = Math.hypot(n[0], n[1], n[2]);
     const x = i * cx, y = j * cy;
-    return [x, y, at(i, j) * side, n[0] / l, n[1] / l, n[2] / l, x / W, y / H, side > 0 ? 0 : back];
+    return [x, y, at(i, j) * side, n[0] / l, n[1] / l, n[2] / l, x / W, y / H, side > 0 ? 0 : back, x, y];
   };
   for (const side of [1, -1] as const) {
     for (let j = 0; j < gh - 1; j++) for (let i = 0; i < gw - 1; i++) {
@@ -186,7 +221,7 @@ function inflateMesh(g: Grid, m: Model3D, W: number, H: number): Mesh {
   h = smooth(g, h, 3, 1.2);
   const out: number[] = [];
   heightSurfaces(g, h, W, H, out, 0);
-  return finish(out);
+  return finish(out, [W / 2, H / 2, W, H]);
 }
 
 /** Averages a height field with its neighbours `passes` times, inside the silhouette, past `edge` samples in. */
@@ -356,17 +391,21 @@ function extrudeMesh(g: Grid, src: HTMLCanvasElement, m: Model3D, W: number, H: 
       const l = Math.hypot(x, y);
       return l ? { x: x / l, y: y / l } : own;
     };
+    // A texture runs around the outline (distance along it) and back from the front.
+    let run = 0;
     for (let i = 0; i < n; i++) {
       const p = pts[i], q = pts[(i + 1) % n], s = seg[i];
       const na = vn(i, i), nb = vn(i, (i + 1) % n);
+      const r0 = run;
+      run += Math.hypot(q.x - p.x, q.y - p.y);
       // Colour from just inside the edge.
       const ua = (p.x - s.x * 1.5) / W, va = (p.y - s.y * 1.5) / H, ub = (q.x - s.x * 1.5) / W, vb = (q.y - s.y * 1.5) / H;
-      const A = [p.x, p.y, zf, na.x, na.y, 0, ua, va, 1], B = [q.x, q.y, zf, nb.x, nb.y, 0, ub, vb, 1];
-      const C = [q.x, q.y, -zf, nb.x, nb.y, 0, ub, vb, 1], D = [p.x, p.y, -zf, na.x, na.y, 0, ua, va, 1];
+      const A = [p.x, p.y, zf, na.x, na.y, 0, ua, va, 1, r0, 0], B = [q.x, q.y, zf, nb.x, nb.y, 0, ub, vb, 1, run, 0];
+      const C = [q.x, q.y, -zf, nb.x, nb.y, 0, ub, vb, 1, run, 2 * zf], D = [p.x, p.y, -zf, na.x, na.y, 0, ua, va, 1, r0, 2 * zf];
       out.push(...A, ...B, ...C, ...A, ...C, ...D);
     }
   }
-  return finish(out);
+  return finish(out, [W / 2, H / 2, W, H]);
 }
 
 /** Revolve: each row of the silhouette becomes a ring around an upright axis through the picture's middle. */
@@ -404,12 +443,18 @@ function revolveMesh(g: Grid, src: HTMLCanvasElement, m: Model3D, W: number, H: 
   const ro = soft(outer, 2), ri = soft(inner, 2);
   const N = 72;
   const out: number[] = [];
+  // A texture wraps once around the widest part, like a label, centred on the front (three quarters of the way
+  // round, as the texture's position runs).
+  let widest = 1;
+  for (let j = 0; j < gh; j++) if (has[j]) widest = Math.max(widest, ro[j]);
+  const C = 2 * Math.PI * widest;
   const ring = (j: number, r: number, k: number, slope: number, sign: 1 | -1) => {
     const t = (k / N) * Math.PI * 2, c = Math.cos(t), s = Math.sin(t);
     // Normal: outward from the axis, tipped by how the radius changes with height.
     const nx = c * sign, ny = -slope * sign, nz = s * sign, l = Math.hypot(nx, ny, nz) || 1;
     // Colour from the picture just inside its edge on this row.
-    return [axisX + r * c, j * cy, r * s, nx / l, ny / l, nz / l, Math.min(1, Math.max(0, (axisX + Math.max(0, r - 1.5)) / W)), (j * cy) / H, 1];
+    // (Around runs against the angle, so seen from the front it reads left to right.)
+    return [axisX + r * c, j * cy, r * s, nx / l, ny / l, nz / l, Math.min(1, Math.max(0, (axisX + Math.max(0, r - 1.5)) / W)), (j * cy) / H, 1, (1 - k / N) * C, j * cy];
   };
   const slopeAt = (r: Float32Array, j: number) => {
     const a = has[j - 1] ? r[j - 1] : r[j], b = has[j + 1] ? r[j + 1] : r[j];
@@ -434,13 +479,14 @@ function revolveMesh(g: Grid, src: HTMLCanvasElement, m: Model3D, W: number, H: 
       if (!end) continue;
       for (let k = 0; k < N; k++) {
         const t0 = (k / N) * Math.PI * 2, t1 = ((k + 1) / N) * Math.PI * 2, y = j * cy, v = y / H;
-        const P = (r: number, t: number) => [axisX + r * Math.cos(t), y, r * Math.sin(t), 0, ny, 0, Math.min(1, (axisX + Math.max(0, r - 1.5)) / W), v, 1];
+        // The texture lies flat across a cap, as if seen from above.
+        const P = (r: number, t: number) => [axisX + r * Math.cos(t), y, r * Math.sin(t), 0, ny, 0, Math.min(1, (axisX + Math.max(0, r - 1.5)) / W), v, 1, (3 * C) / 4 + r * Math.cos(t), y + r * Math.sin(t)];
         const a = P(ri[j], t0), b = P(ri[j], t1), c = P(ro[j], t0), d = P(ro[j], t1);
         out.push(...a, ...b, ...c, ...b, ...d, ...c);
       }
     }
   }
-  return finish(out);
+  return finish(out, [(3 * C) / 4, H / 2, C, H]);
 }
 
 function meshFor(src: HTMLCanvasElement, m: Model3D, key: string): Mesh {
@@ -487,25 +533,32 @@ function boundsOf(W: number, H: number, m: Model3D, mesh: Mesh): Rect {
 // ---------- rendering ----------
 
 const VS = `#version 300 es
-in vec3 aPos; in vec3 aNrm; in vec2 aUV; in float aSolid;
+in vec3 aPos; in vec3 aNrm; in vec2 aUV; in float aSolid; in vec2 aT;
 uniform mat3 uR; uniform vec2 uC; uniform float uF; uniform vec4 uBox; uniform float uZr;
-out vec3 vN; out vec2 vUV; out float vSolid; out float vZ;
+out vec3 vN; out vec2 vUV; out float vSolid; out float vZ; out vec2 vT; out vec3 vP;
 void main() {
   vec3 p = uR * vec3(aPos.xy - uC, aPos.z);
   float k = uF / (uF - p.z);
   vec2 s = uC + p.xy * k;
   vN = uR * aNrm;
   vZ = p.z;
+  vP = p;
+  vT = aT;
   vUV = aUV;
   vSolid = aSolid;
   gl_Position = vec4((s.x - uBox.x) / uBox.z * 2.0 - 1.0, 1.0 - (s.y - uBox.y) / uBox.w * 2.0, -p.z / uZr, 1.0);
 }`;
 const FS = `#version 300 es
 precision highp float;
-in vec3 vN; in vec2 vUV; in float vSolid; in float vZ; out vec4 o;
+in vec3 vN; in vec2 vUV; in float vSolid; in float vZ; in vec2 vT; in vec3 vP; out vec4 o;
 uniform int uOut; uniform vec2 uZ;
 uniform sampler2D uTex; uniform sampler2D uBled; uniform int uPass; uniform mat3 uR;
 uniform vec3 uL; uniform vec4 uCol; uniform vec4 uMat; uniform float uAmb; uniform float uStr;
+// The texture: on/off, where it sits (centre and size in surface pixels), its turn, and
+// uTxOpt: x multiply (else replace), y amount, z tile, w where (0 all, 1 front and back, 2 sides). uKind 1 = Extrude.
+uniform sampler2D uTx; uniform int uTxOn; uniform vec4 uTxFit; uniform float uTxRot; uniform vec4 uTxOpt;
+uniform float uBump; uniform int uKind;
+float lum(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
 void main() {
   // Faces are cut out by the picture's own edges; sides and revolved surfaces are always solid. Pass 0 draws it all
   // solid (faces cut where they're half covered), pass 1 adds the faces' soft edges over whatever is behind them.
@@ -521,6 +574,29 @@ void main() {
   vec3 N = normalize(vN);
   // Two-sided: a surface seen from behind is lit from its other side.
   if (!gl_FrontFacing && solid && dot(N, vec3(0.0, 0.0, 1.0)) < 0.0) N = -N;
+  bool side = solid && uKind == 1;
+  float w = 0.0;
+  if (uTxOn == 1 && (uTxOpt.w < 0.5 || (uTxOpt.w < 1.5 ? !side : side))) {
+    float cr = cos(uTxRot), sr = sin(uTxRot);
+    vec2 d = vT - uTxFit.xy;
+    vec2 q = vec2(cr * d.x + sr * d.y, -sr * d.x + cr * d.y) / uTxFit.zw + 0.5;
+    bool rep = uTxOpt.z > 0.5 || side;
+    float inside = rep ? 1.0 : step(0.0, q.x) * step(q.x, 1.0) * step(0.0, q.y) * step(q.y, 1.0);
+    vec4 tc = texture(uTx, q);
+    vec3 tcol = tc.rgb / max(tc.a, 1e-4);
+    w = tc.a * uTxOpt.y * inside;
+    base = mix(base, uTxOpt.x > 0.5 ? base * tcol : tcol, w);
+    // Bump: its light areas stand out. The surface's slope comes from how the height changes across the screen
+    // (no stored tangents needed).
+    if (uBump > 0.0) {
+      float hh = lum(tcol) * w * uBump;
+      vec3 dpx = dFdx(vP), dpy = dFdy(vP);
+      vec3 r1 = cross(dpy, N), r2 = cross(N, dpx);
+      float det = dot(dpx, r1);
+      vec3 g = sign(det) * (dFdx(hh) * r1 + dFdy(hh) * r2);
+      N = normalize(abs(det) * N - g);
+    }
+  }
   float diff = max(dot(N, uL), 0.0);
   vec3 H = normalize(uL + vec3(0.0, 0.0, 1.0));
   float spec = pow(max(dot(N, H), 0.0), uMat.z) * uMat.y;
@@ -555,6 +631,9 @@ class ModelGL {
   private tex: WebGLTexture | null = null;
   private bled: WebGLTexture | null = null;
   private texKey = '';
+  /** The 3D layer's texture image, and which one is loaded. */
+  private tx: WebGLTexture | null = null;
+  private txKey = '';
   private buf: WebGLBuffer | null = null;
   private bufMesh: Mesh | null = null;
   private u: Record<string, WebGLUniformLocation | null> = {};
@@ -567,29 +646,34 @@ class ModelGL {
     const p = gl.createProgram()!;
     gl.attachShader(p, sh(gl.VERTEX_SHADER, VS));
     gl.attachShader(p, sh(gl.FRAGMENT_SHADER, FS));
-    ['aPos', 'aNrm', 'aUV', 'aSolid'].forEach((n, i) => gl.bindAttribLocation(p, i, n));
+    ['aPos', 'aNrm', 'aUV', 'aSolid', 'aT'].forEach((n, i) => gl.bindAttribLocation(p, i, n));
     gl.linkProgram(p);
     if (!gl.getProgramParameter(p, gl.LINK_STATUS)) { console.error('3D shader failed', gl.getProgramInfoLog(p)); return null; }
-    for (const n of ['uR', 'uC', 'uF', 'uBox', 'uZr', 'uTex', 'uBled', 'uPass', 'uOut', 'uZ', 'uL', 'uCol', 'uMat', 'uAmb', 'uStr']) this.u[n] = gl.getUniformLocation(p, n);
-    const mk = () => {
+    for (const n of ['uR', 'uC', 'uF', 'uBox', 'uZr', 'uTex', 'uBled', 'uPass', 'uOut', 'uZ', 'uL', 'uCol', 'uMat', 'uAmb', 'uStr',
+      'uTx', 'uTxOn', 'uTxFit', 'uTxRot', 'uTxOpt', 'uBump', 'uKind']) this.u[n] = gl.getUniformLocation(p, n);
+    const mk = (wrap: number) => {
       const t = gl.createTexture();
       gl.bindTexture(gl.TEXTURE_2D, t);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, wrap);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, wrap);
       return t;
     };
-    this.tex = mk();
-    this.bled = mk();
+    this.tex = mk(gl.CLAMP_TO_EDGE);
+    this.bled = mk(gl.CLAMP_TO_EDGE);
+    this.tx = mk(gl.REPEAT);
     this.buf = gl.createBuffer();
     this.gl = gl;
     this.prog = p;
     return gl;
   }
 
-  /** The 3D layer (or its depth map) drawn into its box (layer pixels) at `scale` output pixels per layer pixel. */
-  render(src: HTMLCanvasElement, m: Model3D, key: string, scale: number, depth = false): { canvas: HTMLCanvasElement; box: Rect } | null {
+  /**
+   * The 3D layer (or its depth map) drawn into its box (layer pixels) at `scale` output pixels per layer pixel.
+   * `tex` is its texture's image, if it has one.
+   */
+  render(src: HTMLCanvasElement, m: Model3D, key: string, scale: number, depth = false, tex?: HTMLCanvasElement | null): { canvas: HTMLCanvasElement; box: Rect } | null {
     const gl = this.init();
     if (!gl || !this.prog) return null;
     const W = src.width, H = src.height;
@@ -652,11 +736,34 @@ class ModelGL {
     gl.uniform4fv(this.u.uMat, MATERIALS[m.material]);
     gl.uniform1f(this.u.uAmb, m.light.ambient / 100);
     gl.uniform1f(this.u.uStr, m.light.strength / 100);
+    gl.uniform1i(this.u.uKind, m.kind === 'extrude' ? 1 : m.kind === 'revolve' ? 2 : 0);
+    const t = m.texture;
+    gl.uniform1i(this.u.uTxOn, t && tex && !depth ? 1 : 0);
+    gl.uniform1i(this.u.uTx, 2);
+    if (t && tex && !depth) {
+      gl.activeTexture(gl.TEXTURE2);
+      gl.bindTexture(gl.TEXTURE_2D, this.tx);
+      if (this.txKey !== t.key) {
+        gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, tex);
+        this.txKey = t.key;
+      }
+      // Fitted keeping its proportions (covering the front, or once round a revolved shape like a label), then the
+      // user's size, place and turn.
+      const [ax, ay, aw, ah] = mesh.area;
+      const k = (m.kind === 'revolve' ? aw / tex.width : Math.max(aw / tex.width, ah / tex.height)) * (t.scale / 100);
+      gl.uniform4f(this.u.uTxFit, ax + (t.x / 100) * aw, ay + (t.y / 100) * ah, tex.width * k, tex.height * k);
+      gl.uniform1f(this.u.uTxRot, t.rotate * D2R);
+      gl.uniform4f(this.u.uTxOpt, t.blend === 'multiply' ? 1 : 0, t.amount / 100, t.tile ? 1 : 0, m.kind !== 'extrude' ? 0 : t.where === 'faces' ? 1 : t.where === 'sides' ? 2 : 0);
+      // Bump height: up to 30 layer pixels between black and white (textures rarely use the whole range).
+      gl.uniform1f(this.u.uBump, (t.bump / 100) * 30);
+    }
     const F = 4 * STRIDE;
     gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 3, gl.FLOAT, false, F, 0);
     gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 3, gl.FLOAT, false, F, 12);
     gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 2, gl.FLOAT, false, F, 24);
     gl.enableVertexAttribArray(3); gl.vertexAttribPointer(3, 1, gl.FLOAT, false, F, 32);
+    gl.enableVertexAttribArray(4); gl.vertexAttribPointer(4, 2, gl.FLOAT, false, F, 36);
     gl.uniform1i(this.u.uPass, 0);
     gl.drawArrays(gl.TRIANGLES, 0, mesh.count);
     // The faces' soft edges, blended over what's already drawn behind them (without hiding anything else).
@@ -680,14 +787,14 @@ const outCache = new Map<string, { canvas: HTMLCanvasElement; box: Rect }>();
 /**
  * The rendered 3D layer (a copy that stays valid) and its box in layer pixels; cached by its settings and the
  * output resolution (a power of two, so zooming reuses it). `depth`: its depth map instead (nearest white, farthest
- * dark grey). Null if WebGL2 isn't available.
+ * dark grey). `texture` is the image of its texture (m.texture.key), if it has one. Null if WebGL2 isn't available.
  */
-export function renderModel(src: HTMLCanvasElement, m: Model3D, key: string, scale: number, depth = false): { canvas: HTMLCanvasElement; box: Rect } | null {
+export function renderModel(src: HTMLCanvasElement, m: Model3D, key: string, scale: number, depth = false, texture?: HTMLCanvasElement | null): { canvas: HTMLCanvasElement; box: Rect } | null {
   const s = 2 ** Math.ceil(Math.log2(Math.max(0.125, Math.min(4, scale))));
-  const ck = `${key}|${src.width}x${src.height}|${JSON.stringify(m)}|${s}|${depth}`;
+  const ck = `${key}|${src.width}x${src.height}|${JSON.stringify(m)}|${s}|${depth}|${!!texture}`;
   const hit = outCache.get(ck);
   if (hit) return hit;
-  const r = engine.render(src, m, key, s, depth);
+  const r = engine.render(src, m, key, s, depth, texture);
   if (!r) return null;
   if (outCache.size > 24) outCache.clear();
   const c = document.createElement('canvas');

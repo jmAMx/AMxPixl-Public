@@ -175,7 +175,7 @@ export function drawPlaced(ctx: CanvasRenderingContext2D, l: PlacedLayer, pool: 
     const s = matScale(m);
     if (l.model) {
       // A 3D layer: its picture rendered as a lit 3D object (flat if WebGL2 isn't available).
-      const r = renderModel(c, l.model, l.key, s);
+      const r = renderModel(c, l.model, l.key, s, false, l.model.texture ? pool.get(l.model.texture.key) : null);
       if (r) {
         ctx.imageSmoothingEnabled = true;
         ctx.imageSmoothingQuality = 'high';

@@ -9,11 +9,12 @@ import type { Meta } from './types';
  */
 interface Record { uid: string; name: string; savedAt: number; meta: Meta; keys: string[]; file: Doc['file'] }
 
-/** Pixel buffers a snapshot needs: raster layers, masks, LUTs and raster selections. */
+/** Pixel buffers a snapshot needs: raster layers, 3D textures, masks, LUTs and raster selections. */
 function keysOf(m: Meta): string[] {
   const keys = new Set<string>();
   for (const l of flatLayers(m.layers)) {
     if (l.type === 'raster') keys.add(l.key);
+    if (l.type === 'raster' && l.model?.texture) keys.add(l.model.texture.key);
     if (l.mask) keys.add(l.mask.key);
     if (l.type === 'adjust' && l.adj.kind === 'lut' && l.adj.key) keys.add(l.adj.key);
   }
