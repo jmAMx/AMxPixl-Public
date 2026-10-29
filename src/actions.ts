@@ -519,10 +519,11 @@ export function shapeToPath() {
 // ---------- 3D layers ----------
 
 /**
- * Layer › 3D › Inflate: makes a 3D layer from the active layer (image, text or shape). Its picture, as it looks on
- * the canvas without layer styles, becomes the 3D object's front and silhouette; the original is kept, hidden.
+ * Layer › 3D › Inflate, Extrude or Revolve: makes a 3D layer from the active layer (image, text or shape). Its
+ * picture, as it looks on the canvas without layer styles, becomes the 3D object's front and silhouette (for
+ * Revolve, its profile); the original is kept, hidden.
  */
-export function make3D() {
+export function make3D(kind: Model3D['kind'] = 'inflate') {
   const doc = need(); const l = doc?.activePlaced;
   if (!doc || !l) { toast('Select an image, text or shape layer to make 3D.'); return; }
   if (l.type === 'raster' && l.model) { toast('This is already a 3D layer: change it in Properties › 3D.'); return; }
@@ -536,12 +537,12 @@ export function make3D() {
   ctx2d(pic).drawImage(c, -r.x, -r.y);
   const layer: RasterLayer = {
     id: newId(), type: 'raster', name: `${l.name} 3D`, visible: true, opacity: l.opacity, blend: l.blend,
-    key: doc.addCanvas(pic), t: { x: b.x + r.x, y: b.y + r.y, sx: 1, sy: 1, rot: 0 }, model: defaultModel(),
+    key: doc.addCanvas(pic), t: { x: b.x + r.x, y: b.y + r.y, sx: 1, sy: 1, rot: 0 }, model: defaultModel(kind),
   };
   doc.insertLayer(layer, l.id);
   setLayerProp(l.id, { visible: false });
   doc.setActive(layer.id);
-  doc.commit('Make 3D');
+  doc.commit(kind === 'extrude' ? 'Extrude' : kind === 'revolve' ? 'Revolve' : 'Inflate');
 }
 
 /** Changes the active 3D layer's settings; `label` records it as a step (otherwise it's a live preview). */

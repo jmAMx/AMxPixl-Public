@@ -5,6 +5,9 @@ Each version's section becomes its release notes (`scripts/release.ps1` copies i
 ## Next (0.8, 3D, in progress)
 
 - **3D layers: Inflate** (Layer › 3D › Inflate): turns text, a shape or an image into a lit 3D object, puffed out like a balloon or a pillow, with its own picture on the front. It stays editable: Depth and Roundness, a turn on three axes, a light (direction, height, strength, ambient), and a Matte, Plastic or Metal finish in its own colours or a solid colour.
+- **Extrude** (Layer › 3D › Extrude): gives text, a shape or an image straight sides and depth, like a cookie cutter, with Thickness and a rounded **Bevel** on the front edge. The sides take their colour from the picture's edge.
+- **Revolve** (Layer › 3D › Revolve): spins the silhouette around an upright axis, like a lathe, for vases, bottles, rings and tubes. Spin it around the picture's middle (draw the whole object) or its left edge (draw half of it). Gaps beside the axis make it hollow.
+- Switch a 3D layer between Inflate, Extrude and Revolve at any time in Properties › 3D.
 - **Rotate 3D** (Move tool): drag on the canvas to turn a 3D layer, Shift+drag to spin it, and **Face front** to straighten it. The light stays put, so it shades as it turns.
 - **Rasterize 3D** bakes a 3D layer into ordinary pixels you can paint on. 3D layers save in .pixl files and come back exactly as they were.
 

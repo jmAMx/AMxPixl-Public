@@ -112,7 +112,8 @@ const MENUS: MenuDef[] = [
       { label: 'Merge Down', accel: 'Ctrl+E', run: A.mergeDown, enabled: hasLayer },
       { label: 'Warp…', accel: 'Ctrl+Alt+W', run: () => { void warpDialog(); }, enabled: () => !!app.doc?.activePlaced },
       { label: '3D', sub: () => [
-        { label: 'Inflate', onClick: A.make3D, disabled: !app.doc?.activePlaced || !!app.doc.activeRaster?.model },
+        ...(['inflate', 'extrude', 'revolve'] as const).map((k) => ({ label: k[0].toUpperCase() + k.slice(1), onClick: () => A.make3D(k), disabled: !app.doc?.activePlaced || !!app.doc.activeRaster?.model })),
+        { sep: true },
         { label: 'Rotate 3D', onClick: () => { app.setTool('move'); app.opts.move.mode = 'rotate3d'; app.emit('tool'); }, disabled: !app.doc?.activeRaster?.model },
         { label: 'Rasterize 3D', onClick: A.rasterize3D, disabled: !app.doc?.activeRaster?.model },
       ] },

@@ -216,8 +216,18 @@ export function propertiesPanel() {
     const light = (k: keyof Model3D['light']) => (v: number) => ({ light: { ...l.model!.light, [k]: v } });
     return section('3D',
       h('p', { class: 'props-note' }, 'Turn it with Move › Rotate 3D (drag on the canvas) or the sliders.'),
-      sl('Depth', 0, 200, m.depth, '%', (v) => ({ depth: v })),
-      sl('Roundness', 0, 100, m.round, '%', (v) => ({ round: v })),
+      seg([{ v: 'inflate', label: 'Inflate' }, { v: 'extrude', label: 'Extrude' }, { v: 'revolve', label: 'Revolve' }], m.kind ?? 'inflate',
+        (v) => { set({ ...(v === 'extrude' && m.kind !== 'extrude' ? { depth: 30 } : v === 'inflate' && m.kind === 'extrude' ? { depth: 60 } : {}), kind: v }); build(true); }),
+      ...(m.kind === 'extrude' ? [
+        sl('Thickness', 1, 200, m.depth, '%', (v) => ({ depth: v })),
+        sl('Bevel', 0, 100, m.bevel ?? 0, '%', (v) => ({ bevel: v })),
+      ] : m.kind === 'revolve' ? [
+        h('div', { class: 'prop-sub', title: 'Spin around the middle of the picture (draw the whole object), or its left edge (draw half of it)' }, 'Spin around'),
+        seg([{ v: 'centre', label: 'Middle' }, { v: 'left', label: 'Left edge' }], m.axis ?? 'centre', (v) => { set({ axis: v }); build(true); }),
+      ] : [
+        sl('Depth', 0, 200, m.depth, '%', (v) => ({ depth: v })),
+        sl('Roundness', 0, 100, m.round, '%', (v) => ({ round: v })),
+      ]),
       h('div', { class: 'prop-sub' }, 'Turn'),
       sl('Tilt (X)', -180, 180, m.rotX, '°', (v) => ({ rotX: v })),
       sl('Turn (Y)', -180, 180, m.rotY, '°', (v) => ({ rotY: v })),
