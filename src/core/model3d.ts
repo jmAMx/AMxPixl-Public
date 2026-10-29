@@ -449,8 +449,18 @@ function extrudeMesh(g: Grid, src: HTMLCanvasElement, m: Model3D, W: number, H: 
   }
   const out: number[] = [];
   heightSurfaces(g, h, W, H, out, 2);
+  // How high the face is at a point, read off its triangles exactly as they're drawn (each grid cell split from its
+  // top-right to its bottom-left corner). With a bevel, the face is already partway up its rise where the picture's
+  // edge cuts it, so the sides reach up to there instead of stopping at the flat thickness (which left a gap).
+  const at = (i: number, j: number) => h[Math.min(g.gh - 1, Math.max(0, j)) * g.gw + Math.min(g.gw - 1, Math.max(0, i))];
+  const faceH = (x: number, y: number) => {
+    const fi = (x - g.x0) / g.cx, fj = (y - g.y0) / g.cy, i = Math.floor(fi), j = Math.floor(fj), fx = fi - i, fy = fj - j;
+    const ha = at(i, j), hb = at(i + 1, j), hc = at(i, j + 1), hd = at(i + 1, j + 1);
+    return fx + fy <= 1 ? ha + fx * (hb - ha) + fy * (hc - ha) : hd + (1 - fx) * (hc - hd) + (1 - fy) * (hb - hd);
+  };
   // The sides, along the picture's edge, coloured from the picture just inside it.
   for (const pts of contours(src)) {
+    const top = pts.map((p) => faceH(p.x, p.y));
     const n = pts.length;
     // Each segment's outward normal: (dy, -dx) keeps the inside on the right; contours() runs that way.
     const seg = pts.map((p, i) => {
@@ -477,14 +487,14 @@ function extrudeMesh(g: Grid, src: HTMLCanvasElement, m: Model3D, W: number, H: 
     // A texture runs around the outline (distance along it) and back from the front.
     let run = 0;
     for (let i = 0; i < n; i++) {
-      const p = pts[i], q = pts[(i + 1) % n], s = seg[i];
+      const p = pts[i], q = pts[(i + 1) % n], s = seg[i], ta = top[i], tb = top[(i + 1) % n];
       const na = vn(i, i), nb = vn(i, (i + 1) % n);
       const r0 = run;
       run += Math.hypot(q.x - p.x, q.y - p.y);
       // Colour from just inside the edge.
       const ua = (p.x - s.x * 1.5) / W, va = (p.y - s.y * 1.5) / H, ub = (q.x - s.x * 1.5) / W, vb = (q.y - s.y * 1.5) / H;
-      const A = [p.x, p.y, zf, na.x, na.y, 0, ua, va, 1, r0, 0], B = [q.x, q.y, zf, nb.x, nb.y, 0, ub, vb, 1, run, 0];
-      const C = [q.x, q.y, -zf, nb.x, nb.y, 0, ub, vb, 1, run, 2 * zf], D = [p.x, p.y, -zf, na.x, na.y, 0, ua, va, 1, r0, 2 * zf];
+      const A = [p.x, p.y, ta, na.x, na.y, 0, ua, va, 1, r0, 0], B = [q.x, q.y, tb, nb.x, nb.y, 0, ub, vb, 1, run, 0];
+      const C = [q.x, q.y, -tb, nb.x, nb.y, 0, ub, vb, 1, run, 2 * tb], D = [p.x, p.y, -ta, na.x, na.y, 0, ua, va, 1, r0, 2 * ta];
       out.push(...A, ...B, ...C, ...A, ...C, ...D);
     }
   }
