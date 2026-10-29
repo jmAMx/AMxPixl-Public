@@ -4,7 +4,16 @@ Each version's section becomes its release notes (`scripts/release.ps1` copies i
 
 ## 0.8.1
 
-- **GPU use in the status bar**: "GPU" now shows how busy the graphics processor is with Pixl's work, as Task Manager counts it, and hovering it also gives the whole PC's figure. It updates every 1.5 seconds while Pixl is on screen, and reading it costs about a millisecond each time.
+- **Better drawing with a pen tablet** (Wacom and others):
+  - **Pressure menu** in the Brush, Eraser, Clone Stamp, Healing Brush and retouch tools: pressure can change the size, the opacity (strength for retouch tools), both, or nothing. Opacity follows pressure evenly along a stroke, without piling up where dabs overlap.
+  - **Pen Tablet settings** (Edit › Pen Tablet, also in each Pressure menu):
+    - **Pressure Feel**: Soft, Normal or Firm.
+    - **Lightest Touch Size**: how small a light stroke gets (10% of the brush by default, so light lines no longer fade to a hairline).
+    - **Eraser End Erases**: turn the pen over to erase with the Eraser's settings, then carry on with your tool.
+    - **Side Button**: pans the view, picks a colour, or does nothing, while the pen is touching.
+    - **Smoothing**: Low, Medium or High steadies brush strokes; the brush trails the pen and catches up when you lift it.
+  - Pressure needs Windows Ink: on a Wacom, keep "Use Windows Ink" on in Wacom Tablet Properties › Mapping.
+- **GPU, processor and memory use in the status bar**: "GPU" now shows how busy the graphics processor is with Pixl's work, as Task Manager counts it. Choose what shows with View › Status Bar, or by right-clicking the status bar: GPU, processor (CPU) and memory use, each for Pixl and for the whole PC, or none. Hovering a readout gives both figures. The readouts update every 1.5 seconds while Pixl is on screen, and each reading costs about a millisecond. With every readout off, nothing is read at all.
 - The zoom percentage in the status bar has a magnifier icon, so it isn't mistaken for the GPU figure next to it.
 - Fixed: an Extrude with a Bevel had a gap between its sides and the front and back, most visible at the corners when turned. The sides now rise to meet the bevelled face, so the object is solid at any bevel.
 

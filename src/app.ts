@@ -23,7 +23,30 @@ export interface Prefs {
   toolCols: number; toolLabels: boolean;
   /** Tools that share one toolbox slot (tool ids), and where the tool options are shown. */
   toolGroups: string[][]; optionsDock: 'top' | 'side';
+  /** Readouts in the status bar (View › Status Bar); missing in settings saved before they existed. */
+  meters?: Meter[];
+  /** Drawing tablet settings (Edit › Pen Tablet), shared by every painting tool. */
+  tablet: Tablet;
 }
+
+/**
+ * How a drawing tablet's pen behaves. `curve`: how pressure feels (soft = light touches count for more). `min`: the
+ * smallest a pressure-sized dab gets, as a fraction of the brush size. `eraser`: the pen's eraser end erases.
+ * `side`: what the pen's side button does while touching. `smooth`: how much brush strokes are steadied (0-3).
+ */
+export interface Tablet { curve: 'soft' | 'normal' | 'firm'; min: number; eraser: boolean; side: 'pan' | 'pick' | 'none'; smooth: number }
+export const DEFAULT_TABLET: Tablet = { curve: 'normal', min: 0.1, eraser: true, side: 'pan', smooth: 0 };
+/** The pen's raw pressure (0-1) through the chosen feel: soft makes light touches count for more, firm for less. */
+export function feltPressure(raw: number, t: Tablet): number {
+  return t.curve === 'soft' ? Math.pow(raw, 0.6) : t.curve === 'firm' ? Math.pow(raw, 1.6) : raw;
+}
+/** What pen pressure changes on a painting tool: its size, its opacity (or strength), or both. */
+export type PressureTo = 'size' | 'opacity' | 'both';
+
+/** A status bar readout: GPU, processor or memory use, by Pixl or the whole PC. */
+export type Meter = 'gpu' | 'gpuPc' | 'cpu' | 'cpuPc' | 'mem' | 'memPc';
+/** What the status bar shows unless changed: how busy the GPU is with Pixl's work. */
+export const DEFAULT_METERS: Meter[] = ['gpu'];
 
 const load = <T>(k: string, d: T): T => {
   try { const v = localStorage.getItem(k); return v ? { ...d, ...JSON.parse(v) } : d; } catch { return d; }
@@ -31,8 +54,8 @@ const load = <T>(k: string, d: T): T => {
 const store = (k: string, v: unknown) => { try { setSetting(k, JSON.stringify(v)); } catch { /* storage unavailable */ } };
 
 export const DEFAULT_OPTS = {
-  brush: { size: 24, hardness: 0.8, opacity: 1, flow: 1, pressure: true, antiAlias: true, tip: 'round', spacing: 12, jitter: 0, scatter: 0 },
-  eraser: { size: 40, hardness: 0.8, opacity: 1, flow: 1, pressure: false, antiAlias: true, tip: 'round', spacing: 12, jitter: 0, scatter: 0 },
+  brush: { size: 24, hardness: 0.8, opacity: 1, flow: 1, pressure: true, pressureTo: 'size' as PressureTo, antiAlias: true, tip: 'round', spacing: 12, jitter: 0, scatter: 0 },
+  eraser: { size: 40, hardness: 0.8, opacity: 1, flow: 1, pressure: false, pressureTo: 'size' as PressureTo, antiAlias: true, tip: 'round', spacing: 12, jitter: 0, scatter: 0 },
   select: { antiAlias: true },
   /**
    * Symmetry painting, shared by the Brush, Eraser and retouch tools: mirrored across a vertical and/or horizontal
@@ -40,13 +63,13 @@ export const DEFAULT_OPTS = {
    */
   symmetry: { mode: 'off' as 'off' | 'v' | 'h' | 'both' | 'radial', spokes: 6, cx: 0.5, cy: 0.5 },
   pen: { mode: 'pen' as 'pen' | 'freehand', smooth: 50 },
-  dodge: { size: 60, hardness: 0.3, strength: 0.35, range: 1, pressure: false },
-  burn: { size: 60, hardness: 0.3, strength: 0.35, range: 1, pressure: false },
-  blur: { size: 40, hardness: 0.5, strength: 0.7, range: 1, pressure: false },
-  sharpen: { size: 40, hardness: 0.5, strength: 0.4, range: 1, pressure: false },
-  smudge: { size: 30, hardness: 0.5, strength: 0.6, range: 1, pressure: false },
-  clone: { size: 40, hardness: 0.6, opacity: 1, flow: 1, pressure: false, aligned: true, sampleAll: false },
-  heal: { size: 40, hardness: 0.5, opacity: 1, flow: 1, pressure: false, aligned: true, sampleAll: false },
+  dodge: { size: 60, hardness: 0.3, strength: 0.35, range: 1, pressure: false, pressureTo: 'size' as PressureTo },
+  burn: { size: 60, hardness: 0.3, strength: 0.35, range: 1, pressure: false, pressureTo: 'size' as PressureTo },
+  blur: { size: 40, hardness: 0.5, strength: 0.7, range: 1, pressure: false, pressureTo: 'size' as PressureTo },
+  sharpen: { size: 40, hardness: 0.5, strength: 0.4, range: 1, pressure: false, pressureTo: 'size' as PressureTo },
+  smudge: { size: 30, hardness: 0.5, strength: 0.6, range: 1, pressure: false, pressureTo: 'size' as PressureTo },
+  clone: { size: 40, hardness: 0.6, opacity: 1, flow: 1, pressure: false, pressureTo: 'size' as PressureTo, aligned: true, sampleAll: false },
+  heal: { size: 40, hardness: 0.5, opacity: 1, flow: 1, pressure: false, pressureTo: 'size' as PressureTo, aligned: true, sampleAll: false },
   wand: { tolerance: 32, contiguous: true, sampleAll: true, antiAlias: true },
   fill: { tolerance: 32, contiguous: true, opacity: 1 },
   gradient: { kind: 'linear' as 'linear' | 'radial', toTransparent: false, opacity: 1 },
@@ -66,7 +89,7 @@ class App {
   tool!: Tool;
   tools: Tool[] = [];
   opts: ToolOpts = structuredClone(DEFAULT_OPTS);
-  prefs: Prefs = load<Prefs>('amxpixl.prefs', { theme: 'dark', glow: false, dock: { color: true, properties: true, layers: true, history: false }, rulers: false, guides: true, snap: true, pixelGrid: true, onion: false, toolCols: 1, toolLabels: false, toolGroups: [], optionsDock: 'top' });
+  prefs: Prefs = load<Prefs>('amxpixl.prefs', { theme: 'dark', glow: false, dock: { color: true, properties: true, layers: true, history: false }, rulers: false, guides: true, snap: true, pixelGrid: true, onion: false, toolCols: 1, toolLabels: false, toolGroups: [], optionsDock: 'top', tablet: DEFAULT_TABLET });
   /** Set while a modal filter preview or text edit owns the canvas. */
   busy = false;
   /** An animation is playing in the Timeline. */

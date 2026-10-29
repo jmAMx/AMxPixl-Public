@@ -12,6 +12,7 @@ import { h } from '../ui/dom';
 import { checkbox, icon, seg, slider, toast } from '../ui/widgets';
 import { brushDialog } from '../ui/brushpanel';
 import { listTips } from '../core/tips';
+import { pressureControl, strokePressure } from './pressure';
 import { drawSymmetryGuides, symmetryControl, symmetryCopies, symmetryDown, symmetryMove, symmetryUp } from './symmetry';
 import type { PInfo, Tool } from './tool';
 
@@ -84,7 +85,7 @@ class PaintTool implements Tool {
       slider({ label: 'Hardness', min: 0, max: 1, step: 1, display: 100, value: o.hardness, unit: '%', compact: true, onInput: (v) => { o.hardness = v; }, onChange: () => app.saveOpts() }),
       slider({ label: 'Opacity', min: 0.01, max: 1, step: 1, display: 100, value: o.opacity, unit: '%', compact: true, onInput: (v) => { o.opacity = v; }, onChange: () => app.saveOpts() }),
       slider({ label: 'Flow', min: 0.01, max: 1, step: 1, display: 100, value: o.flow, unit: '%', compact: true, onInput: (v) => { o.flow = v; }, onChange: () => app.saveOpts() }),
-      checkbox('Pen pressure', o.pressure, (v) => { o.pressure = v; app.saveOpts(); }, 'Pressure controls size when using a drawing tablet'),
+      pressureControl(o, () => app.saveOpts()),
       checkbox('Anti-alias', o.antiAlias, (v) => { o.antiAlias = v; app.saveOpts(); }, 'Turn off to paint whole pixels with hard edges, like a pencil (pixel art)'),
       symmetryControl(),
     );
@@ -99,7 +100,7 @@ class PaintTool implements Tool {
     const o = this.o;
     this.onMask = pt.isMask;
     const erase = pt.isMask ? this.id === 'eraser' || maskHides() : this.id === 'eraser';
-    this.stroke = new Stroke(doc, pt.target, { color: pt.isMask ? '#ffffff' : app.fg, size: o.size, hardness: o.hardness, opacity: o.opacity, flow: o.flow, erase, pressure: o.pressure, aliased: !o.antiAlias,
+    this.stroke = new Stroke(doc, pt.target, { color: pt.isMask ? '#ffffff' : app.fg, size: o.size, hardness: o.hardness, opacity: o.opacity, flow: o.flow, erase, ...strokePressure(o), aliased: !o.antiAlias,
       tip: o.tip, spacing: o.spacing / 100, jitter: o.jitter, scatter: o.scatter, copies: symmetryCopies(doc) });
     if (p.shift && this.last) this.stroke.add({ x: this.last.x, y: this.last.y, pressure: p.pressure });
     this.stroke.add({ x: p.x, y: p.y, pressure: p.pressure });

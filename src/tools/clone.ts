@@ -5,6 +5,7 @@ import { flatten } from '../core/render';
 import { view } from '../ui/canvasview';
 import { checkbox, slider, toast } from '../ui/widgets';
 import { paintableTarget } from './paint';
+import { pressureControl, strokePressure } from './pressure';
 import type { PInfo, Tool } from './tool';
 
 /**
@@ -38,7 +39,7 @@ class CloneTool implements Tool {
       slider({ label: 'Opacity', min: 0.01, max: 1, display: 100, value: o.opacity, unit: '%', compact: true, onInput: (v) => { o.opacity = v; }, onChange: () => app.saveOpts() }),
       checkbox('Aligned', o.aligned, (v) => { o.aligned = v; this.offset = null; app.saveOpts(); }, 'Keep the same source offset from stroke to stroke'),
       checkbox('Sample all layers', o.sampleAll, (v) => { o.sampleAll = v; app.saveOpts(); }, 'Copy from everything you see, so you can retouch on an empty layer and keep the original untouched'),
-      checkbox('Pen pressure', o.pressure, (v) => { o.pressure = v; app.saveOpts(); }),
+      pressureControl(o, () => app.saveOpts()),
     );
   }
 
@@ -57,7 +58,7 @@ class CloneTool implements Tool {
     const o = this.o;
     this.onMask = pt.isMask;
     this.stroke = new Stroke(doc, pt.target, {
-      color: '#ffffff', size: o.size, hardness: o.hardness, opacity: o.opacity, flow: o.flow, erase: false, pressure: o.pressure,
+      color: '#ffffff', size: o.size, hardness: o.hardness, opacity: o.opacity, flow: o.flow, erase: false, ...strokePressure(o),
       clone: this.offset, heal: this.id === 'heal', sample: o.sampleAll && !pt.isMask ? flatten(doc) : null,
     });
     this.stroke.add({ x: p.x, y: p.y, pressure: p.pressure });

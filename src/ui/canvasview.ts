@@ -1,12 +1,16 @@
-import { app } from '../app';
+import { app, feltPressure } from '../app';
 import { ctx2d, newCanvas } from '../core/layers';
 import { intersect, invert, mapRect, roundOut, union, type Mat, type Pt, type Rect } from '../core/math';
-import { dirtyPad, renderDoc } from '../core/render';
+import { dirtyPad, renderDoc, sampleDoc } from '../core/render';
+import { rgbToHex } from './color';
 import { isDepth } from '../core/types';
 import type { PInfo, Tool } from '../tools/tool';
 import { addGuide } from '../actions';
 import { h } from './dom';
 import { clearSnapLines, snapLines, snapPoint } from './snap';
+
+/** Tools that paint with brush strokes: the pen's eraser end and smoothing apply to them. */
+const PAINT_TOOLS = new Set(['brush', 'eraser', 'clone', 'heal', 'dodge', 'burn', 'blur', 'sharpen', 'smudge']);
 
 const ZOOM_STEPS = [0.02, 0.03, 0.05, 0.0667, 0.0833, 0.125, 0.1667, 0.25, 0.3333, 0.5, 0.6667, 1, 1.5, 2, 3, 4, 5, 6, 8, 12, 16, 24, 32];
 
@@ -39,6 +43,10 @@ class CanvasView {
   private down = false;
   private spaceHeld = false;
   private activeTool: Tool | null = null;
+  /** The tool to go back to after a stroke with the pen's eraser end. */
+  private eraserFrom: string | null = null;
+  /** Smoothing: where the brush is, trailing the pointer on a string (workspace pixels). */
+  private lazy: { sx: number; sy: number } | null = null;
   hover: PInfo | null = null;
   onCursor: (p: Pt | null) => void = () => {};
 
@@ -536,7 +544,23 @@ class CanvasView {
     const sx = e.clientX - r.left, sy = e.clientY - r.top;
     const p = this.doc ? this.toDoc(sx, sy) : { x: 0, y: 0 };
     const pen = e.pointerType === 'pen';
-    return { x: p.x, y: p.y, sx, sy, pressure: pen ? e.pressure || 0.5 : 1, pen, shift: e.shiftKey, alt: e.altKey, ctrl: e.ctrlKey || e.metaKey, button: e.button };
+    // A pen's pressure goes through the chosen feel (Edit › Pen Tablet › Pressure Feel).
+    const pressure = pen ? feltPressure(e.pressure || 0.5, app.prefs.tablet) : 1;
+    // The eraser end counts as the main button (the tool is switched to the Eraser for it).
+    const button = pen && e.button === 5 ? 0 : e.button;
+    return { x: p.x, y: p.y, sx, sy, pressure, pen, shift: e.shiftKey, alt: e.altKey, ctrl: e.ctrlKey || e.metaKey, button };
+  }
+
+  /** The same pointer, moved to workspace point (sx, sy). */
+  private infoAt(p: PInfo, sx: number, sy: number): PInfo {
+    const d = this.toDoc(sx, sy);
+    return { ...p, sx, sy, x: d.x, y: d.y };
+  }
+
+  /** How far the brush trails the pointer with smoothing on (workspace pixels; 0 = off). */
+  private get lazyRadius() {
+    const s = app.prefs.tablet?.smooth ?? 0;
+    return s > 0 && PAINT_TOOLS.has(app.tool?.id) ? [0, 5, 12, 24][Math.min(3, s)] : 0;
   }
 
   private onDown(e: PointerEvent) {
@@ -545,18 +569,53 @@ class CanvasView {
     e.preventDefault();
     (document.activeElement as HTMLElement | null)?.blur?.();
     this.canvas.setPointerCapture(e.pointerId);
+    const pen = e.pointerType === 'pen', t = app.prefs.tablet;
+    // The pen's side button, pressed while touching, arrives as a right-click: pan or pick a colour.
+    if (pen && e.button === 2 && t.side !== 'none') {
+      const p = this.info(e);
+      if (t.side === 'pan') {
+        this.panning = { x: p.sx, y: p.sy, px: this.doc.panX, py: this.doc.panY };
+        this.updateCursor();
+      } else {
+        const [r, g, b, a] = sampleDoc(this.doc, p.x, p.y, app.opts.picker.sample);
+        if (a) app.setColor('fg', rgbToHex(r, g, b));
+      }
+      return;
+    }
+    // The pen's eraser end: a painting tool erases for this stroke (the Eraser with its own settings).
+    if (pen && (e.button === 5 || (e.buttons & 32) !== 0) && t.eraser && app.tool.id !== 'eraser' && PAINT_TOOLS.has(app.tool.id)) {
+      this.eraserFrom = app.tool.id;
+      app.setTool('eraser');
+    }
     const p = this.info(e);
-    if (e.button === 1 || (e.button === 0 && (this.spaceHeld || app.tool.id === 'hand'))) {
+    if (p.button === 1 || (p.button === 0 && (this.spaceHeld || app.tool.id === 'hand'))) {
       this.panning = { x: p.sx, y: p.sy, px: this.doc.panX, py: this.doc.panY };
       this.updateCursor();
       return;
     }
-    if (e.button !== 0 || app.busy) return;
+    if (p.button !== 0 || app.busy) { this.restoreTool(); return; }
     if (this.startGuide(p)) { this.updateCursor(); return; }
     this.down = true;
     this.activeTool = app.tool;
+    this.lazy = this.lazyRadius ? { sx: p.sx, sy: p.sy } : null;
     app.tool.down?.(p);
     this.requestOverlay();
+  }
+
+  /** Back to the tool in use before the pen's eraser end was. */
+  private restoreTool() {
+    if (this.eraserFrom) { app.setTool(this.eraserFrom); this.eraserFrom = null; }
+  }
+
+  /** Hands a painting move to the tool; with smoothing on, the brush follows the pointer on a string. */
+  private paintMove(t: Tool, p: PInfo) {
+    const l = this.lazy, R = this.lazyRadius;
+    if (!l || !R) { t.move?.(p); return; }
+    const dx = p.sx - l.sx, dy = p.sy - l.sy, d = Math.hypot(dx, dy);
+    if (d <= R) return;
+    l.sx += dx * (1 - R / d);
+    l.sy += dy * (1 - R / d);
+    t.move?.(this.infoAt(p, l.sx, l.sy));
   }
 
   private onMove(e: PointerEvent) {
@@ -572,9 +631,10 @@ class CanvasView {
     }
     if (this.guideDrag) { this.moveGuide(p); return; }
     if (this.down && this.activeTool) {
+      const t = this.activeTool;
       const evs = typeof e.getCoalescedEvents === 'function' ? e.getCoalescedEvents() : [];
-      if (evs.length > 1) for (const ce of evs) this.activeTool.move?.(this.info(ce));
-      else this.activeTool.move?.(p);
+      if (evs.length > 1) for (const ce of evs) this.paintMove(t, this.info(ce));
+      else this.paintMove(t, p);
     } else {
       app.tool.hover?.(p);
       this.updateCursor();
@@ -585,11 +645,16 @@ class CanvasView {
   private onUp(e: PointerEvent) {
     if (this.panning) { this.panning = null; this.updateCursor(); return; }
     if (this.guideDrag) { this.endGuide(this.info(e)); this.updateCursor(); return; }
-    if (!this.down) return;
+    if (!this.down) { this.restoreTool(); return; }
     this.down = false;
     const t = this.activeTool;
     this.activeTool = null;
-    t?.up?.(this.info(e));
+    const p = this.info(e);
+    // With smoothing, finish the line where the pen lifted (the brush was trailing behind it).
+    if (this.lazy && (this.lazy.sx !== p.sx || this.lazy.sy !== p.sy)) t?.move?.({ ...p, pressure: this.hover?.pressure ?? p.pressure });
+    this.lazy = null;
+    t?.up?.(p);
+    this.restoreTool();
     this.updateCursor();
     this.requestOverlay();
   }

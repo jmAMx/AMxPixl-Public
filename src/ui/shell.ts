@@ -1,4 +1,4 @@
-import { app } from '../app';
+import { app, DEFAULT_METERS, type Meter } from '../app';
 import * as A from '../actions';
 import { pickFiles } from '../core/fileio';
 import { clearRecent, recentList } from '../core/recent';
@@ -11,6 +11,7 @@ import { h, isTyping } from './dom';
 import { historyPanel } from './historypanel';
 import { adjustmentMenuItems, effectMenuItems, layersPanel, looksMenuItems, maskMenuItems } from './layerspanel';
 import { FX_DEFS } from '../core/effects';
+import { tabletMenuItems } from '../tools/pressure';
 import { propertiesPanel } from './properties';
 import { canvasScrollbars } from './scrollbars';
 import { optionsBar, toolbox, toolboxGrip } from './toolbox';
@@ -18,7 +19,7 @@ import { warpDialog } from './warpdialog';
 import { timelinePanel, togglePlay } from './timeline';
 import { pathsPanel, strokePathDialog } from './pathspanel';
 import { closePopups, dialogOpen, icon, popupMenu, toast, type MenuItem } from './widgets';
-import { gpuUsage, isDesktop } from '../core/platform';
+import { isDesktop, readMeters } from '../core/platform';
 
 // ---------- menus & shortcuts ----------
 
@@ -78,6 +79,8 @@ const MENUS: MenuDef[] = [
       { label: 'Stroke Path…', run: strokePathDialog, enabled: () => !!app.doc?.path },
       'sep',
       { label: 'Free Transform', accel: 'Ctrl+T', run: () => app.setTool('move'), enabled: hasLayer },
+      'sep',
+      { label: 'Pen Tablet', sub: tabletMenuItems },
     ],
   },
   {
@@ -210,6 +213,7 @@ const MENUS: MenuDef[] = [
       { label: 'Timeline', accel: 'Ctrl+Shift+T', run: () => app.setPrefs({ dock: { ...app.prefs.dock, timeline: !app.prefs.dock.timeline } }), checked: () => !!app.prefs.dock.timeline },
       { label: 'Play / Pause Animation', run: togglePlay, enabled: () => !!app.doc?.anim },
       { label: 'Onion Skin', run: () => app.setPrefs({ onion: !app.prefs.onion }), checked: () => app.prefs.onion },
+      { label: 'Status Bar', sub: meterMenuItems },
       { label: 'Depth Map', accel: 'Ctrl+Alt+D', run: () => { app.showDepth = !app.showDepth; app.emit('prefs'); }, checked: () => app.showDepth, enabled: hasDoc },
       'sep',
       { label: 'Tool Names', run: () => app.setPrefs({ toolLabels: !app.prefs.toolLabels }), checked: () => app.prefs.toolLabels },
@@ -446,24 +450,48 @@ function statusbar() {
   zoom.addEventListener('change', () => { const v = parseFloat(zoom.value); if (v > 0) view.setZoom(v / 100); syncZoom(); });
   zoom.addEventListener('keydown', (e) => { if (e.key === 'Enter') zoom.blur(); });
   const zoomBox = h('label', { class: 'st-zoombox', title: 'Zoom (type a value)' }, icon('zoom'), zoom);
-  // The GPU: whether Pixl can use it, and (on the desktop) how busy it is.
+  // Readouts (View › Status Bar, or right-click the status bar): GPU, processor and memory use, by Pixl and the
+  // whole PC. "GPU" always shows whether Pixl can use the graphics processor; the figures need the desktop app.
   const gpuNote = glfx.ok ? `Adjustments, effects and 3D run on the GPU (largest image it takes: ${glfx.maxSize} px).` : 'WebGL2 isn\'t available, so adjustment and effect layers are off.';
-  const gpuUse = h('span', { class: 'st-gpu-use' });
-  const gpu = h('span', { class: 'st-gpu', title: gpuNote }, glfx.ok ? 'GPU' : 'GPU off', gpuUse);
-  gpu.classList.toggle('bad', !glfx.ok);
-  if (glfx.ok && isDesktop) {
-    // Every 1.5 s while the window is showing (the reading stops on its own when nothing asks).
+  const meter = (label: string, cls: string) => {
+    const value = h('span', { class: 'st-meter-v' });
+    return { el: h('span', { class: `st-meter ${cls}` }, label, value), value };
+  };
+  const gpu = meter(glfx.ok ? 'GPU' : 'GPU off', 'st-gpu'), cpu = meter('CPU', ''), mem = meter('RAM', '');
+  gpu.el.classList.toggle('bad', !glfx.ok);
+  const pct = (v: number | null | undefined) => (v == null ? '–' : `${Math.round(v)}%`);
+  const mb = (v: number | null | undefined) => (v == null ? '–' : v >= 1024 ? `${(v / 1024).toFixed(1)} GB` : `${Math.round(v)} MB`);
+  let last: (number | null)[] | null = null;
+  const showMeters = () => {
+    const on = new Set(app.prefs.meters ?? DEFAULT_METERS);
+    const r = last;
+    type Fmt = (v: number | null | undefined) => string;
+    const fill = (m: { el: HTMLElement; value: HTMLElement }, mine: Meter, pc: Meter, i: number, fmtMine: Fmt, fmtPc: Fmt, what: string, note = '') => {
+      const parts = [on.has(mine) ? fmtMine(r?.[i]) : null, on.has(pc) ? `PC ${fmtPc(r?.[i + 1])}` : null].filter(Boolean);
+      m.value.textContent = isDesktop && parts.length ? ` ${parts.join(' · ')}` : '';
+      m.el.title = `${what}${isDesktop ? `\nPixl: ${fmtMine(r?.[i])} · whole PC: ${fmtPc(r?.[i + 1])}` : ''}${note ? `\n${note}` : ''}\nChoose what shows: View › Status Bar, or right-click here.`;
+    };
+    fill(gpu, 'gpu', 'gpuPc', 0, pct, pct, 'GPU use: the busiest part of the graphics processor, as Task Manager counts it.', gpuNote);
+    fill(cpu, 'cpu', 'cpuPc', 2, pct, pct, 'Processor (CPU) use, as Task Manager counts it.');
+    fill(mem, 'mem', 'memPc', 4, mb, pct, 'Memory: what Pixl has set aside for itself, and how full the PC\'s memory is.');
+    cpu.el.hidden = !isDesktop || !(on.has('cpu') || on.has('cpuPc'));
+    mem.el.hidden = !isDesktop || !(on.has('mem') || on.has('memPc'));
+  };
+  if (isDesktop) {
+    // Every 1.5 s while the window is showing and something is switched on (the reading in the background stops by
+    // itself once nothing asks).
     const poll = async () => {
-      if (document.visibilityState !== 'visible') return;
-      const u = await gpuUsage().catch(() => null);
+      if (document.visibilityState !== 'visible' || !(app.prefs.meters ?? DEFAULT_METERS).length) return;
+      const u = await readMeters().catch(() => null);
       if (!u) return;
-      const [mine, all] = u.map((v) => Math.round(v));
-      gpuUse.textContent = ` ${mine}%`;
-      gpu.title = `GPU use by Pixl: ${mine}% (whole PC: ${all}%), the busiest part of the graphics processor, as Task Manager counts it.\n${gpuNote}`;
+      last = u;
+      showMeters();
     };
     setInterval(() => { void poll(); }, 1500);
     void poll();
   }
+  app.on('prefs', showMeters);
+  showMeters();
   const syncZoom = () => { if (document.activeElement !== zoom) zoom.value = app.doc ? `${+(app.doc.zoom * 100).toFixed(1)}%` : ''; };
   const sync = () => {
     hint.textContent = app.tool?.hint ?? '';
@@ -475,7 +503,30 @@ function statusbar() {
   view.onCursor = (p) => { pos.textContent = p && app.doc ? `${Math.floor(p.x)}, ${Math.floor(p.y)}` : ''; };
   app.on('tool', sync); app.on('docs', sync); app.on('view', syncZoom); app.on('change', sync);
   sync();
-  return h('footer', { class: 'statusbar' }, hint, h('span', { class: 'grow' }), pos, size, zoomBox, gpu);
+  const bar = h('footer', { class: 'statusbar' }, hint, h('span', { class: 'grow' }), pos, size, zoomBox, cpu.el, mem.el, gpu.el);
+  bar.addEventListener('contextmenu', (e) => {
+    if (e.target instanceof HTMLInputElement) return;
+    e.preventDefault();
+    popupMenu(meterMenuItems(), e.clientX, e.clientY);
+  });
+  return bar;
+}
+
+/** View › Status Bar (and the status bar's right-click menu): which readouts show. */
+function meterMenuItems(): MenuItem[] {
+  const on = app.prefs.meters ?? DEFAULT_METERS;
+  const item = (m: Meter, label: string): MenuItem => ({
+    label, checked: on.includes(m),
+    onClick: () => app.setPrefs({ meters: on.includes(m) ? on.filter((x) => x !== m) : [...on, m] }),
+  });
+  const desktopOnly = !isDesktop ? [{ label: '(The figures need the desktop app)', disabled: true }, { sep: true }] : [];
+  return [
+    ...desktopOnly,
+    item('gpu', 'GPU use: Pixl'), item('gpuPc', 'GPU use: whole PC'), { sep: true },
+    item('cpu', 'Processor (CPU): Pixl'), item('cpuPc', 'Processor (CPU): whole PC'), { sep: true },
+    item('mem', 'Memory: Pixl'), item('memPc', 'Memory: whole PC'), { sep: true },
+    { label: 'None', disabled: !on.length, onClick: () => app.setPrefs({ meters: [] }) },
+  ];
 }
 
 function dock() {

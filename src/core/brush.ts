@@ -12,7 +12,11 @@ export interface BrushOpts {
   opacity: number;
   flow: number;
   erase: boolean;
+  /** Pen pressure changes the dabs: their size (down to `minSize` of it), their opacity (strength), or both. */
   pressure: boolean;
+  pressureTo?: 'size' | 'opacity' | 'both';
+  /** The smallest a pressure-sized dab gets, as a fraction of `size` (0-1). */
+  minSize?: number;
   /** Clone stamp: copy pixels from `offset` (document pixels) away instead of painting a colour. */
   clone?: { dx: number; dy: number };
   /** Healing brush: after cloning, match the surrounding colour and light (texture from the source, tone from here). */
@@ -337,8 +341,24 @@ export class Stroke {
     setT(bctx, this.inv);
     bctx.imageSmoothingEnabled = true;
     let region: Rect | null = null;
+    const to = this.o.pressure ? this.o.pressureTo ?? 'size' : null;
+    const min = Math.min(1, Math.max(0, this.o.minSize ?? 0));
+    // Each spot along a stroke is covered by about 1 / spacing overlapping dabs, which pile up. For opacity to follow
+    // pressure, each dab gets just enough that the pile comes to the pressure: 1 - (1 - p)^spacing.
+    const overlap = Math.min(1, Math.max(0.01, this.o.spacing ?? 0.12));
     const dab = (x: number, y: number, pr: number) => {
-      const r = Math.max(0.5, (this.o.size / 2) * (this.o.pressure ? pr : 1));
+      const k = to === 'size' || to === 'both' ? min + (1 - min) * pr : 1;
+      const r = Math.max(0.5, (this.o.size / 2) * k);
+      // (Dabs shrunk by pressure sit closer together relative to their size, so more of them overlap.)
+      const alpha = to === 'opacity' || to === 'both' ? 1 - Math.pow(1 - Math.min(1, Math.max(0, pr)), Math.min(1, overlap / Math.max(k, 0.05))) : 1;
+      if (alpha < 1) {
+        bctx.save();
+        bctx.globalAlpha = alpha;
+        drawDab(x, y, r);
+        bctx.restore();
+      } else drawDab(x, y, r);
+    };
+    const drawDab = (x: number, y: number, r: number) => {
       if (this.o.clone) { region = union(region, this.cloneDab(bctx, x, y, r)); return; }
       if (this.o.retouch?.mode === 'smudge') { region = union(region, this.smudgeDab(x, y, r)); return; }
       if (this.o.aliased) {
