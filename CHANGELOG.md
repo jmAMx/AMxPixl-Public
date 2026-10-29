@@ -2,6 +2,16 @@
 
 Each version's section becomes its release notes (`scripts/release.ps1` copies it to the download page).
 
+## 0.8.2
+
+Faster, with nothing lost, measured on older hardware (a 4-core desktop processor with integrated graphics):
+
+- **Adjustment and effect layers redraw up to 4× faster.** A full redraw with one effect layer went from about 25 ms to 6 ms, and with four effects and Depth Blur from 47 ms to 18 ms. Painting, moving and zooming with Looks, adjustments or effects on are smoother. Images were being drawn with a resampling setting that made handing them to the graphics processor slow, for a result that looks the same as the cheaper setting Pixl now uses.
+- **3D settings respond about 5× faster.** Dragging Depth, Roundness, Bevel or Thickness rebuilds the shape in about 30–45 ms instead of 140–270 ms. What doesn't depend on the slider is worked out once, and the shape's corners are shared rather than repeated. New 3D layers are made faster too.
+- **Depth Blur looks smoother when it's strong.** It takes as many samples as each spot's blur needs: a few where it barely blurs, up to 64 for the most out-of-focus parts (before, 40 everywhere).
+- **The depth map is kept between redraws** until a depth layer changes, so dragging an effect's slider or playing an animation doesn't redraw it every time.
+- **Pixl starts faster**: the font reader, only used by Text to Outlines, now loads the first time it's needed, so there is about a quarter less code to read at every start.
+
 ## 0.8.1
 
 - **Better drawing with a pen tablet** (Wacom and others):
