@@ -2,7 +2,9 @@
 
 Each version's section becomes its release notes (`scripts/release.ps1` copies it to the download page).
 
-## Next (0.7, Type & Warp, in progress)
+## 0.7.0
+
+Type & Warp.
 
 - **Warp presets** (Layer › Warp…, Ctrl+Alt+W, or Warp… in the Text tool and Properties): Arc, Arc Lower, Arc Upper, Arch, Bulge, Flag, Wave, Fish, Rise, Fisheye, Inflate, Squeeze and Twist. Each has Bend, horizontal and vertical distortion, and a vertical option, all previewed live. Text and shapes stay editable, and the warp refits when you change the words. Image layers get an editable mesh warp you can fine-tune with Move › Warp.
 - **Fit into Shape** (Layer menu, or Fit layer into in the Paths panel): bends text, a shape or an image to fill a closed path, or a shape layer selected along with it (the upper shape is the container and gets hidden), like Illustrator's envelope "Make with Top Object". Text fills the shape edge to edge with its letters and stays editable; images get an editable mesh warp.
