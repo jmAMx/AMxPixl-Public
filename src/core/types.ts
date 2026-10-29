@@ -31,7 +31,10 @@ export interface TextProps {
 }
 
 export interface ShapeProps {
-  kind: 'rect' | 'ellipse' | 'line' | 'polygon' | 'star';
+  /** 'path': any outline (`subs`), e.g. text turned into outlines; reshaped with the Paths tool. */
+  kind: 'rect' | 'ellipse' | 'line' | 'polygon' | 'star' | 'path';
+  /** Path shapes: the outline in the layer's own pixels. */
+  subs?: SubPath[];
   /** Polygon/star: number of corners (points), and a star's inner radius as a fraction of the outer. */
   sides?: number;
   inner?: number;

@@ -63,6 +63,32 @@ fn write_file(request: tauri::ipc::Request<'_>) -> Result<(), String> {
   })
 }
 
+/// Installed fonts as Windows lists them (for turning text into outlines): ("Segoe UI Bold (TrueType)", file path),
+/// for all users and this user. Read from the registry with reg.exe, without flashing a console window.
+#[tauri::command]
+fn font_files() -> Vec<(String, String)> {
+  let mut out = Vec::new();
+  #[cfg(windows)]
+  {
+    use std::os::windows::process::CommandExt;
+    let windir = std::env::var("WINDIR").unwrap_or_else(|_| "C:\\Windows".into());
+    for key in [
+      "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Fonts",
+      "HKCU\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Fonts",
+    ] {
+      let Ok(o) = std::process::Command::new("reg").args(["query", key]).creation_flags(0x0800_0000).output() else { continue };
+      for line in String::from_utf8_lossy(&o.stdout).lines() {
+        // "    Segoe UI Bold (TrueType)    REG_SZ    segoeuib.ttf"
+        let Some((name, file)) = line.trim_start().split_once("    REG_SZ    ") else { continue };
+        let file = file.trim();
+        let path = if file.contains(':') || file.starts_with('\\') { file.to_string() } else { format!("{windir}\\Fonts\\{file}") };
+        out.push((name.trim().to_string(), path));
+      }
+    }
+  }
+  out
+}
+
 /// settings.json in the app's config folder: a copy of everything Pixl remembers (looks, recent files, preferences),
 /// kept outside the web view's storage so app updates can't lose it.
 fn settings_path(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
@@ -123,7 +149,7 @@ pub fn run() {
       }
       Ok(())
     })
-    .invoke_handler(tauri::generate_handler![take_open_files, read_file, write_file, read_settings, write_settings, open_release_page])
+    .invoke_handler(tauri::generate_handler![take_open_files, read_file, write_file, read_settings, write_settings, font_files, open_release_page])
     .run(tauri::generate_context!())
     .expect("error while running AMxPixl");
 }

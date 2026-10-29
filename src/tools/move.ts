@@ -364,7 +364,7 @@ class MoveTool implements Tool {
       else if (k && single) {
         const ad = apply(d.m0, k.anchor.x, k.anchor.y);
         const off = apply(xformMatrix({ ...t.t0, x: 0, y: 0, sx: t.t0.sx * k.x, sy: t.t0.sy * k.y }), k.anchor.x, k.anchor.y);
-        if (l.type === 'shape' && t.shape0) {
+        if (l.type === 'shape' && t.shape0 && t.shape0.kind !== 'path') {
           // A shape stays vector: its geometry is resized instead of stretched (keeps the stroke width).
           l.shape = { ...t.shape0, w: t.shape0.w * k.x, h: t.shape0.h * k.y };
           l.t = { ...t.t0, x: ad.x - off.x, y: ad.y - off.y };

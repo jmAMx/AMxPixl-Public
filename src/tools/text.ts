@@ -9,6 +9,7 @@ import { allFontsLoaded, fontList, loadInstalledFonts } from '../ui/fonts';
 import { checkbox, icon, numField, seg } from '../ui/widgets';
 import { warpDialog } from '../ui/warpdialog';
 import { layerAt } from './move';
+import { textToOutlines } from '../actions';
 import type { PInfo, Tool } from './tool';
 
 class TextTool implements Tool {
@@ -66,6 +67,10 @@ class TextTool implements Tool {
         class: 'btn small', type: 'button', disabled: !this.activeText, title: 'Bend the text into an arc, flag, bulge… (it stays editable)',
         onclick: () => { this.finish(); void warpDialog(); },
       }, icon('warp'), 'Warp…'),
+      h('button', {
+        class: 'btn small', type: 'button', disabled: !this.activeText, title: 'Turn the letters into outlines you can reshape with the Paths tool (the text is kept, hidden)',
+        onclick: () => { this.finish(); void textToOutlines(); },
+      }, icon('path'), 'To outlines'),
     );
   }
 

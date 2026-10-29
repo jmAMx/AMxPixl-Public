@@ -5,7 +5,7 @@ import { view } from '../ui/canvasview';
 import { checkbox, numField, seg } from '../ui/widgets';
 import type { PInfo, Tool } from './tool';
 
-const NAMES = { rect: 'Rectangle', ellipse: 'Ellipse', line: 'Line', polygon: 'Polygon', star: 'Star' };
+const NAMES = { rect: 'Rectangle', ellipse: 'Ellipse', line: 'Line', polygon: 'Polygon', star: 'Star', path: 'Outline' };
 
 class ShapeTool implements Tool {
   id = 'shape'; name = 'Shape'; key = 'U'; icon = 'shape' as const;

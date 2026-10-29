@@ -111,6 +111,7 @@ const MENUS: MenuDef[] = [
       'sep',
       { label: 'Merge Down', accel: 'Ctrl+E', run: A.mergeDown, enabled: hasLayer },
       { label: 'Warp…', accel: 'Ctrl+Alt+W', run: () => { void warpDialog(); }, enabled: () => !!app.doc?.activePlaced },
+      { label: 'Text to Outlines', run: () => { void A.textToOutlines(); }, enabled: () => app.doc?.active?.type === 'text' },
       { label: 'Fit into Shape', run: () => { void A.fitIntoShape(); }, enabled: () => !!app.doc?.activePlaced && (!!app.doc.path || (app.doc.selectedIds().length === 2)) },
       { label: 'Trim to Content', run: () => { void A.trimLayers(); }, enabled: () => app.doc?.active?.type === 'raster' || app.doc?.active?.type === 'group' || (app.doc?.selectedIds().length ?? 0) > 1 },
       { label: 'Convert Shape to Path', run: A.shapeToPath, enabled: () => app.doc?.active?.type === 'shape' },

@@ -71,7 +71,7 @@ export function propertiesPanel() {
     const b = () => layerBox(l, doc.pool, app.opts.move.box, () => refresh()) ?? localBounds(l, doc.pool);
     const corner = () => { const bb = b(); return apply(layerMatrix(l), bb.x, bb.y); };
     const size = () => {
-      if (l.type === 'shape' && app.opts.move.box !== 'custom') return { w: Math.abs(l.shape.w), h: Math.abs(l.shape.h) };
+      if (l.type === 'shape' && l.shape.kind !== 'path' && app.opts.move.box !== 'custom') return { w: Math.abs(l.shape.w), h: Math.abs(l.shape.h) };
       const bb = b();
       return { w: Math.abs(bb.w * l.t.sx), h: Math.abs(bb.h * l.t.sy) };
     };
@@ -80,7 +80,7 @@ export function propertiesPanel() {
     const y = numField('Y', corner().y, (v) => { setPlacedTransform(l, { ...l.t, y: l.t.y + v - corner().y }); commit('Move'); }, { unit: 'px' });
     const setSize = (axis: 'w' | 'h', v: number) => {
       const before = corner();
-      if (l.type === 'shape') l.shape = { ...l.shape, [axis]: Math.sign(l.shape[axis] || 1) * v };
+      if (l.type === 'shape' && l.shape.kind !== 'path') l.shape = { ...l.shape, [axis]: Math.sign(l.shape[axis] || 1) * v };
       else {
         const bb = b();
         if (axis === 'w') setPlacedTransform(l, { ...l.t, sx: Math.sign(l.t.sx) * (v / bb.w) });
@@ -194,7 +194,8 @@ export function propertiesPanel() {
     const e = edit(l, 'Shape style');
     const set = (patch: Partial<ShapeLayer['shape']>, final = true) => { l.shape = { ...l.shape, ...patch }; e.live(); if (final) e.done(); };
     const s = l.shape;
-    return section(s.kind === 'line' ? 'Line' : s.kind === 'ellipse' ? 'Ellipse' : 'Rectangle',
+    return section(s.kind === 'line' ? 'Line' : s.kind === 'ellipse' ? 'Ellipse' : s.kind === 'path' ? 'Outline' : s.kind === 'polygon' ? 'Polygon' : s.kind === 'star' ? 'Star' : 'Rectangle',
+      s.kind === 'path' ? h('p', { class: 'props-note' }, 'Reshape it with the Paths tool (P): drag points and handles, Alt+click a point for corner/smooth.') : null,
       s.kind !== 'line' ? h('div', { class: 'prop-line' }, checkbox('Fill', !!s.fill, (v) => set({ fill: v ? (l.shape.fill ?? app.fg) : null })),
         colorInput(s.fill ?? app.fg, (v) => set({ fill: v }, false), e.done)) : null,
       h('div', { class: 'prop-line' }, checkbox('Stroke', !!s.stroke, (v) => set({ stroke: v ? (l.shape.stroke ?? app.fg) : null })),

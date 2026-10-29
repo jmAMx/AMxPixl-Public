@@ -23,6 +23,7 @@ import { defaultStyles } from './core/styles';
 import type { AdjKind, AdjParams, Anim, AnimFrame, BlendIf, GroupLayer, Guide, Layer, LayerStyles, Mask, PathPoint, PlacedLayer, RasterLayer, ShapeLayer, SubPath, TextLayer, VPath, Warp } from './core/types';
 import { initWarp, warpBounds } from './core/warp';
 import { envelopeMesh, shapeFit, type Envelope } from './core/envelope';
+import { loadFont, outlineText } from './core/outline';
 import { isFilter, isPlaced } from './core/types';
 import { view } from './ui/canvasview';
 import { ask, toast } from './ui/widgets';
@@ -495,7 +496,8 @@ export function selectionToPath() {
 function shapeOutline(l: ShapeLayer): SubPath[] {
   const s = l.shape;
   let subs: SubPath[];
-  if (s.kind === 'line') subs = [polySub([{ x: 0, y: 0 }, { x: s.w, y: s.h }], false)];
+  if (s.kind === 'path') subs = s.subs ?? [];
+  else if (s.kind === 'line') subs = [polySub([{ x: 0, y: 0 }, { x: s.w, y: s.h }], false)];
   else {
     const x = Math.min(0, s.w), y = Math.min(0, s.h), w = Math.abs(s.w), h = Math.abs(s.h);
     if (s.kind === 'ellipse') subs = [ellipseSub(x + w / 2, y + h / 2, w / 2, h / 2)];
@@ -510,6 +512,31 @@ export function shapeToPath() {
   const doc = need(); const l = doc?.active;
   if (!doc || l?.type !== 'shape') { toast('Select a shape layer first.'); return; }
   newPath(shapeOutline(l), `${l.name} path`);
+}
+
+/**
+ * Type › Text to Outlines: the active text layer's letters, from the font file, become an outline shape you can
+ * reshape point by point with the Paths tool. Its colour, styles, mask, transform and warp come along; the text
+ * layer is kept, hidden, in case you want to edit the words again.
+ */
+export async function textToOutlines() {
+  const doc = need(); const l = doc?.active;
+  if (!doc || l?.type !== 'text') { toast('Select a text layer to turn into outlines.'); return; }
+  if (l.text.onPath) { toast('Text on a path can\'t be turned into outlines yet.'); return; }
+  const font = await loadFont(l.text.font, l.text.weight, l.text.italic);
+  if (!app.docs.includes(doc)) return;
+  if (!font) { toast(`Couldn't read the font file for "${l.text.font}" (it may not be installed, or it's a font collection that can't be read).`, 'error'); return; }
+  const subs = outlineText(l.text, font);
+  if (!subs.length) { toast('There are no letters to outline.'); return; }
+  const copy = cloneLayer(doc, l) as Layer as ShapeLayer & { text?: unknown };
+  delete copy.text;
+  copy.type = 'shape';
+  copy.name = `${l.name} (outlines)`;
+  copy.shape = { kind: 'path', subs, w: 0, h: 0, fill: l.text.color, stroke: null, strokeWidth: 2, radius: 0, antiAlias: l.text.antiAlias !== false };
+  doc.insertLayer(copy, l.id);
+  setLayerProp(l.id, { visible: false });
+  doc.setActive(copy.id);
+  doc.commit('Text to outlines');
 }
 
 /**
@@ -763,7 +790,9 @@ export function transformDoc(label: string, g: Mat, w: number, h: number, scaleS
     if (!isPlaced(l)) continue;
     if (l.type === 'shape' && scaleShapes) {
       const [kx, ky] = scaleShapes;
-      l.shape = { ...l.shape, w: l.shape.w * kx, h: l.shape.h * ky, strokeWidth: l.shape.strokeWidth * Math.sqrt(Math.abs(kx * ky)), radius: l.shape.radius * Math.sqrt(Math.abs(kx * ky)) };
+      l.shape = { ...l.shape, w: l.shape.w * kx, h: l.shape.h * ky, strokeWidth: l.shape.strokeWidth * Math.sqrt(Math.abs(kx * ky)), radius: l.shape.radius * Math.sqrt(Math.abs(kx * ky)),
+        // An outline's points scale along with it.
+        subs: l.shape.subs && mapSubs(l.shape.subs, (x, y) => ({ x: x * kx, y: y * ky })) };
       const p = apply(g, l.t.x, l.t.y);
       l.t = { ...l.t, x: p.x, y: p.y };
       continue;

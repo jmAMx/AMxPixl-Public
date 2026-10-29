@@ -2,6 +2,7 @@ import { alphaBox } from './alphabox';
 import { envelopeBounds, envelopePoint, type Envelope } from './envelope';
 import type { Pt } from './math';
 import { glops } from './glops';
+import { pathBounds, toPath2D } from './paths';
 import { decompose, invert, matScale, mul, setT, xformMatrix, type Mat, type Rect, type Xform } from './math';
 import { displaySource } from './pyramid';
 import { drawText, layoutText } from './text';
@@ -102,6 +103,7 @@ function vectorImage(l: TextLayer | ShapeLayer, box: Rect, want: number) {
 }
 
 export function shapeBounds(s: ShapeProps): Rect {
+  if (s.kind === 'path') return pathBounds(s.subs ?? []) ?? { x: 0, y: 0, w: 1, h: 1 };
   if (s.kind === 'line') {
     const pad = Math.max(1, (s.stroke ? s.strokeWidth : 1) / 2);
     return { x: Math.min(0, s.w) - pad, y: Math.min(0, s.h) - pad, w: Math.abs(s.w) + pad * 2, h: Math.abs(s.h) + pad * 2 };
@@ -126,6 +128,13 @@ export function shapePoints(s: ShapeProps): { x: number; y: number }[] {
 }
 
 export function drawShape(ctx: CanvasRenderingContext2D, s: ShapeProps) {
+  if (s.kind === 'path') {
+    // Holes (the middle of an O) come from the outlines' directions, as in fonts (non-zero winding).
+    const p = toPath2D({ id: '', name: '', subs: s.subs ?? [] });
+    if (s.fill) { ctx.fillStyle = s.fill; ctx.fill(p); }
+    if (s.stroke && s.strokeWidth > 0) { ctx.strokeStyle = s.stroke; ctx.lineWidth = s.strokeWidth; ctx.lineJoin = 'round'; ctx.stroke(p); }
+    return;
+  }
   const b = s.kind === 'line' ? null : shapeBounds(s);
   ctx.beginPath();
   if (s.kind === 'line') {

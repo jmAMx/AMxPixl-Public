@@ -1,7 +1,9 @@
 import { app } from '../app';
 import { newPath } from '../actions';
+import { layerMatrix } from '../core/layers';
+import { apply, identity, invert, matScale, type Mat } from '../core/math';
 import { corner, fitPolyline, hitPath, isSmooth, segments, splitSegment, toggleSmooth } from '../core/paths';
-import type { PathPoint, VPath } from '../core/types';
+import type { PathPoint, ShapeLayer, VPath } from '../core/types';
 import { view } from '../ui/canvasview';
 import { h } from '../ui/dom';
 import { seg, slider } from '../ui/widgets';
@@ -49,11 +51,29 @@ class PenTool implements Tool {
       seg([{ v: 'pen', label: 'Pen', title: 'Click to place points; drag for curves' }, { v: 'freehand', label: 'Freehand', title: 'Drag to draw; smoothed into editable points' }],
         o.mode, (v) => { o.mode = v; this.open = null; app.saveOpts(); app.emit('tool'); }),
       ...(o.mode === 'freehand' ? [slider({ label: 'Smoothness', min: 0, max: 100, value: o.smooth, unit: '%', compact: true, onInput: (v) => { o.smooth = v; }, onChange: () => app.saveOpts() })] : []),
-      h('span', { class: 'opt-note' }, doc?.path ? `Adding to "${doc.path.name}"` : 'Draw on the image to start a path'),
+      h('span', { class: 'opt-note' }, this.target?.layer ? `Reshaping the outline "${this.target.layer.name}"` : doc?.path ? `Adding to "${doc.path.name}"` : 'Draw on the image to start a path'),
       h('button', { class: 'btn small', type: 'button', title: 'Start a separate path', onclick: () => { this.open = null; this.sel = null; newPath(); app.emit('tool'); } }, 'New path'));
   }
 
-  private get path(): VPath | null { return app.doc?.path ?? null; }
+  /**
+   * What the tool edits: an outline shape layer's own outline when one is selected (text turned into outlines;
+   * its points are in the layer's pixels and `m` maps them to the document), otherwise the active path.
+   */
+  private get target(): { path: VPath; m: Mat; inv: Mat; k: number; layer: ShapeLayer | null } | null {
+    const doc = app.doc;
+    if (!doc) return null;
+    const l = doc.active;
+    if (l?.type === 'shape' && l.shape.kind === 'path' && l.shape.subs) {
+      const m = layerMatrix(l);
+      return { path: { id: l.id, name: l.name, subs: l.shape.subs }, m, inv: invert(m), k: matScale(m) || 1, layer: l };
+    }
+    return doc.path ? { path: doc.path, m: identity(), inv: identity(), k: 1, layer: null } : null;
+  }
+  private get path(): VPath | null { return this.target?.path ?? null; }
+  /** The pointer in the target's own coordinates. */
+  private local(p: PInfo) { const t = this.target; return t ? apply(t.inv, p.x, p.y) : { x: p.x, y: p.y }; }
+  /** Screen pixels per target pixel. */
+  private get scale() { return (app.doc?.zoom ?? 1) * (this.target?.k ?? 1); }
 
   /** Handles show for smooth points next to the selected one (and on the line being drawn). */
   private handlesShown = (sub: number, i: number) => {
@@ -67,10 +87,11 @@ class PenTool implements Tool {
   down(p: PInfo) {
     const doc = app.doc!;
     if (app.opts.pen.mode === 'freehand') { this.drawn = [{ x: p.x, y: p.y }]; this.sel = null; return; }
-    const tol = 6 / doc.zoom;
+    const q = this.local(p);
+    const tol = 6 / this.scale;
     let path = this.path;
     if (this.open && (!path || path.id !== this.open.path || !path.subs[this.open.sub])) this.open = null;
-    const hit = path ? hitPath(path, p.x, p.y, tol, this.handlesShown) : null;
+    const hit = path ? hitPath(path, q.x, q.y, tol, this.handlesShown) : null;
     if (path && hit?.kind === 'point') {
       const s = path.subs[hit.sub];
       if (p.ctrl) {
@@ -89,7 +110,7 @@ class PenTool implements Tool {
         return;
       }
       this.sel = { sub: hit.sub, i: hit.i };
-      this.drag = { kind: 'point', sub: hit.sub, i: hit.i, x0: p.x, y0: p.y, orig: { ...s.pts[hit.i] } };
+      this.drag = { kind: 'point', sub: hit.sub, i: hit.i, x0: q.x, y0: q.y, orig: { ...s.pts[hit.i] } };
       this.changed = false;
       view.requestOverlay();
       return;
@@ -110,7 +131,7 @@ class PenTool implements Tool {
     if (!path) { path = newPath(); if (!path) return; }
     if (!this.open) { path.subs.push({ closed: false, pts: [] }); this.open = { path: path.id, sub: path.subs.length - 1 }; }
     const s = path.subs[this.open.sub];
-    let x = p.x, y = p.y;
+    let x = q.x, y = q.y;
     const last = s.pts[s.pts.length - 1];
     if (p.shift && last) {
       // Shift keeps the new line at 45° steps.
@@ -134,22 +155,23 @@ class PenTool implements Tool {
     if (!d || !path) return;
     const pt = path.subs[d.sub]?.pts[d.i];
     if (!pt) return;
+    const q = this.local(p);
     if (d.kind === 'point') {
-      const dx = p.x - d.x0, dy = p.y - d.y0, o = d.orig;
+      const dx = q.x - d.x0, dy = q.y - d.y0, o = d.orig;
       Object.assign(pt, { x: o.x + dx, y: o.y + dy, ix: o.ix + dx, iy: o.iy + dy, ox: o.ox + dx, oy: o.oy + dy });
     } else if (d.kind === 'new') {
       // Dragging while adding a point pulls out a smooth curve (handles mirror each other).
-      if (Math.hypot(p.x - pt.x, p.y - pt.y) * app.doc!.zoom < 3) { pt.ox = pt.ix = pt.x; pt.oy = pt.iy = pt.y; }
-      else { pt.ox = p.x; pt.oy = p.y; pt.ix = 2 * pt.x - p.x; pt.iy = 2 * pt.y - p.y; }
+      if (Math.hypot(q.x - pt.x, q.y - pt.y) * this.scale < 3) { pt.ox = pt.ix = pt.x; pt.oy = pt.iy = pt.y; }
+      else { pt.ox = q.x; pt.oy = q.y; pt.ix = 2 * pt.x - q.x; pt.iy = 2 * pt.y - q.y; }
     } else {
       const [hx, hy, ox, oy] = d.kind === 'out' ? ['ox', 'oy', 'ix', 'iy'] as const : ['ix', 'iy', 'ox', 'oy'] as const;
-      pt[hx] = p.x; pt[hy] = p.y;
+      pt[hx] = q.x; pt[hy] = q.y;
       // A smooth point keeps its handles in line (the other keeps its length); Alt breaks them apart.
       const otherLen = Math.hypot(pt[ox] - pt.x, pt[oy] - pt.y);
       if (!d.alt && !p.alt && otherLen > 0) {
-        const len = Math.hypot(p.x - pt.x, p.y - pt.y) || 1;
-        pt[ox] = pt.x - ((p.x - pt.x) / len) * otherLen;
-        pt[oy] = pt.y - ((p.y - pt.y) / len) * otherLen;
+        const len = Math.hypot(q.x - pt.x, q.y - pt.y) || 1;
+        pt[ox] = pt.x - ((q.x - pt.x) / len) * otherLen;
+        pt[oy] = pt.y - ((q.y - pt.y) / len) * otherLen;
       }
     }
     this.changed = true;
@@ -174,10 +196,12 @@ class PenTool implements Tool {
     const len = pts.reduce((s, q, i) => (i ? s + Math.hypot(q.x - pts[i - 1].x, q.y - pts[i - 1].y) : 0), 0);
     if (pts.length < 2 || len * doc.zoom < 4) { view.requestOverlay(); return; }
     // Smoothness sets how far (in screen pixels) the curve may stray from the drawn line to save points.
-    const eps = (0.6 + app.opts.pen.smooth * 0.08) / doc.zoom;
+    const eps = (0.6 + app.opts.pen.smooth * 0.08) / this.scale;
     const end = pts[pts.length - 1];
     const closed = len * doc.zoom > 40 && Math.hypot(end.x - pts[0].x, end.y - pts[0].y) * doc.zoom < 12;
-    const sub = fitPolyline(pts, eps, closed);
+    // The line was drawn in document pixels; an outline layer keeps its points in its own.
+    const inv = this.target?.inv;
+    const sub = fitPolyline(inv ? pts.map((q) => apply(inv, q.x, q.y)) : pts, eps, closed);
     if (sub.pts.length < 2) { view.requestOverlay(); return; }
     const path = this.path ?? newPath();
     if (!path) return;
@@ -209,12 +233,13 @@ class PenTool implements Tool {
   }
 
   overlay(ctx: CanvasRenderingContext2D) {
-    const S = (x: number, y: number) => view.toScreen(x, y);
+    const m = this.target?.m ?? identity();
+    const S = (x: number, y: number) => { const d = apply(m, x, y); return view.toScreen(d.x, d.y); };
     if (this.drawn && this.drawn.length > 1) {
-      // The freehand line as it's being drawn.
+      // The freehand line as it's being drawn (in document pixels).
       ctx.save();
       ctx.beginPath();
-      this.drawn.forEach((q, i) => { const s = S(q.x, q.y); if (i) ctx.lineTo(s.x, s.y); else ctx.moveTo(s.x, s.y); });
+      this.drawn.forEach((q, i) => { const s = view.toScreen(q.x, q.y); if (i) ctx.lineTo(s.x, s.y); else ctx.moveTo(s.x, s.y); });
       ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(0,0,0,.5)'; ctx.stroke();
       ctx.lineWidth = 1.4; ctx.strokeStyle = '#2ee6be'; ctx.stroke();
       ctx.restore();
