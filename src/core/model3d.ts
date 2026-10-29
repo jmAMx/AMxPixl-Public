@@ -489,19 +489,21 @@ function boundsOf(W: number, H: number, m: Model3D, mesh: Mesh): Rect {
 const VS = `#version 300 es
 in vec3 aPos; in vec3 aNrm; in vec2 aUV; in float aSolid;
 uniform mat3 uR; uniform vec2 uC; uniform float uF; uniform vec4 uBox; uniform float uZr;
-out vec3 vN; out vec2 vUV; out float vSolid;
+out vec3 vN; out vec2 vUV; out float vSolid; out float vZ;
 void main() {
   vec3 p = uR * vec3(aPos.xy - uC, aPos.z);
   float k = uF / (uF - p.z);
   vec2 s = uC + p.xy * k;
   vN = uR * aNrm;
+  vZ = p.z;
   vUV = aUV;
   vSolid = aSolid;
   gl_Position = vec4((s.x - uBox.x) / uBox.z * 2.0 - 1.0, 1.0 - (s.y - uBox.y) / uBox.w * 2.0, -p.z / uZr, 1.0);
 }`;
 const FS = `#version 300 es
 precision highp float;
-in vec3 vN; in vec2 vUV; in float vSolid; out vec4 o;
+in vec3 vN; in vec2 vUV; in float vSolid; in float vZ; out vec4 o;
+uniform int uOut; uniform vec2 uZ;
 uniform sampler2D uTex; uniform sampler2D uBled; uniform int uPass; uniform mat3 uR;
 uniform vec3 uL; uniform vec4 uCol; uniform vec4 uMat; uniform float uAmb; uniform float uStr;
 void main() {
@@ -525,6 +527,8 @@ void main() {
   // uMat: x diffuse weight, y specular weight, z shininess, w metal (specular takes the surface colour).
   vec3 specCol = mix(vec3(1.0), base, uMat.w);
   vec3 c = base * (uAmb + uMat.x * diff * uStr) + specCol * spec * uStr;
+  // A depth map instead: its nearest point white, its farthest dark grey.
+  if (uOut == 1) c = vec3(mix(0.2, 1.0, clamp((vZ - uZ.x) / max(uZ.y - uZ.x, 1e-3), 0.0, 1.0)));
   o = vec4(c * a, a);
 }`;
 
@@ -566,7 +570,7 @@ class ModelGL {
     ['aPos', 'aNrm', 'aUV', 'aSolid'].forEach((n, i) => gl.bindAttribLocation(p, i, n));
     gl.linkProgram(p);
     if (!gl.getProgramParameter(p, gl.LINK_STATUS)) { console.error('3D shader failed', gl.getProgramInfoLog(p)); return null; }
-    for (const n of ['uR', 'uC', 'uF', 'uBox', 'uZr', 'uTex', 'uBled', 'uPass', 'uL', 'uCol', 'uMat', 'uAmb', 'uStr']) this.u[n] = gl.getUniformLocation(p, n);
+    for (const n of ['uR', 'uC', 'uF', 'uBox', 'uZr', 'uTex', 'uBled', 'uPass', 'uOut', 'uZ', 'uL', 'uCol', 'uMat', 'uAmb', 'uStr']) this.u[n] = gl.getUniformLocation(p, n);
     const mk = () => {
       const t = gl.createTexture();
       gl.bindTexture(gl.TEXTURE_2D, t);
@@ -584,8 +588,8 @@ class ModelGL {
     return gl;
   }
 
-  /** The 3D layer drawn into its box (layer pixels) at `scale` output pixels per layer pixel. */
-  render(src: HTMLCanvasElement, m: Model3D, key: string, scale: number): { canvas: HTMLCanvasElement; box: Rect } | null {
+  /** The 3D layer (or its depth map) drawn into its box (layer pixels) at `scale` output pixels per layer pixel. */
+  render(src: HTMLCanvasElement, m: Model3D, key: string, scale: number, depth = false): { canvas: HTMLCanvasElement; box: Rect } | null {
     const gl = this.init();
     if (!gl || !this.prog) return null;
     const W = src.width, H = src.height;
@@ -630,6 +634,17 @@ class ModelGL {
     gl.uniform1f(this.u.uZr, ext * 2 + 1);
     gl.uniform1i(this.u.uTex, 0);
     gl.uniform1i(this.u.uBled, 1);
+    gl.uniform1i(this.u.uOut, depth ? 1 : 0);
+    if (depth) {
+      // The nearest and farthest the turned object reaches (its box's corners).
+      const P = projector(W, H, m);
+      let z0 = Infinity, z1 = -Infinity;
+      for (const x of [mesh.lo[0], mesh.hi[0]]) for (const y of [mesh.lo[1], mesh.hi[1]]) for (const z of [mesh.lo[2], mesh.hi[2]]) {
+        const pz = P(x, y, z).z;
+        z0 = Math.min(z0, pz); z1 = Math.max(z1, pz);
+      }
+      gl.uniform2f(this.u.uZ, z0, z1);
+    }
     const el = m.light.el * D2R, az = m.light.az * D2R;
     gl.uniform3f(this.u.uL, Math.cos(el) * Math.cos(az), -Math.cos(el) * Math.sin(az), Math.sin(el));
     const col = m.color ? [parseInt(m.color.slice(1, 3), 16) / 255, parseInt(m.color.slice(3, 5), 16) / 255, parseInt(m.color.slice(5, 7), 16) / 255, 1] : [0, 0, 0, 0];
@@ -664,14 +679,15 @@ const outCache = new Map<string, { canvas: HTMLCanvasElement; box: Rect }>();
 
 /**
  * The rendered 3D layer (a copy that stays valid) and its box in layer pixels; cached by its settings and the
- * output resolution (a power of two, so zooming reuses it). Null if WebGL2 isn't available.
+ * output resolution (a power of two, so zooming reuses it). `depth`: its depth map instead (nearest white, farthest
+ * dark grey). Null if WebGL2 isn't available.
  */
-export function renderModel(src: HTMLCanvasElement, m: Model3D, key: string, scale: number): { canvas: HTMLCanvasElement; box: Rect } | null {
+export function renderModel(src: HTMLCanvasElement, m: Model3D, key: string, scale: number, depth = false): { canvas: HTMLCanvasElement; box: Rect } | null {
   const s = 2 ** Math.ceil(Math.log2(Math.max(0.125, Math.min(4, scale))));
-  const ck = `${key}|${src.width}x${src.height}|${JSON.stringify(m)}|${s}`;
+  const ck = `${key}|${src.width}x${src.height}|${JSON.stringify(m)}|${s}|${depth}`;
   const hit = outCache.get(ck);
   if (hit) return hit;
-  const r = engine.render(src, m, key, s);
+  const r = engine.render(src, m, key, s, depth);
   if (!r) return null;
   if (outCache.size > 24) outCache.clear();
   const c = document.createElement('canvas');

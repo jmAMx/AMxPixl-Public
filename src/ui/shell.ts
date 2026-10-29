@@ -10,6 +10,7 @@ import { aboutDialog, animExportDialog, canvasSizeDialog, colorRangeDialog, expo
 import { h, isTyping } from './dom';
 import { historyPanel } from './historypanel';
 import { adjustmentMenuItems, effectMenuItems, layersPanel, looksMenuItems, maskMenuItems } from './layerspanel';
+import { FX_DEFS } from '../core/effects';
 import { propertiesPanel } from './properties';
 import { canvasScrollbars } from './scrollbars';
 import { optionsBar, toolbox, toolboxGrip } from './toolbox';
@@ -117,6 +118,13 @@ const MENUS: MenuDef[] = [
         { label: 'Rotate 3D', onClick: () => { app.setTool('move'); app.opts.move.mode = 'rotate3d'; app.emit('tool'); }, disabled: !app.doc?.activeRaster?.model },
         { label: 'Rasterize 3D', onClick: A.rasterize3D, disabled: !app.doc?.activeRaster?.model },
       ] },
+      { label: 'Depth', sub: () => [
+        { label: 'New Depth Layer', onClick: A.newDepthLayer, disabled: !app.doc },
+        { label: 'Depth from 3D', onClick: A.depthFrom3D, disabled: !app.doc?.activeRaster?.model },
+        { label: 'Use as Depth Map', checked: !!app.doc?.activeRaster?.depth, onClick: A.toggleDepthLayer, disabled: !app.doc?.activeRaster || !!app.doc.activeRaster.model },
+        { sep: true },
+        { label: 'Depth Effects', sub: FX_DEFS.filter((d) => d.group === 'Depth').map((d) => ({ label: d.label, disabled: !app.doc, onClick: () => A.newEffect(d.kind) })) },
+      ] },
       { label: 'Text to Outlines', run: () => { void A.textToOutlines(); }, enabled: () => app.doc?.active?.type === 'text' },
       { label: 'Fit into Shape', run: () => { void A.fitIntoShape(); }, enabled: () => !!app.doc?.activePlaced && (!!app.doc.path || (app.doc.selectedIds().length === 2)) },
       { label: 'Trim to Content', run: () => { void A.trimLayers(); }, enabled: () => app.doc?.active?.type === 'raster' || app.doc?.active?.type === 'group' || (app.doc?.selectedIds().length ?? 0) > 1 },
@@ -201,6 +209,7 @@ const MENUS: MenuDef[] = [
       { label: 'Timeline', accel: 'Ctrl+Shift+T', run: () => app.setPrefs({ dock: { ...app.prefs.dock, timeline: !app.prefs.dock.timeline } }), checked: () => !!app.prefs.dock.timeline },
       { label: 'Play / Pause Animation', run: togglePlay, enabled: () => !!app.doc?.anim },
       { label: 'Onion Skin', run: () => app.setPrefs({ onion: !app.prefs.onion }), checked: () => app.prefs.onion },
+      { label: 'Depth Map', accel: 'Ctrl+Alt+D', run: () => { app.showDepth = !app.showDepth; app.emit('prefs'); }, checked: () => app.showDepth, enabled: hasDoc },
       'sep',
       { label: 'Tool Names', run: () => app.setPrefs({ toolLabels: !app.prefs.toolLabels }), checked: () => app.prefs.toolLabels },
       { label: 'Pixel Grid (600% and up)', accel: "Ctrl+'", run: () => app.setPrefs({ pixelGrid: !app.prefs.pixelGrid }), checked: () => app.prefs.pixelGrid },

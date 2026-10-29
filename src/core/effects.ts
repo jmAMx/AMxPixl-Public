@@ -24,7 +24,9 @@ type Uniforms = Partial<Record<'uA' | 'uB' | 'uC', [number, number, number, numb
 export interface FxDef {
   kind: string;
   label: string;
-  group: 'Film' | 'Lens' | 'CRT & VHS' | 'Damage & Print';
+  group: 'Film' | 'Lens' | 'CRT & VHS' | 'Damage & Print' | 'Depth';
+  /** Reads the document's depth map (`depth(p)` in the shader: 0 far, 1 near). */
+  depth?: boolean;
   params: FxParam[];
   /** Whether the effect uses its random seed (shows a "new variation" button; animates by re-rolling). */
   seeded?: boolean;
@@ -582,9 +584,140 @@ vec4 fx(vec2 p, vec2 d) {
   return vec4(mix(uCol2, ink, m), s.a);
 }`,
   },
+
+  // ---------- Depth (read the depth map: depth layers, white near, black far) ----------
+  {
+    kind: 'depthblur', label: 'Depth Blur', group: 'Depth', depth: true,
+    params: [
+      { key: 'focus', label: 'Focus distance', type: 'range', min: 0, max: 100, value: 70, unit: '%' },
+      { key: 'range', label: 'In focus', type: 'range', min: 0, max: 100, value: 10, unit: '%' },
+      { key: 'amount', label: 'Blur', type: 'range', min: 0, max: 80, value: 16, unit: 'px' },
+      { key: 'bokeh', label: 'Bright highlights', type: 'range', min: 0, max: 100, value: 20, unit: '%' },
+      { key: 'map', label: 'Show what blurs (red)', type: 'bool', value: false },
+    ],
+    uniforms: (v) => ({ uA: [n(v.focus) / 100, n(v.range) / 100, n(v.amount), n(v.bokeh) / 100], uB: [v.map ? 1 : 0, 0, 0, 0] }),
+    glsl: `
+// How far (output pixels) the picture at p is spread: nothing within the in-focus range around the focus distance,
+// growing to the full blur half the depth range away from it.
+float coc(vec2 p) {
+  float dz = max(0.0, abs(depth(p) - uA.x) - uA.y * 0.5);
+  return smoothstep(0.0, 0.5, dz) * uA.z * uScale;
+}
+vec4 fx(vec2 p, vec2 d) {
+  float r0 = coc(p);
+  vec4 c = src(p);
+  if (uB.x > 0.5) { c.rgb = mix(c.rgb, vec3(1.0, 0.15, 0.1), 0.75 * r0 / max(uA.z * uScale, 1e-3)); return c; }
+  if (r0 < 0.5) return c;
+  float z0 = depth(p);
+  vec4 acc = vec4(0.0);
+  float wsum = 0.0;
+  // A disc of samples (golden-angle spiral), premultiplied so transparent edges blend right.
+  for (int i = 0; i < 40; i++) {
+    float t = (float(i) + 0.5) / 40.0;
+    float r = sqrt(t) * r0, a = float(i) * 2.39996;
+    vec2 q = p + vec2(cos(a), sin(a)) * r;
+    vec4 s = src(q);
+    // Something nearer that's sharp mustn't smear into a blurred background: it only counts as far as it blurs.
+    float w = depth(q) > z0 + 0.02 ? clamp(coc(q) - r + 1.0, 0.0, 1.0) : 1.0;
+    w *= 1.0 + uA.w * 6.0 * pow(lum(s.rgb), 4.0);
+    acc += vec4(s.rgb * s.a, s.a) * w;
+    wsum += w;
+  }
+  if (wsum <= 0.0 || acc.a <= 0.0) return c;
+  return vec4(acc.rgb / acc.a, acc.a / wsum);
+}`,
+  },
+  {
+    kind: 'fog', label: 'Fog & Haze', group: 'Depth', depth: true,
+    params: [
+      { key: 'amount', label: 'Thickness', type: 'range', min: 0, max: 100, value: 70, unit: '%' },
+      { key: 'start', label: 'Starts at', type: 'range', min: 0, max: 100, value: 20, unit: '%' },
+      { key: 'end', label: 'Thickest at', type: 'range', min: 0, max: 100, value: 100, unit: '%' },
+      { key: 'color', label: 'Colour', type: 'color', value: '#c8d2dc' },
+      { key: 'soften', label: 'Soften', type: 'range', min: 0, max: 40, value: 4, unit: 'px' },
+    ],
+    aux: { radius: (v) => Math.max(0.5, n(v.soften)) },
+    uniforms: (v) => ({ uA: [n(v.amount) / 100, n(v.start) / 100, Math.max(n(v.start) + 1, n(v.end)) / 100, Math.min(1, n(v.soften) / 4)], uCol1: hex3(v.color) }),
+    glsl: `
+vec4 fx(vec2 p, vec2 d) {
+  vec4 c = src(p);
+  // Distance: 0 near (white in the depth map), 1 far (black).
+  float f = smoothstep(uA.y, uA.z, 1.0 - depth(p)) * uA.x;
+  // Things fade and soften into the fog.
+  c.rgb = mix(c.rgb, aux(p).rgb, f * uA.w);
+  c.rgb = mix(c.rgb, uCol1, f);
+  return c;
+}`,
+  },
+  {
+    kind: 'relief', label: 'Relief Lighting', group: 'Depth', depth: true,
+    params: [
+      { key: 'height', label: 'Height', type: 'range', min: 0, max: 200, value: 40, unit: 'px' },
+      { key: 'angle', label: 'Light direction', type: 'range', min: 0, max: 360, value: 135, unit: '°' },
+      { key: 'elev', label: 'Light height', type: 'range', min: 5, max: 90, value: 40, unit: '°' },
+      { key: 'strength', label: 'Strength', type: 'range', min: 0, max: 200, value: 80, unit: '%' },
+      { key: 'shine', label: 'Shine', type: 'range', min: 0, max: 100, value: 15, unit: '%' },
+      { key: 'smooth', label: 'Smoothing', type: 'range', min: 1, max: 20, value: 2, unit: 'px' },
+    ],
+    uniforms: (v) => ({ uA: [n(v.height), (n(v.angle) * Math.PI) / 180, (n(v.elev) * Math.PI) / 180, n(v.strength) / 100], uB: [n(v.shine) / 100, n(v.smooth), 0, 0] }),
+    glsl: `
+vec4 fx(vec2 p, vec2 d) {
+  vec4 c = src(p);
+  // The depth map as a surface rising toward the viewer, lit from one side.
+  float e = max(1.0, uB.y * uScale), hgt = uA.x * uScale;
+  float gx = (depth(p + vec2(e, 0.0)) - depth(p - vec2(e, 0.0))) * hgt / (2.0 * e);
+  float gy = (depth(p + vec2(0.0, e)) - depth(p - vec2(0.0, e))) * hgt / (2.0 * e);
+  vec3 N = normalize(vec3(-gx, -gy, 1.0));
+  vec3 L = vec3(cos(uA.z) * cos(uA.y), -cos(uA.z) * sin(uA.y), sin(uA.z));
+  // Flat areas keep their colour; slopes toward the light brighten, slopes away darken.
+  float shade = max(dot(N, L), 0.0) / sin(uA.z);
+  float spec = pow(max(dot(N, normalize(L + vec3(0.0, 0.0, 1.0))), 0.0), 40.0) * uB.x * step(0.001, abs(gx) + abs(gy));
+  c.rgb = c.rgb * mix(1.0, shade, uA.w) + spec * uA.w;
+  return c;
+}`,
+  },
+  {
+    kind: 'parallax', label: 'Parallax (3D Photo)', group: 'Depth', depth: true, moves: true,
+    params: [
+      { key: 'amount', label: 'Shift', type: 'range', min: 0, max: 150, value: 20, unit: 'px' },
+      { key: 'focus', label: 'Stays put at', type: 'range', min: 0, max: 100, value: 50, unit: '%' },
+      { key: 'angle', label: 'Direction', type: 'range', min: 0, max: 360, value: 0, unit: '°' },
+      { key: 'move', label: 'When animated', type: 'select', value: 'sway', options: [['sway', 'Sway side to side'], ['circle', 'Circle round']] },
+    ],
+    reach: (v) => 0.02 + n(v.amount) / 1200,
+    uniforms: (v) => ({ uA: [n(v.amount), n(v.focus) / 100, (n(v.angle) * Math.PI) / 180, sel(v.move, ['sway', 'circle'])] }),
+    glsl: `
+vec4 fx(vec2 p, vec2 d) {
+  // The view moves, so near things (white) shift one way and far ones (black) the other; the focus depth stays put.
+  // Animated (uTime is 0 for a still image), it sways back and forth or circles round, starting at the direction set.
+  float ph = uTime * 1.6;
+  vec2 dir = vec2(cos(uA.z), -sin(uA.z));
+  vec2 sh = uA.w < 0.5 ? dir * cos(ph) : vec2(cos(uA.z + ph), -sin(uA.z + ph));
+  vec2 S = sh * uA.x * uScale;
+  // Find what lands here: step from the nearest possible depth to the farthest, and take the first surface hit, so
+  // nearer things cover farther ones. k is how far a point shifts (in units of S): its depth minus the focus.
+  float kHi = 1.0 - uA.y, kLo = -uA.y;
+  float prevK = kHi, prevG = depth(p - S * kHi) - uA.y - kHi;
+  vec2 best = p - S * (depth(p) - uA.y);
+  if (prevG >= 0.0) best = p - S * kHi;
+  else
+  for (int i = 1; i <= 32; i++) {
+    float k = mix(kHi, kLo, float(i) / 32.0);
+    float g = depth(p - S * k) - uA.y - k;
+    if (g >= 0.0 && prevG < 0.0) {
+      float t = prevG / (prevG - g);
+      best = p - S * mix(prevK, k, t);
+      break;
+    }
+    prevK = k; prevG = g;
+  }
+  // Past the canvas edge there's nothing to show: repeat the edge instead of leaving a gap.
+  return src(clamp(best, fromDoc(vec2(0.0)) + 0.5, fromDoc(docSize()) - 0.5));
+}`,
+  },
 ];
 
-export const FX_GROUPS = ['Film', 'Lens', 'CRT & VHS', 'Damage & Print'] as const;
+export const FX_GROUPS = ['Film', 'Lens', 'CRT & VHS', 'Damage & Print', 'Depth'] as const;
 
 export const fxDef = (kind: string) => FX_DEFS.find((d) => d.kind === kind);
 

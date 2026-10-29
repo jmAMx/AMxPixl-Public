@@ -150,8 +150,12 @@ export interface Anim { fps: number; frames: AnimFrame[]; loop: boolean }
 
 /** A layer with a position on the canvas. `box` is a bounding box set by hand (Move tool › Box › Custom), in its own pixels. */
 interface PlacedBase extends LayerBase { t: Xform; box?: Rect | null }
-/** `model`: a 3D layer, its picture turned into a lit 3D object (see model3d.ts); it can't be painted on. */
-export interface RasterLayer extends PlacedBase { type: 'raster'; key: string; warp?: Warp | null; model?: Model3D | null }
+/**
+ * `model`: a 3D layer, its picture turned into a lit 3D object (see model3d.ts); it can't be painted on.
+ * `depth`: a depth layer, greys saying how far things are (white near, black far). It isn't part of the picture: depth
+ * layers together make the document's depth map, which depth effects (blur, fog, relief, parallax) read.
+ */
+export interface RasterLayer extends PlacedBase { type: 'raster'; key: string; warp?: Warp | null; model?: Model3D | null; depth?: boolean }
 /** `envelope`: a warp preset (arc, flag, bulge...) bending the text or shape; it stays editable and refits to edits. */
 export interface TextLayer extends PlacedBase { type: 'text'; text: TextProps; envelope?: Envelope | null }
 export interface ShapeLayer extends PlacedBase { type: 'shape'; shape: ShapeProps; envelope?: Envelope | null }
@@ -166,6 +170,7 @@ export type FilterLayer = AdjustLayer | EffectLayer;
 
 export const isPlaced = (l: Layer | null | undefined): l is PlacedLayer => !!l && (l.type === 'raster' || l.type === 'text' || l.type === 'shape');
 export const isFilter = (l: Layer | null | undefined): l is FilterLayer => !!l && (l.type === 'adjust' || l.type === 'effect');
+export const isDepth = (l: Layer | null | undefined): l is RasterLayer => !!l && l.type === 'raster' && !!l.depth;
 
 /** One step of a selection: shapes are combined in order, added or subtracted. */
 export interface SelOp {

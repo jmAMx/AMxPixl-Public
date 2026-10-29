@@ -71,6 +71,8 @@ class App {
   busy = false;
   /** An animation is playing in the Timeline. */
   playing = false;
+  /** View › Depth Map: the canvas shows the depth map instead of the picture. */
+  showDepth = false;
 
   private handlers = new Map<keyof Events, Set<Handler<never>>>();
 

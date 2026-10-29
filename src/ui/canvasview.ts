@@ -2,6 +2,7 @@ import { app } from '../app';
 import { ctx2d, newCanvas } from '../core/layers';
 import { intersect, invert, mapRect, roundOut, union, type Mat, type Pt, type Rect } from '../core/math';
 import { dirtyPad, renderDoc } from '../core/render';
+import { isDepth } from '../core/types';
 import type { PInfo, Tool } from '../tools/tool';
 import { addGuide } from '../actions';
 import { h } from './dom';
@@ -19,6 +20,8 @@ class CanvasView {
   private onion: HTMLCanvasElement | null = null;
   private compRect = { x: 0, y: 0, w: 0, h: 0 };
   private compScale = 1;
+  /** Whether the composite holds the depth map rather than the picture. */
+  private depthShown = false;
   /** A pointer/slider drag is in progress somewhere in the app. */
   private interacting = false;
   /** Recent full-quality frames took too long (measured as the gap between redraws while dragging). */
@@ -206,7 +209,10 @@ class CanvasView {
       // While dragging something, drop to half resolution if full-quality frames are too slow; sharpen on release.
       const k = this.interacting && this.slowFrames ? 0.5 : 1;
       const viewChanged = k !== this.compScale || vr.x !== this.compRect.x || vr.y !== this.compRect.y || vr.w !== this.compRect.w || vr.h !== this.compRect.h;
-      let full = this.dirty || viewChanged;
+      // The depth map shows instead of the picture while a depth layer is selected, or with View › Depth Map.
+      const depth = app.showDepth || isDepth(d.active);
+      let full = this.dirty || viewChanged || depth !== this.depthShown;
+      this.depthShown = depth;
       if (!full && this.partial) {
         // Only part of the image changed: redraw that part (with a margin for effects that reach across pixels)
         // into a scratch canvas and copy just the changed area into place.
@@ -232,7 +238,7 @@ class CanvasView {
             // Exactly the redraw size: effects process their whole canvas.
             if (tmp.width !== outer.w || tmp.height !== outer.h) { tmp.width = outer.w; tmp.height = outer.h; }
             const t0 = performance.now();
-            renderDoc(d, tmp, [m[0], 0, 0, m[3], m[4] - outer.x, m[5] - outer.y], { screen: true });
+            renderDoc(d, tmp, [m[0], 0, 0, m[3], m[4] - outer.x, m[5] - outer.y], { screen: true, depth });
             const cx = ctx2d(this.composite);
             cx.clearRect(inner.x, inner.y, inner.w, inner.h);
             cx.drawImage(tmp, inner.x - outer.x, inner.y - outer.y, inner.w, inner.h, inner.x, inner.y, inner.w, inner.h);
@@ -249,12 +255,12 @@ class CanvasView {
           this.composite.height = ch;
         }
         const t0 = performance.now();
-        renderDoc(d, this.composite, [z * k, 0, 0, z * k, (dx - vr.x) * k, (dy - vr.y) * k], { screen: true });
+        renderDoc(d, this.composite, [z * k, 0, 0, z * k, (dx - vr.x) * k, (dy - vr.y) * k], { screen: true, depth });
         this.noteFrame(performance.now() - t0, k);
         // Onion skin: the frames either side, tinted (red before, green after), for lining up motion.
         const a = d.anim;
         this.onion = null;
-        if (a && app.prefs.onion && !app.playing && a.frames.length > 1) {
+        if (a && app.prefs.onion && !app.playing && !depth && a.frames.length > 1) {
           const oc = this.onionCanvas;
           if (oc.width !== this.composite.width || oc.height !== this.composite.height) { oc.width = this.composite.width; oc.height = this.composite.height; }
           const ox = ctx2d(oc);
@@ -263,7 +269,7 @@ class CanvasView {
           for (const [f, tint] of [[d.frame - 1, 'rgb(255,60,60)'], [d.frame + 1, 'rgb(40,220,120)']] as [number, string][]) {
             if (f < 0 || f >= a.frames.length) continue;
             // Only what that frame shows and this one doesn't, so the shared background isn't washed out.
-            const only = d.layers.filter((l) => d.shows(l, f) && !d.shows(l));
+            const only = d.layers.filter((l) => d.shows(l, f) && !d.shows(l) && !isDepth(l));
             if (!only.length) continue;
             renderDoc(d, tmp, [z * k, 0, 0, z * k, (dx - vr.x) * k, (dy - vr.y) * k], { screen: true, frame: f, layers: only });
             const tx = ctx2d(tmp);

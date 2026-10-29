@@ -1,8 +1,9 @@
 import { app } from '../app';
 import {
-  applyMask, applyWarp, clearStyles, createAnimation, deleteMask, editBlendIf, editStyles, flipLayer, invertMask, loadLut, rasterize3D, rasterizeLayer,
-  removeWarp, resetTransform, setMaskProp, setPlacedTransform,
+  applyMask, applyWarp, clearStyles, createAnimation, deleteMask, depthFrom3D, editBlendIf, editStyles, flipLayer, invertMask, loadLut, newDepthLayer,
+  rasterize3D, rasterizeLayer, removeWarp, resetTransform, setMaskProp, setPlacedTransform, toggleDepthLayer,
 } from '../actions';
+import { flatLayers } from '../core/document';
 import { defaultStyles } from '../core/styles';
 import { ADJ_LABELS, HSL_BANDS, curveTable, histogram, type Histogram } from '../core/adjustments';
 import type { Doc } from '../core/document';
@@ -15,7 +16,7 @@ import { apply, decompose, mapRect, mul, scale, translate, union, xformMatrix, t
 import { renderDoc } from '../core/render';
 import type { AdjParams, AdjustLayer, Channel, CurvePts, EffectLayer, GradeWheel, Layer, LayerStyles, LevelsCh, PlacedLayer, RasterLayer, ShapeLayer, TextLayer } from '../core/types';
 import type { Model3D } from '../core/model3d';
-import { isPlaced } from '../core/types';
+import { isDepth, isPlaced } from '../core/types';
 import { h } from './dom';
 import { allFontsLoaded, fontList, loadInstalledFonts } from './fonts';
 import { checkbox, icon, numField, seg, slider } from './widgets';
@@ -243,6 +244,7 @@ export function propertiesPanel() {
         colorInput(m.color ?? app.fg, (v) => set({ color: v }, false), e.done)),
       h('div', { class: 'btn-row' },
         h('button', { class: 'btn small', type: 'button', onclick: () => set({ rotX: 0, rotY: 0, rotZ: 0 }) }, 'Face front'),
+        h('button', { class: 'btn small', type: 'button', title: 'A depth layer from it as it\'s turned now, for depth effects (Layer › Depth)', onclick: () => depthFrom3D() }, 'Depth map'),
         h('button', { class: 'btn small', type: 'button', title: 'Bake it as it looks now into pixels you can paint on', onclick: () => rasterize3D() }, 'Rasterize')));
   };
 
@@ -403,7 +405,13 @@ export function propertiesPanel() {
             : h('select', { onchange: (ev: Event) => set(p.key, (ev.target as HTMLSelectElement).value, true) }, ...p.options.map(([v, lab]) => h('option', { value: v, selected: v === cur }, lab))));
       }
     });
-    return section(def.label, ...kids,
+    const hasDepth = flatLayers(app.doc!.layers).some(isDepth);
+    return section(def.label,
+      def.depth ? h('div', { class: 'props-note' }, hasDepth
+        ? 'Reads the depth map (white near, black far). View › Depth Map shows it.'
+        : 'Needs a depth map, and this image has none yet: add one with Layer › Depth › New Depth Layer, or Depth from 3D.',
+      h('div', { class: 'btn-row' }, hasDepth ? null : h('button', { class: 'btn small', type: 'button', onclick: () => newDepthLayer() }, 'New depth layer'))) : null,
+      ...kids,
       h('div', { class: 'btn-row' },
         def.seeded ? h('button', { class: 'btn small', type: 'button', title: 'Re-roll the random pattern', onclick: () => { l.fx = { ...l.fx, seed: Math.floor(Math.random() * 1000) }; e.live(); e.done(); } }, icon('dice'), 'New variation') : null,
         h('button', { class: 'btn small', type: 'button', onclick: () => { l.fx = { ...l.fx, v: Object.fromEntries(def.params.map((p) => [p.key, p.value])) }; e.live(); e.done(); build(true); } }, 'Reset')),
@@ -652,6 +660,11 @@ export function propertiesPanel() {
     if (!doc || !l) { body.replaceChildren(h('div', { class: 'empty-note' }, doc ? 'Select a layer to see its properties.' : 'No image open')); return; }
     const kids: (HTMLElement | null)[] = [];
     if (l.type === 'raster' && l.model) kids.push(modelSection(l));
+    if (isDepth(l)) kids.push(section('Depth layer',
+      h('p', { class: 'props-note' }, 'Part of the depth map, not the picture: white is near, black is far, and greys in between. Paint, fill or use gradients in greys; where it\'s transparent, depth layers below show through. Depth effects (Layer › Depth) read it.'),
+      h('div', { class: 'btn-row' },
+        h('button', { class: 'btn small', type: 'button', title: 'View › Depth Map: see the depth map with other layers selected too', onclick: () => { app.showDepth = !app.showDepth; app.emit('prefs'); build(true); } }, app.showDepth ? 'Hide depth map' : 'Keep depth map shown'),
+        h('button', { class: 'btn small', type: 'button', title: 'Make it an ordinary picture layer again', onclick: () => toggleDepthLayer() }, 'Use as picture'))));
     if (l.type === 'text') kids.push(textSection(l));
     if (l.type === 'shape') kids.push(shapeSection(l));
     if (l.type === 'adjust') kids.push(adjSection(l));

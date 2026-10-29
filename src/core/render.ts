@@ -9,7 +9,7 @@ import { displaySource } from './pyramid';
 import { acquire, composite, gco as gcoOf, like, release } from './scratch';
 import { applyStyles, hasStyles } from './styles';
 import type { BlendIf, BlendMode, FilterLayer, Layer, LayerStyles, Mask } from './types';
-import { isFilter, isPlaced } from './types';
+import { isDepth, isFilter, isPlaced } from './types';
 
 export { gco } from './scratch';
 
@@ -28,6 +28,8 @@ export interface RenderOpts {
   screen?: boolean;
   /** Animation frame to draw (defaults to the document's current frame). */
   frame?: number;
+  /** Draw the depth map (the depth layers, on black) instead of the picture. */
+  depth?: boolean;
 }
 
 /**
@@ -49,7 +51,7 @@ export function dirtyPad(doc: Doc): number {
     }
     if (l.type !== 'effect') continue;
     const v = l.fx.v, def = fxDef(l.fx.kind);
-    if (l.fx.kind === 'distortion' || l.fx.kind === 'crt') return Infinity;
+    if (l.fx.kind === 'distortion' || l.fx.kind === 'crt' || l.fx.kind === 'parallax') return Infinity;
     let p = def?.aux ? def.aux.radius(v) * 3 : 0;
     switch (l.fx.kind) {
       case 'grain': p += n(v.size) * 2; break;
@@ -60,6 +62,8 @@ export function dirtyPad(doc: Doc): number {
       case 'dither': p += n(v.pixel) * 2; break;
       case 'compression': p += n(v.block) * 4; break;
       case 'videodeg': p += n(v.size) * 2; break;
+      case 'depthblur': p += n(v.amount) * 1.2; break;
+      case 'relief': p += n(v.smooth) + 2; break;
     }
     pad = Math.max(pad, p + 4);
   }
@@ -93,6 +97,24 @@ interface Env {
   frame: number;
   /** Seconds into the animation (moves animated effects). */
   time: number;
+  /** Drawing the depth map: only depth layers (and the groups holding them) show. */
+  depthPass: boolean;
+  /** The layers to draw were picked by the caller, so depth layers draw too (as their greys). */
+  explicit: boolean;
+  /** The depth map in target pixels, made the first time a depth effect needs it. */
+  depth?: HTMLCanvasElement;
+}
+
+/** The document's depth map in target pixels: its depth layers drawn over black (far). */
+function depthMap(env: Env, like: HTMLCanvasElement): HTMLCanvasElement {
+  if (env.depth) return env.depth;
+  const c = acquire(like.width, like.height);
+  const x = ctx2d(c);
+  x.fillStyle = '#000';
+  x.fillRect(0, 0, c.width, c.height);
+  renderList(env.doc.layers, c, { ...env, depthPass: true, out: c, done: false, stopAt: undefined, depth: undefined });
+  env.depth = c;
+  return c;
 }
 
 // ---------- masks ----------
@@ -131,7 +153,7 @@ function applyMask(c: HTMLCanvasElement, m: Mask, env: Env) {
 
 function filterResult(l: FilterLayer, target: HTMLCanvasElement, env: Env): HTMLCanvasElement | null {
   if (l.type === 'adjust') return glfx.apply(target, l.adj, (k) => env.doc.pool.get(k));
-  return fxEngine.apply(target, l.fx, env.scale, env.docRect, env.time);
+  return fxEngine.apply(target, l.fx, env.scale, env.docRect, env.time, fxDef(l.fx.kind)?.depth ? depthMap(env, target) : undefined);
 }
 
 /** target = mix(target, result, opacity × mask), done with premultiplied adds so transparency stays exact. */
@@ -172,7 +194,9 @@ function drawFilter(l: FilterLayer, target: HTMLCanvasElement, env: Env) {
 
 // ---------- layers, groups, clipping ----------
 
-const shows = (l: Layer, env: Env) => (env.doc.shows(l, env.frame) || env.includeHidden) && l.opacity > 0;
+const shows = (l: Layer, env: Env) => (env.doc.shows(l, env.frame) || env.includeHidden) && l.opacity > 0
+  // Depth layers make up the depth map and aren't part of the picture (unless asked for by name).
+  && (env.depthPass ? l.type === 'group' || isDepth(l) : env.explicit || !isDepth(l));
 
 /**
  * Finishes an isolated layer buffer: mask, Blend If (against what's already in `target`), styles, then composites
@@ -291,7 +315,7 @@ function renderList(list: Layer[], target: HTMLCanvasElement, env: Env) {
  * target's resolution, so on-screen previews stay fast regardless of image size.
  */
 export function renderDoc(doc: Doc, out: HTMLCanvasElement, view: Mat, opts: RenderOpts = {}) {
-  const pad = opts.clip === false ? 0 : overscan(doc, out, view, opts);
+  const pad = opts.clip === false || opts.depth ? 0 : overscan(doc, out, view, opts);
   if (pad > 0) {
     // Render with a margin past the canvas (unclipped) so effects can read beyond its edge, then keep the canvas.
     const big = acquire(out.width + pad * 2, out.height + pad * 2);
@@ -330,8 +354,25 @@ export function renderDoc(doc: Doc, out: HTMLCanvasElement, view: Mat, opts: Ren
     includeHidden: !!opts.includeHidden, stopAt: opts.stopAt, out, done: false,
     nearest: opts.nearest ?? doc.resample === 'nearest', screen: !!opts.screen,
     frame: opts.frame ?? doc.frame, time: frameTime(doc, opts.frame ?? doc.frame),
+    depthPass: !!opts.depth, explicit: !!opts.layers,
   };
+  if (opts.depth) {
+    // Far (black) wherever no depth layer says otherwise.
+    ctx.save();
+    setT(ctx, view);
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, doc.width, doc.height);
+    ctx.restore();
+  }
   renderList(opts.layers ?? doc.layers, out, env);
+  if (opts.depth) {
+    // Shown as the depth effects read it: brightness only (a colour painted on a depth layer is a grey there).
+    const g = acquire(out.width, out.height);
+    composite(g, out, 'normal', 1, 'copy');
+    composite(out, g, 'normal', 1, 'copy', 'grayscale(1)');
+    release(g);
+  }
+  if (env.depth) release(env.depth);
   ctx.restore();
 }
 

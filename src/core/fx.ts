@@ -12,6 +12,7 @@ precision highp float;
 out vec4 o;
 uniform sampler2D uSrc;
 uniform sampler2D uAux;
+uniform sampler2D uDepth;
 uniform vec2 uRes;
 uniform float uScale;
 uniform vec4 uDoc;
@@ -27,6 +28,8 @@ vec4 src(vec2 p) { return texOut(uSrc, p); }
 vec4 aux(vec2 p) { return texOut(uAux, p); }
 vec4 srcDoc(vec2 d) { return texOut(uSrc, fromDoc(d)); }
 float lum(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
+// The depth map (0 far, 1 near) at an output pixel; only set for effects that use depth.
+float depth(vec2 p) { return lum(texOut(uDepth, p).rgb); }
 float hash(vec2 q) {
   vec3 p3 = fract(vec3(q.xyx) * 0.1031 + uSeed * 0.0137);
   p3 += dot(p3, p3.yzx + 33.33);
@@ -65,6 +68,7 @@ class FXEngine {
   private progs = new Map<string, Prog | null>();
   private srcTex!: WebGLTexture;
   private auxTex!: WebGLTexture;
+  private depthTex!: WebGLTexture;
   private blur = document.createElement('canvas');
   private stage = document.createElement('canvas');
   maxSize = 4096;
@@ -98,6 +102,7 @@ class FXEngine {
     };
     this.srcTex = tex();
     this.auxTex = tex();
+    this.depthTex = tex();
     this.maxSize = gl.getParameter(gl.MAX_TEXTURE_SIZE);
   }
 
@@ -120,7 +125,7 @@ class FXEngine {
       gl.linkProgram(p);
       if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(`${key}: ${gl.getProgramInfoLog(p)}`);
       prog = { p, u: new Map() };
-      for (const n of ['uSrc', 'uAux', 'uRes', 'uScale', 'uDoc', 'uSeed', 'uTime', 'uA', 'uB', 'uC', 'uCol1', 'uCol2', 'uThreshold']) prog.u.set(n, gl.getUniformLocation(p, n));
+      for (const n of ['uSrc', 'uAux', 'uDepth', 'uRes', 'uScale', 'uDoc', 'uSeed', 'uTime', 'uA', 'uB', 'uC', 'uCol1', 'uCol2', 'uThreshold']) prog.u.set(n, gl.getUniformLocation(p, n));
     } catch (err) {
       console.error('Effect shader failed', err);
     }
@@ -146,8 +151,12 @@ class FXEngine {
     gl.bindTexture(gl.TEXTURE_2D, this.srcTex);
     gl.activeTexture(gl.TEXTURE1);
     gl.bindTexture(gl.TEXTURE_2D, this.auxTex);
+    gl.activeTexture(gl.TEXTURE2);
+    gl.bindTexture(gl.TEXTURE_2D, this.depthTex);
     gl.uniform1i(prog.u.get('uSrc')!, 0);
     gl.uniform1i(prog.u.get('uAux')!, 1);
+    const ud = prog.u.get('uDepth');
+    if (ud) gl.uniform1i(ud, 2);
     gl.uniform2f(prog.u.get('uRes')!, w, h);
     gl.uniform1f(prog.u.get('uScale')!, env.scale);
     gl.uniform4f(prog.u.get('uDoc')!, ...env.doc);
@@ -181,9 +190,10 @@ class FXEngine {
   /**
    * Applies an effect to `src`. `docRect` is the document's rectangle in `src` pixels and `scale` how many of
    * those pixels one document pixel covers. `time` (seconds) is where an animation is: with the effect's motion on,
-   * textures re-roll and moving parts move. Returns a canvas the same size as `src`, or null if unavailable.
+   * textures re-roll and moving parts move. `depth` is the depth map, the same size as `src`, for effects that use it.
+   * Returns a canvas the same size as `src`, or null if unavailable.
    */
-  apply(src: HTMLCanvasElement, fx: FxParams, scale: number, docRect: { x: number; y: number; w: number; h: number }, time = 0): HTMLCanvasElement | null {
+  apply(src: HTMLCanvasElement, fx: FxParams, scale: number, docRect: { x: number; y: number; w: number; h: number }, time = 0, depth?: HTMLCanvasElement): HTMLCanvasElement | null {
     const def: FxDef | undefined = fxDef(fx.kind);
     if (!def || !this.gl || src.width > this.maxSize || src.height > this.maxSize) return null;
     const prog = this.program(def.kind, def.glsl);
@@ -195,6 +205,7 @@ class FXEngine {
     // Random textures (grain, dust, glitches) change `flicker` times a second.
     const seed = m && def.seeded ? fx.seed + Math.floor(time * m.flicker) * 61 : fx.seed;
     this.upload(this.srcTex, src, 0);
+    if (depth) this.upload(this.depthTex, depth, 2);
     if (def.aux) {
       const radius = Math.max(0.5, def.aux.radius(fx.v) * scale);
       let auxSrc: HTMLCanvasElement = src;

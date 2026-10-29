@@ -568,6 +568,52 @@ export function rasterize3D() {
   doc.commit('Rasterize 3D');
 }
 
+// ---------- depth ----------
+
+/**
+ * Layer › Depth › New Depth Layer: a depth layer the size of the canvas, started as level ground (black, far, at the
+ * top; white, near, at the bottom), to paint over in greys.
+ */
+export function newDepthLayer() {
+  const doc = need(); if (!doc) return;
+  const l = doc.newRasterLayer(doc.nextName('Depth'));
+  const x = ctx2d(doc.canvasOf(l));
+  const g = x.createLinearGradient(0, 0, 0, doc.height);
+  g.addColorStop(0, '#000'); g.addColorStop(1, '#fff');
+  x.fillStyle = g;
+  x.fillRect(0, 0, doc.width, doc.height);
+  l.depth = true;
+  doc.insertLayer(l);
+  doc.commit('New depth layer');
+  toast('Depth layer: white is near, black is far. Paint on it in greys; the canvas shows the depth map while it\'s selected.');
+}
+
+/** Layer › Depth › Use as Depth Map: the active image layer becomes a depth layer (or goes back to a picture). */
+export function toggleDepthLayer() {
+  const doc = need(); const l = doc?.activeRaster;
+  if (!doc || !l) { toast('Select an image layer to use as a depth map.'); return; }
+  if (l.model) { toast('A 3D layer can\'t be a depth map. Use Layer › Depth › Depth from 3D.'); return; }
+  l.depth = !l.depth;
+  doc.commit(l.depth ? 'Use as depth map' : 'Stop using as depth map');
+}
+
+/** Layer › Depth › Depth from 3D: a depth layer from the active 3D layer as it's turned now (nearest point white). */
+export function depthFrom3D() {
+  const doc = need(); const l = doc?.activeRaster;
+  if (!doc || !l?.model) { toast('Select a 3D layer first.'); return; }
+  const r = renderModel(doc.canvasOf(l), l.model, l.key, 1, true);
+  if (!r) { toast('3D needs WebGL2, which isn\'t available here.', 'error'); return; }
+  const p = apply(layerMatrix(l), r.box.x, r.box.y);
+  const k = r.box.w / r.canvas.width;
+  const layer: RasterLayer = {
+    id: newId(), type: 'raster', name: `${l.name} depth`, visible: true, opacity: 1, blend: 'normal',
+    key: doc.addCanvas(cloneCanvas(r.canvas)), t: { ...l.t, x: p.x, y: p.y, sx: l.t.sx * k, sy: l.t.sy * k }, depth: true,
+  };
+  doc.insertLayer(layer, l.id);
+  doc.setActive(layer.id);
+  doc.commit('Depth from 3D');
+}
+
 /**
  * Type › Text to Outlines: the active text layer's letters, from the font file, become an outline shape you can
  * reshape point by point with the Paths tool. Its colour, styles, mask, transform and warp come along; the text

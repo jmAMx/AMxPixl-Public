@@ -10,6 +10,12 @@ Each version's section becomes its release notes (`scripts/release.ps1` copies i
 - Switch a 3D layer between Inflate, Extrude and Revolve at any time in Properties › 3D.
 - **Rotate 3D** (Move tool): drag on the canvas to turn a 3D layer, Shift+drag to spin it, and **Face front** to straighten it. The light stays put, so it shades as it turns.
 - **Rasterize 3D** bakes a 3D layer into ordinary pixels you can paint on. 3D layers save in .pixl files and come back exactly as they were.
+- **Depth maps** (Layer › Depth): a depth layer holds greys for how far things are (white near, black far). It isn't part of the picture: all depth layers together make the image's depth map. **New Depth Layer** starts one as level ground to paint over with any brush, fill or gradient. **Depth from 3D** makes one from a 3D layer as it's turned. **Use as Depth Map** turns any image layer into one, such as a depth map made in another app. While a depth layer is selected the canvas shows the depth map, and View › Depth Map (Ctrl+Alt+D) shows it any time.
+- **Depth effects** (Layer › Depth › Depth Effects, or New Effect Layer › Depth):
+  - **Depth Blur**: a camera's shallow focus. Pick the focus distance and how much stays sharp. Nearer and farther things blur more the further they are from it, with brighter highlights if you like. "Show what blurs" tints the blurred parts red while you set it up.
+  - **Fog & Haze**: fades distant things into a colour, from where it starts to where it's thickest.
+  - **Relief Lighting**: lights the depth map as a surface from one side, for embossed shading.
+  - **Parallax (3D Photo)**: shifts near and far things against each other as if the camera moved. With Animate on, it sways or circles across the Timeline's frames and in GIF and video exports.
 
 ## 0.7.0
 
