@@ -2,6 +2,12 @@
 
 Each version's section becomes its release notes (`scripts/release.ps1` copies it to the download page).
 
+## Next (0.8.3, in progress)
+
+- **Safer crash recovery**: unsaved work is now autosaved as plain files in Pixl's app-data folder (a "recovery" folder), not in the window's built-in storage, which a crash, a power cut or ending Pixl from Task Manager can damage, just when the copies are needed. Copies left in the old place by an earlier version can still be recovered.
+- **Saves survive power cuts**: images you save, the settings file and recovery copies are made to reach the disk before they replace the old file, so a power cut can't leave an empty or half-written file.
+- **No lost last setting**: a setting changed just before closing Pixl is written straight away instead of a moment later.
+
 ## 0.8.2
 
 Faster, with nothing lost, measured on older hardware (a 4-core desktop processor with integrated graphics):

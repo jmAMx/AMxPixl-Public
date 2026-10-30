@@ -44,8 +44,23 @@ fn read_file(path: String) -> Result<tauri::ipc::Response, String> {
   std::fs::read(&path).map(tauri::ipc::Response::new).map_err(|e| e.to_string())
 }
 
-/// Writes the raw request body to the path in the `path` header, via a temporary file so a failed save
-/// never leaves a half-written file behind.
+/// Writes a file so it's never left half-written: into a temporary file first, made to reach the disk (not just
+/// Windows' memory, which a power cut would lose), then swapped into place in one step. An abrupt end at any
+/// point leaves either the old file or the new one.
+fn write_safely(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+  use std::io::Write;
+  let tmp = std::path::PathBuf::from(format!("{}.saving", path.display()));
+  let written = (|| {
+    let mut f = std::fs::File::create(&tmp)?;
+    f.write_all(bytes)?;
+    f.sync_all()
+  })();
+  written.and_then(|_| std::fs::rename(&tmp, path)).inspect_err(|_| {
+    let _ = std::fs::remove_file(&tmp);
+  })
+}
+
+/// Writes the raw request body to the path in the `path` header (see write_safely).
 #[tauri::command]
 fn write_file(request: tauri::ipc::Request<'_>) -> Result<(), String> {
   let path = request
@@ -57,12 +72,72 @@ fn write_file(request: tauri::ipc::Request<'_>) -> Result<(), String> {
   let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
     return Err("expected raw bytes".into());
   };
-  let tmp = format!("{path}.saving");
-  std::fs::write(&tmp, bytes).map_err(|e| e.to_string())?;
-  std::fs::rename(&tmp, &path).map_err(|e| {
-    let _ = std::fs::remove_file(&tmp);
-    e.to_string()
-  })
+  write_safely(std::path::Path::new(&path), bytes).map_err(|e| e.to_string())
+}
+
+// ---------- crash recovery ----------
+// Unsaved work is copied to plain files in the app's data folder ("recovery", a folder per image), rather than the
+// web view's own storage, which an abrupt end (a crash, a power cut, ending the task) can damage, just when the
+// copies are needed.
+
+fn recovery_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
+  app.path().app_data_dir().map(|d| d.join("recovery")).map_err(|e| e.to_string())
+}
+
+/// Only plain names (letters, digits, - and _ and a dot), so nothing can reach outside the recovery folder.
+fn plain(name: &str) -> Result<&str, String> {
+  let ok = !name.is_empty() && name.len() < 200 && !name.starts_with('.')
+    && name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
+  if ok { Ok(name) } else { Err(format!("not a plain name: {name}")) }
+}
+
+/// Writes one file of an image's recovery copy (the `uid` and `name` headers say which), safely.
+#[tauri::command]
+fn recovery_write(app: tauri::AppHandle, request: tauri::ipc::Request<'_>) -> Result<(), String> {
+  let header = |k: &str| request.headers().get(k).and_then(|v| v.to_str().ok()).map(str::to_string).ok_or(format!("missing {k}"));
+  let (uid, name) = (header("uid")?, header("name")?);
+  let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else { return Err("expected raw bytes".into()) };
+  let dir = recovery_dir(&app)?.join(plain(&uid)?);
+  std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+  write_safely(&dir.join(plain(&name)?), bytes).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn recovery_read(app: tauri::AppHandle, uid: String, name: String) -> Result<tauri::ipc::Response, String> {
+  let path = recovery_dir(&app)?.join(plain(&uid)?).join(plain(&name)?);
+  std::fs::read(path).map(tauri::ipc::Response::new).map_err(|e| e.to_string())
+}
+
+/// The images with a recovery copy (those whose record was written), or the files in one image's copy.
+#[tauri::command]
+fn recovery_list(app: tauri::AppHandle, uid: Option<String>) -> Result<Vec<String>, String> {
+  let base = recovery_dir(&app)?;
+  let dir = match &uid { Some(u) => base.join(plain(u)?), None => base };
+  let Ok(rd) = std::fs::read_dir(&dir) else { return Ok(Vec::new()) };
+  let mut out = Vec::new();
+  for e in rd.flatten() {
+    let name = e.file_name().to_string_lossy().into_owned();
+    if uid.is_some() {
+      if !name.ends_with(".saving") { out.push(name); }
+    } else if e.path().join("record.json").is_file() {
+      out.push(name);
+    }
+  }
+  Ok(out)
+}
+
+/// Deletes one file of an image's recovery copy, or (without a name) the whole copy.
+#[tauri::command]
+fn recovery_delete(app: tauri::AppHandle, uid: String, name: Option<String>) -> Result<(), String> {
+  let dir = recovery_dir(&app)?.join(plain(&uid)?);
+  let r = match name {
+    Some(n) => std::fs::remove_file(dir.join(plain(&n)?)),
+    None => std::fs::remove_dir_all(&dir),
+  };
+  match r {
+    Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.to_string()),
+    _ => Ok(()),
+  }
 }
 
 /// Installed fonts as Windows lists them (for turning text into outlines): ("Segoe UI Bold (TrueType)", file path),
@@ -112,9 +187,7 @@ fn write_settings(app: tauri::AppHandle, json: String) -> Result<(), String> {
   if let Some(dir) = path.parent() {
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
   }
-  let tmp = path.with_extension("json.saving");
-  std::fs::write(&tmp, json).map_err(|e| e.to_string())?;
-  std::fs::rename(&tmp, &path).map_err(|e| e.to_string())
+  write_safely(&path, json.as_bytes()).map_err(|e| e.to_string())
 }
 
 /// The status bar's readouts: [GPU Pixl %, GPU PC %, CPU Pixl %, CPU PC %, memory Pixl MB, memory PC %], each null
@@ -158,7 +231,8 @@ pub fn run() {
       }
       Ok(())
     })
-    .invoke_handler(tauri::generate_handler![take_open_files, read_file, write_file, read_settings, write_settings, font_files, open_release_page, meters])
+    .invoke_handler(tauri::generate_handler![take_open_files, read_file, write_file, read_settings, write_settings, font_files, open_release_page, meters,
+      recovery_write, recovery_read, recovery_list, recovery_delete])
     .run(tauri::generate_context!())
     .expect("error while running AMxPixl");
 }

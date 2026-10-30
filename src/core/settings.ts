@@ -35,16 +35,29 @@ function allSettings(): [string, string][] {
   return out;
 }
 
+/** A settings change not yet in the file. */
+let pending = false;
+
+async function writeSettings() {
+  pending = false;
+  try {
+    const { invoke } = await import('@tauri-apps/api/core');
+    await invoke('write_settings', { json: JSON.stringify(Object.fromEntries(allSettings())) });
+  } catch { pending = true; /* the next change (or closing) tries again */ }
+}
+
 /** Writes the settings file shortly (several changes in a row are saved once). */
 export function saveSettingsSoon() {
   if (!isDesktop) return;
+  pending = true;
   clearTimeout(timer);
-  timer = window.setTimeout(async () => {
-    try {
-      const { invoke } = await import('@tauri-apps/api/core');
-      await invoke('write_settings', { json: JSON.stringify(Object.fromEntries(allSettings())) });
-    } catch { /* the next change tries again */ }
-  }, 400);
+  timer = window.setTimeout(() => { void writeSettings(); }, 400);
+}
+
+/** Writes any settings change still waiting, now (when the app closes). */
+export async function flushSettings() {
+  clearTimeout(timer);
+  if (pending) await writeSettings();
 }
 
 /** localStorage.setItem for a setting, also saved to the settings file. Throws like setItem when storage is full. */

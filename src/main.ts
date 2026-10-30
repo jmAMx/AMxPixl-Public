@@ -13,6 +13,7 @@ import { textTool } from './tools/text';
 import type { Doc } from './core/document';
 import { fileName, isDesktop, onOpenFiles, readPath, takeLaunchFiles } from './core/platform';
 import { autosave, clearRecovery, listRecovery, restoreRecovery } from './core/recovery';
+import { flushSettings } from './core/settings';
 import { dueForCheck } from './core/update';
 import { view } from './ui/canvasview';
 import { updateDialog } from './ui/dialogs';
@@ -116,15 +117,20 @@ if (isDesktop) {
   import('@tauri-apps/api/window').then(({ getCurrentWindow }) => {
     const win = getCurrentWindow();
     win.onCloseRequested(async (e) => {
-      const dirty = app.docs.filter((d) => d.dirty);
-      if (!dirty.length) return;
       e.preventDefault();
-      const what = dirty.length === 1 ? `"${dirty[0].name}" has` : `${dirty.length} images have`;
-      const r = await ask('Unsaved changes', `${what} unsaved changes. Close AMxPixl anyway?`, [
-        { id: 'cancel', label: 'Cancel', primary: true }, { id: 'close', label: 'Close without saving', danger: true },
-      ]);
-      // Choosing not to save is deliberate, so don't offer that work back next time.
-      if (r === 'close') { await Promise.all(dirty.map((d) => clearRecovery(d).catch(() => {}))); win.destroy(); }
+      const dirty = app.docs.filter((d) => d.dirty);
+      if (dirty.length) {
+        const what = dirty.length === 1 ? `"${dirty[0].name}" has` : `${dirty.length} images have`;
+        const r = await ask('Unsaved changes', `${what} unsaved changes. Close AMxPixl anyway?`, [
+          { id: 'cancel', label: 'Cancel', primary: true }, { id: 'close', label: 'Close without saving', danger: true },
+        ]);
+        if (r !== 'close') return;
+        // Choosing not to save is deliberate, so don't offer that work back next time.
+        await Promise.all(dirty.map((d) => clearRecovery(d).catch(() => {})));
+      }
+      // A setting changed in the last moment (it's normally written 0.4 s later) is written before the window goes.
+      await flushSettings().catch(() => {});
+      win.destroy();
     });
   });
   // Keep browser-engine shortcuts (reload, print, find, view source) from firing inside the app. This runs after
