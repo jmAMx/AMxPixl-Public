@@ -2,11 +2,16 @@
 
 Each version's section becomes its release notes (`scripts/release.ps1` copies it to the download page).
 
-## Next (0.8.3, in progress)
+## 0.8.3
+
+Safer, plus loose ends.
 
 - **Safer crash recovery**: unsaved work is now autosaved as plain files in Pixl's app-data folder (a "recovery" folder), not in the window's built-in storage, which a crash, a power cut or ending Pixl from Task Manager can damage, just when the copies are needed. Copies left in the old place by an earlier version can still be recovered.
 - **Saves survive power cuts**: images you save, the settings file and recovery copies are made to reach the disk before they replace the old file, so a power cut can't leave an empty or half-written file.
 - **No lost last setting**: a setting changed just before closing Pixl is written straight away instead of a moment later.
+- **Text to Outlines works with every installed font**, including fonts that come as a family in one file (font collections, .ttc, such as Cambria and Cambria Math), and with **text on a path**: each letter's outline lands where the letter stands on the curve.
+- **Parallax fills uncovered areas from behind.** Where a near object moves aside, the gap now shows the background stretched in from beside it, instead of a dark smear of the object's edge.
+- **Smoother Inflate shading**: near the edges, the surface's shading follows the shape as it's actually built, which removes ripples along slanted edges.
 
 ## 0.8.2
 
