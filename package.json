@@ -4,7 +4,7 @@
   "description": "Pixl Editor: a lightweight, non-destructive image editor.",
   "private": true,
   "license": "MIT",
-  "version": "0.8.3",
+  "version": "0.8.4",
   "type": "module",
   "scripts": {
     "dev": "vite",

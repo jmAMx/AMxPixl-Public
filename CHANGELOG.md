@@ -2,6 +2,15 @@
 
 Each version's section becomes its release notes (`scripts/release.ps1` copies it to the download page).
 
+## 0.8.4
+
+Smoother Inflate edges.
+
+- **No more streaks along the sides of a strongly turned Inflate shape.** Near the edge, the rounding is now measured from the picture's traced outline, which is evened out first, instead of from the sampling grid, so it no longer comes out a little different in each row. The triangles beside the edge are split finer to follow the steep rounding, and each pixel there is shaded from the exact rounded shape.
+- **Straight, smooth outlines at high zoom**, instead of a zig-zag that followed the sampling grid.
+- **No dark marks** where an edge point sat exactly on the outline.
+- **Same speed where it counts**: turning a shape and dragging Depth or Roundness cost about the same as before (the finer edge is built once per shape and only raised to each new depth). Making an Inflate layer, or changing its picture, takes a little longer when the shape fills its layer (about 70 ms instead of 30 ms for a typical shape on older hardware) and about the same when it's a small shape on a large layer. Extrude is made faster: the picture's outline is now traced only where the shape is.
+
 ## 0.8.3
 
 Safer, plus loose ends.
