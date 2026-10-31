@@ -701,20 +701,45 @@ vec4 fx(vec2 p, vec2 d) {
   // Find what lands here: step from the nearest possible depth to the farthest, and take the first surface hit, so
   // nearer things cover farther ones. k is how far a point shifts (in units of S): its depth minus the focus.
   float kHi = 1.0 - uA.y, kLo = -uA.y;
-  float prevK = kHi, prevG = depth(p - S * kHi) - uA.y - kHi;
+  float prevD = depth(p - S * kHi);
+  float prevK = kHi, prevG = prevD - uA.y - kHi;
   vec2 best = p - S * (depth(p) - uA.y);
+  // Where something nearer moved away and uncovered what was behind it, there's no picture of the hidden part. A
+  // crossing at a sudden jump in depth is such an edge, not a surface: keep looking for what's behind it, and if
+  // nothing turns up, stretch the background in from the far side of the edge (not the near thing's border).
+  bool hole = false;
+  vec2 behind = best;
   if (prevG >= 0.0) best = p - S * kHi;
   else
   for (int i = 1; i <= 32; i++) {
     float k = mix(kHi, kLo, float(i) / 32.0);
-    float g = depth(p - S * k) - uA.y - k;
+    float dk = depth(p - S * k);
+    float g = dk - uA.y - k;
     if (g >= 0.0 && prevG < 0.0) {
-      float t = prevG / (prevG - g);
-      best = p - S * mix(prevK, k, t);
-      break;
+      if (abs(dk - prevD) < 0.06) {
+        float t = prevG / (prevG - g);
+        best = p - S * mix(prevK, k, t);
+        hole = false;
+        break;
+      }
+      // A jump, but this spot may still be on the nearer side's surface (its edge, between the two steps): look
+      // exactly where that surface would be, and take it if it's really there.
+      float dn = max(dk, prevD), ks = dn - uA.y;
+      if (ks <= prevK + 1e-4 && ks >= k - 1e-4 && abs(depth(p - S * ks) - dn) < 0.06) {
+        best = p - S * ks;
+        hole = false;
+        break;
+      }
+      if (!hole) {
+        hole = true;
+        vec2 near = p - S * (dk > prevD ? k : prevK), far = p - S * (dk > prevD ? prevK : k);
+        // A few pixels further out, clear of the edge's soft blend (in the picture and the depth map).
+        behind = far + normalize(far - near + 1e-6) * 3.0;
+      }
     }
-    prevK = k; prevG = g;
+    prevK = k; prevG = g; prevD = dk;
   }
+  if (hole) best = behind;
   // Past the canvas edge there's nothing to show: repeat the edge instead of leaving a gap.
   return src(clamp(best, fromDoc(vec2(0.0)) + 0.5, fromDoc(docSize()) - 0.5));
 }`,

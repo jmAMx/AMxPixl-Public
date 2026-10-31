@@ -683,10 +683,9 @@ export function depthFrom3D() {
 export async function textToOutlines() {
   const doc = need(); const l = doc?.active;
   if (!doc || l?.type !== 'text') { toast('Select a text layer to turn into outlines.'); return; }
-  if (l.text.onPath) { toast('Text on a path can\'t be turned into outlines yet.'); return; }
   const font = await loadFont(l.text.font, l.text.weight, l.text.italic);
   if (!app.docs.includes(doc)) return;
-  if (!font) { toast(`Couldn't read the font file for "${l.text.font}" (it may not be installed, or it's a font collection that can't be read).`, 'error'); return; }
+  if (!font) { toast(`Couldn't read the font file for "${l.text.font}" (it may not be installed, or its file can't be read).`, 'error'); return; }
   const subs = outlineText(l.text, font);
   if (!subs.length) { toast('There are no letters to outline.'); return; }
   const copy = cloneLayer(doc, l) as Layer as ShapeLayer & { text?: unknown };

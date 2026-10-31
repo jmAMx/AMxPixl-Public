@@ -194,6 +194,38 @@ class MeshBuilder {
     this.ix[this.ni++] = a; this.ix[this.ni++] = b; this.ix[this.ni++] = c;
   }
 
+  /** Marks where a part of the mesh starts, for normalsFromFaces. */
+  get mark() { return { v: this.nv, i: this.ni }; }
+
+  /**
+   * Gives the vertices made since `from` the average facing of the triangles around them (each weighted by its
+   * area), turned to face `side` (+1 toward the viewer, -1 away). Vertices for which `keep` says so are left as
+   * they are.
+   */
+  normalsFromFaces(from: { v: number; i: number }, side: 1 | -1, keep: (v: number) => boolean) {
+    const a = this.v, n = this.nv - from.v;
+    const acc = new Float32Array(n * 3);
+    for (let t = from.i; t < this.ni; t += 3) {
+      const i0 = this.ix[t] * STRIDE, i1 = this.ix[t + 1] * STRIDE, i2 = this.ix[t + 2] * STRIDE;
+      const ux = a[i1] - a[i0], uy = a[i1 + 1] - a[i0 + 1], uz = a[i1 + 2] - a[i0 + 2];
+      const vx = a[i2] - a[i0], vy = a[i2 + 1] - a[i0 + 1], vz = a[i2 + 2] - a[i0 + 2];
+      let nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+      if (nz * side < 0) { nx = -nx; ny = -ny; nz = -nz; }
+      for (const vi of [this.ix[t], this.ix[t + 1], this.ix[t + 2]]) {
+        const k = (vi - from.v) * 3;
+        if (k < 0 || k >= acc.length) continue;
+        acc[k] += nx; acc[k + 1] += ny; acc[k + 2] += nz;
+      }
+    }
+    for (let i = 0; i < n; i++) {
+      if (keep(from.v + i)) continue;
+      const k = i * 3, l = Math.hypot(acc[k], acc[k + 1], acc[k + 2]);
+      if (!l) continue;
+      const o = (from.v + i) * STRIDE;
+      a[o + 3] = acc[k] / l; a[o + 4] = acc[k + 1] / l; a[o + 5] = acc[k + 2] / l;
+    }
+  }
+
   finish(area: [number, number, number, number]): Mesh {
     const lo: [number, number, number] = [Infinity, Infinity, Infinity], hi: [number, number, number] = [-Infinity, -Infinity, -Infinity];
     const a = this.v;
@@ -254,6 +286,7 @@ function heightSurfaces(g: Grid, h: Float32Array, W: number, H: number, out: Mes
   const used = (i: number, j: number) => ins(i, j) || !!rim?.on[j * gw + i];
   // Each grid sample's vertex on this side, made the first time a triangle needs it.
   const made = new Int32Array(gw * gh);
+  const onRim = new Set<number>();
   let side: 1 | -1 = 1;
   const vert = (i: number, j: number) => {
     const k = j * gw + i;
@@ -262,7 +295,9 @@ function heightSurfaces(g: Grid, h: Float32Array, W: number, H: number, out: Mes
     if (rim?.on[k]) {
       // On the rim: upright, facing outward.
       const x = rim.pos[k * 2], y = rim.pos[k * 2 + 1];
-      return (made[k] = out.vert(x, y, 0, rim.nrm[k * 2], rim.nrm[k * 2 + 1], 0, x / W, y / H, kind, x, y));
+      made[k] = out.vert(x, y, 0, rim.nrm[k * 2], rim.nrm[k * 2 + 1], 0, x / W, y / H, kind, x, y);
+      onRim.add(made[k]);
+      return made[k];
     }
     // Outward: both surfaces slope away from the middle; only the facing (z) flips for the back.
     const dx = (at(i + 1, j) - at(i - 1, j)) / (2 * cx), dy = (at(i, j + 1) - at(i, j - 1)) / (2 * cy);
@@ -273,6 +308,7 @@ function heightSurfaces(g: Grid, h: Float32Array, W: number, H: number, out: Mes
   for (const s of [1, -1] as const) {
     side = s;
     made.fill(-1);
+    const start = out.mark;
     for (let j = 0; j < gh - 1; j++) for (let i = 0; i < gw - 1; i++) {
       if (rim) {
         // Each half of the cell whose corners are all inside or on the rim.
@@ -294,6 +330,10 @@ function heightSurfaces(g: Grid, h: Float32Array, W: number, H: number, out: Mes
       out.tri(vert(i, j), b, c);
       out.tri(b, vert(i + 1, j + 1), c);
     }
+    // With a rim, its samples have moved onto the picture's edge, so a slope worked out across the grid's even
+    // spacing is off beside them (by a different amount all along the edge, which shows as streaks when turned).
+    // The triangles as built say which way the surface really faces there. (The upright rim keeps its facing.)
+    if (rim) out.normalsFromFaces(start, s, (v) => onRim.has(v));
   }
 }
 
@@ -340,18 +380,19 @@ function edgeDistance(g: Grid, rim: Rim): Float32Array {
     if (g.d[k] <= BAND) {
       const i = k % gw, j = (k - i) / gw;
       let best = Infinity;
+      const near = (x: number, y: number) => { best = Math.min(best, Math.hypot(i - x, j - y)); };
       for (let jj = Math.max(0, j - BAND - 1); jj <= Math.min(gh - 1, j + BAND + 1); jj++) {
         for (let ii = Math.max(0, i - BAND - 1); ii <= Math.min(gw - 1, i + BAND + 1); ii++) {
           const r = jj * gw + ii;
           if (!rim.on[r]) continue;
           const px = rx(r), py = ry(r);
-          best = Math.min(best, Math.hypot(i - px, j - py));
+          near(px, py);
           for (const [di, dj] of [[1, 0], [0, 1], [1, 1], [1, -1]]) {
             const i2 = ii + di, j2 = jj + dj;
             if (i2 < 0 || j2 < 0 || i2 >= gw || j2 >= gh || !rim.on[j2 * gw + i2]) continue;
             const qx = rx(j2 * gw + i2), qy = ry(j2 * gw + i2), sx = qx - px, sy = qy - py;
             const t = Math.min(1, Math.max(0, ((i - px) * sx + (j - py) * sy) / (sx * sx + sy * sy || 1)));
-            best = Math.min(best, Math.hypot(i - px - sx * t, j - py - sy * t));
+            near(px + sx * t, py + sy * t);
           }
         }
       }

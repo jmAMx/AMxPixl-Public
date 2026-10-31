@@ -48,26 +48,42 @@ export function drawText(ctx: CanvasRenderingContext2D, tp: TextProps, lay = lay
   });
 }
 
-function drawOnPath(ctx: CanvasRenderingContext2D, tp: TextProps) {
+/**
+ * Text on a path, letter by letter: where each one stands (the middle of its foot, on the path), how it's turned to
+ * follow the curve, and its width with letter spacing. Letters past the ends of an open path are left out. Shared
+ * by drawing and by Text to Outlines, so the outlines land exactly where the letters are drawn.
+ */
+export function pathLetters(tp: TextProps): { ch: string; x: number; y: number; angle: number; w: number }[] {
   const { sub, offset } = tp.onPath!;
   const path = measure(sub);
-  const text = (tp.content || '').replace(/\n/g, ' ');
-  const chars = [...text];
+  const ctx = measureCtx;
+  ctx.font = fontString(tp);
+  ctx.letterSpacing = `${tp.tracking}px`;
+  const chars = [...(tp.content || '').replace(/\n/g, ' ')];
   const adv = chars.map((ch) => ctx.measureText(ch).width + tp.tracking);
   const total = adv.reduce((a, b) => a + b, 0);
   let d = offset + (tp.align === 'center' ? (path.length - total) / 2 : tp.align === 'right' ? path.length - total : 0);
-  ctx.letterSpacing = '0px';
+  const out = [];
   for (let i = 0; i < chars.length; i++) {
     const w = adv[i];
     const mid = d + w / 2;
     if (mid >= 0 && mid <= path.length || sub.closed) {
       const p = path.at(sub.closed ? ((mid % path.length) + path.length) % path.length : mid);
-      ctx.save();
-      ctx.translate(p.x, p.y);
-      ctx.rotate(p.angle);
-      ctx.fillText(chars[i], -w / 2 + tp.tracking / 2, 0);
-      ctx.restore();
+      out.push({ ch: chars[i], x: p.x, y: p.y, angle: p.angle, w });
     }
     d += w;
+  }
+  return out;
+}
+
+function drawOnPath(ctx: CanvasRenderingContext2D, tp: TextProps) {
+  const letters = pathLetters(tp);
+  ctx.letterSpacing = '0px';
+  for (const l of letters) {
+    ctx.save();
+    ctx.translate(l.x, l.y);
+    ctx.rotate(l.angle);
+    ctx.fillText(l.ch, -l.w / 2 + tp.tracking / 2, 0);
+    ctx.restore();
   }
 }

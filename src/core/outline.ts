@@ -1,7 +1,7 @@
 import type opentype from 'opentype.js';
 import { corner } from './paths';
 import { isDesktop, readPath } from './platform';
-import { layoutText } from './text';
+import { layoutText, pathLetters } from './text';
 import type { PathPoint, SubPath, TextProps } from './types';
 
 /**
@@ -48,9 +48,8 @@ export function pickFontFile(list: [string, string][], family: string, weight: n
       const style = clean.slice(family.length).replace(/^[\s\-_,]+/, '').trim();
       // "Segoe UI Emoji" isn't a style of "Segoe UI": only style words may follow the family name.
       if (style && !/^((thin|hairline|extra|ultra|semi|demi|light|regular|normal|book|medium|bold|black|heavy|italic|oblique)[\s\-_]*)+$/i.test(style)) continue;
-      // Font collections (.ttc) can't be read; they still count, so a style only found in one isn't swapped for the
-      // nearest other weight (null then means "can't read it").
-      cands.push({ style, v: /\.ttc$/i.test(path) ? null : path });
+      // (A font collection, .ttc, is read too: fontFromFile picks the right font inside it.)
+      cands.push({ style, v: path });
     }
   }
   return bestMatch(cands, weight, italic);
@@ -72,8 +71,52 @@ const loaded = new Map<string, opentype.Font | null>();
  */
 const reader = () => import('opentype.js').then((m) => m.default);
 
-/** A font from a font file's bytes (.ttf / .otf / .woff). */
-export const fontFromFile = async (buf: ArrayBuffer) => (await reader()).parse(buf);
+/**
+ * The fonts in a font collection (.ttc: several fonts in one file, sharing tables), each as a standalone font file:
+ * its table directory, with the tables it uses copied after it.
+ */
+function collectionFonts(buf: ArrayBuffer): ArrayBuffer[] {
+  const dv = new DataView(buf);
+  const out: ArrayBuffer[] = [];
+  for (let f = 0, n = dv.getUint32(8); f < n; f++) {
+    const at = dv.getUint32(12 + f * 4), count = dv.getUint16(at + 4);
+    const tables = Array.from({ length: count }, (_, t) => {
+      const r = at + 12 + t * 16;
+      return { tag: dv.getUint32(r), sum: dv.getUint32(r + 4), off: dv.getUint32(r + 8), len: dv.getUint32(r + 12) };
+    });
+    const head = 12 + count * 16;
+    const font = new ArrayBuffer(tables.reduce((s, t) => s + ((t.len + 3) & ~3), head));
+    const fv = new DataView(font), fb = new Uint8Array(font);
+    fb.set(new Uint8Array(buf, at, 12), 0);
+    let pos = head;
+    tables.forEach((t, i) => {
+      const r = 12 + i * 16;
+      fv.setUint32(r, t.tag); fv.setUint32(r + 4, t.sum); fv.setUint32(r + 8, pos); fv.setUint32(r + 12, t.len);
+      fb.set(new Uint8Array(buf, t.off, t.len), pos);
+      pos += (t.len + 3) & ~3;
+    });
+    out.push(font);
+  }
+  return out;
+}
+
+/**
+ * A font from a font file's bytes (.ttf / .otf / .woff, or a .ttc collection: then the one in it that best matches
+ * `want`, by its family and style names).
+ */
+export async function fontFromFile(buf: ArrayBuffer, want?: { family: string; weight: number; italic: boolean }): Promise<opentype.Font> {
+  const ot = await reader();
+  if (new DataView(buf).getUint32(0) !== 0x74746366 /* "ttcf" */) return ot.parse(buf);
+  const fonts = collectionFonts(buf).map((b) => ot.parse(b));
+  if (!want) return fonts[0];
+  const name = (f: opentype.Font, k: string) => (f.names as unknown as Record<string, { en?: string } | undefined>)[k]?.en ?? '';
+  const fam = want.family.toLowerCase();
+  const famOf = (f: opentype.Font) => (name(f, 'typographicFamily') || name(f, 'preferredFamily') || name(f, 'fontFamily')).toLowerCase();
+  const styleOf = (f: opentype.Font) => name(f, 'typographicSubfamily') || name(f, 'preferredSubfamily') || name(f, 'fontSubfamily');
+  const same = fonts.filter((f) => famOf(f) === fam);
+  const cands = (same.length ? same : fonts.filter((f) => famOf(f).startsWith(fam) || fam.startsWith(famOf(f))));
+  return bestMatch((cands.length ? cands : fonts).map((f) => ({ style: styleOf(f), v: f })), want.weight, want.italic) ?? fonts[0];
+}
 
 /** The font for a text style, or null if its file can't be found or read. */
 export async function loadFont(family: string, weight: number, italic: boolean): Promise<opentype.Font | null> {
@@ -82,7 +125,7 @@ export async function loadFont(family: string, weight: number, italic: boolean):
   let font: opentype.Font | null = null;
   try {
     const buf = isDesktop ? await fontFileFromWindows(family, weight, italic) : await fontFileFromBrowser(family, weight, italic);
-    font = buf ? await fontFromFile(buf) : null;
+    font = buf ? await fontFromFile(buf, { family, weight, italic }) : null;
   } catch { font = null; }
   loaded.set(key, font);
   return font;
@@ -119,6 +162,7 @@ function commandsToSubs(cmds: opentype.PathCommand[]): SubPath[] {
  * baseline and letter spacing).
  */
 export function outlineText(tp: TextProps, font: opentype.Font): SubPath[] {
+  if (tp.onPath) return outlineOnPath(tp, font);
   const lay = layoutText(tp);
   const opts = { kerning: true, letterSpacing: tp.tracking / tp.size };
   const subs: SubPath[] = [];
@@ -128,5 +172,24 @@ export function outlineText(tp: TextProps, font: opentype.Font): SubPath[] {
     const x = tp.align === 'center' ? (lay.w - adv) / 2 : tp.align === 'right' ? lay.w - adv : 0;
     subs.push(...commandsToSubs(font.getPath(line, x, i * lay.lineH + lay.ascent, tp.size, opts).commands));
   });
+  return subs;
+}
+
+/** Text on a path as outlines: each letter's shape placed and turned exactly as the letter is drawn on the path. */
+function outlineOnPath(tp: TextProps, font: opentype.Font): SubPath[] {
+  const subs: SubPath[] = [];
+  for (const l of pathLetters(tp)) {
+    const c = Math.cos(l.angle), s = Math.sin(l.angle);
+    const at = (x: number, y: number) => ({ x: l.x + c * x - s * y, y: l.y + s * x + c * y });
+    // The letter's own shape, standing on its foot at the middle, then turned and moved onto the path.
+    const cmds = font.getPath(l.ch, -l.w / 2 + tp.tracking / 2, 0, tp.size).commands.map((cmd) => {
+      const o = { ...cmd } as opentype.PathCommand & Record<string, number>;
+      for (const [kx, ky] of [['x', 'y'], ['x1', 'y1'], ['x2', 'y2']] as const) {
+        if (typeof o[kx] === 'number') { const p = at(o[kx], o[ky]); o[kx] = p.x; o[ky] = p.y; }
+      }
+      return o;
+    });
+    subs.push(...commandsToSubs(cmds));
+  }
   return subs;
 }
