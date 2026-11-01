@@ -24,7 +24,7 @@ import type { AdjKind, AdjParams, Anim, AnimFrame, BlendIf, GroupLayer, Guide, L
 import { initWarp, warpBounds } from './core/warp';
 import { envelopeMesh, shapeFit, type Envelope } from './core/envelope';
 import { loadFont, outlineText } from './core/outline';
-import { defaultModel, defaultTexture, renderModel, type Model3D, type ModelTexture } from './core/model3d';
+import { defaultModel, defaultTexture, flattenRender, renderModel, type Model3D, type ModelTexture } from './core/model3d';
 import { alphaBox } from './core/alphabox';
 import { isFilter, isPlaced } from './core/types';
 import { view } from './ui/canvasview';
@@ -557,8 +557,10 @@ export function setModel(patch: Partial<Model3D>, label?: string) {
 export function rasterize3D() {
   const doc = need(); const l = doc?.activeRaster;
   if (!doc || !l?.model) return;
-  const r = renderModel(doc.canvasOf(l), l.model, l.key, 1, false, l.model.texture ? doc.pool.get(l.model.texture.key) : null);
-  if (!r) { toast('3D needs WebGL2, which isn\'t available here.', 'error'); return; }
+  const rm = renderModel(doc.canvasOf(l), l.model, l.key, 1, false, l.model.texture ? doc.pool.get(l.model.texture.key) : null);
+  if (!rm) { toast('3D needs WebGL2, which isn\'t available here.', 'error'); return; }
+  // (Its shadow, if it has one, baked in under it.)
+  const r = flattenRender(rm);
   const p = apply(layerMatrix(l), r.box.x, r.box.y);
   // The render may be at a slightly different size from its box; keep the box's size on the canvas.
   const k = r.box.w / r.canvas.width;

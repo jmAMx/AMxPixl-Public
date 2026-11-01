@@ -177,9 +177,11 @@ export function drawPlaced(ctx: CanvasRenderingContext2D, l: PlacedLayer, pool: 
       // A 3D layer: its picture rendered as a lit 3D object (flat if WebGL2 isn't available).
       const r = renderModel(c, l.model, l.key, s, false, l.model.texture ? pool.get(l.model.texture.key) : null);
       if (r) {
-        // (Rendered at the next power of two up, so this only ever shrinks it by under half: see below.)
+        // (Rendered at the next power of two up, so this only ever shrinks it by under half: see below. Its shadow,
+        // smaller, is stretched under it.)
         ctx.imageSmoothingEnabled = true;
         ctx.imageSmoothingQuality = 'low';
+        if (r.shadow) ctx.drawImage(r.shadow.canvas, r.shadow.box.x, r.shadow.box.y, r.shadow.box.w, r.shadow.box.h);
         ctx.drawImage(r.canvas, r.box.x, r.box.y, r.box.w, r.box.h);
         return;
       }

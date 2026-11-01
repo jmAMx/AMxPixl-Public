@@ -120,6 +120,7 @@ const MENUS: MenuDef[] = [
         ...(['inflate', 'extrude', 'revolve'] as const).map((k) => ({ label: k[0].toUpperCase() + k.slice(1), onClick: () => A.make3D(k), disabled: !app.doc?.activePlaced || !!app.doc.activeRaster?.model })),
         { sep: true },
         { label: 'Rotate 3D', onClick: () => { app.setTool('move'); app.opts.move.mode = 'rotate3d'; app.emit('tool'); }, disabled: !app.doc?.activeRaster?.model },
+        { label: 'Move Light', onClick: () => { app.setTool('move'); app.opts.move.mode = 'light3d'; app.emit('tool'); }, disabled: !app.doc?.activeRaster?.model },
         { label: 'Rasterize 3D', onClick: A.rasterize3D, disabled: !app.doc?.activeRaster?.model },
       ] },
       { label: 'Depth', sub: () => [

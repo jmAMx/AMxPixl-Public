@@ -15,7 +15,7 @@ import { ctx2d, layerMatrix, localBounds, newCanvas } from '../core/layers';
 import { apply, decompose, mapRect, mul, scale, translate, union, xformMatrix, type Rect } from '../core/math';
 import { renderDoc } from '../core/render';
 import type { AdjParams, AdjustLayer, Channel, CurvePts, EffectLayer, GradeWheel, Layer, LayerStyles, LevelsCh, PlacedLayer, RasterLayer, ShapeLayer, TextLayer } from '../core/types';
-import type { Model3D } from '../core/model3d';
+import { defaultShadow, type Model3D } from '../core/model3d';
 import { isDepth, isPlaced } from '../core/types';
 import { h } from './dom';
 import { allFontsLoaded, fontList, loadInstalledFonts } from './fonts';
@@ -244,6 +244,9 @@ export function propertiesPanel() {
     ];
   };
 
+  /** A slider with a tooltip. */
+  const sliderTitled = (s: HTMLElement, title: string) => { s.title = title; return s; };
+
   /** A 3D layer: its shape, turn, light and finish. */
   const modelSection = (l: RasterLayer) => {
     const e = edit(l, 'Change 3D');
@@ -271,10 +274,30 @@ export function propertiesPanel() {
       sl('Turn (Y)', -180, 180, m.rotY, '°', (v) => ({ rotY: v })),
       sl('Spin (Z)', -180, 180, m.rotZ, '°', (v) => ({ rotZ: v })),
       h('div', { class: 'prop-sub' }, 'Light'),
+      seg([{ v: 'sun', label: 'Sun', title: 'Light from far away, the same everywhere' }, { v: 'lamp', label: 'Lamp', title: 'Light from a point near the object: brighter up close, its shadows spreading out' }],
+        m.light.kind ?? 'sun', (v) => { set({ light: { ...l.model!.light, kind: v } }); build(true); }),
+      h('div', { class: 'btn-row' },
+        h('button', { class: 'btn small', type: 'button', title: 'Drag the light around the object on the canvas', onclick: () => { app.setTool('move'); app.opts.move.mode = 'light3d'; app.emit('tool'); } }, 'Move on canvas')),
       sl('Direction', 0, 360, m.light.az, '°', light('az')),
       sl('Height', 0, 90, m.light.el, '°', light('el')),
+      m.light.kind === 'lamp' ? sliderTitled(sl('Lamp distance', 60, 600, Math.round((m.light.dist ?? 2) * 100), '%', (v) => ({ light: { ...l.model!.light, dist: v / 100 } })),
+        'How far the lamp is from the middle of the object, by its size: nearer is brighter close by, with wider shadows') : null,
       sl('Strength', 0, 200, m.light.strength, '%', light('strength')),
       sl('Ambient', 0, 100, m.light.ambient, '%', light('ambient')),
+      h('div', { class: 'prop-line' }, h('span', { class: 'dim' }, 'Colour'),
+        colorInput(m.light.color ?? '#ffffff', (v) => set({ light: { ...l.model!.light, color: v } }, false), e.done),
+        h('button', { class: 'btn small', type: 'button', title: 'White light', onclick: () => { set({ light: { ...l.model!.light, color: undefined } }); build(true); } }, 'White')),
+      checkbox('Turns with object', !!m.light.follow, (v) => set({ light: { ...l.model!.light, follow: v } }),
+        'On: the light turns with the object, so the same side stays lit. Off: it stays put in the picture, so the object shades as it turns.'),
+      h('div', { class: 'prop-sub' }, 'Shadows'),
+      checkbox('Shadows', !!m.shadow?.on, (v) => { set({ shadow: { ...(l.model!.shadow ?? defaultShadow()), on: v } }); build(true); },
+        'The object shadows itself, and casts a shadow on what\'s behind it (the layers below)'),
+      ...(m.shadow?.on ? [
+        sl('Opacity', 0, 100, m.shadow.opacity, '%', (v) => ({ shadow: { ...l.model!.shadow!, opacity: v } })),
+        sliderTitled(sl('Softness', 0, 100, m.shadow.soft, '%', (v) => ({ shadow: { ...l.model!.shadow!, soft: v } })), '0 gives sharp edges, like older games; higher blurs them'),
+        sliderTitled(sl('Wall distance', 0, 200, m.shadow.gap, '%', (v) => ({ shadow: { ...l.model!.shadow!, gap: v } })),
+          'How far behind the object the surface its shadow falls on is: further away, the shadow moves further out'),
+      ] : []),
       h('div', { class: 'prop-sub' }, 'Surface'),
       seg([{ v: 'matte', label: 'Matte' }, { v: 'plastic', label: 'Plastic' }, { v: 'metal', label: 'Metal' }], m.material, (v) => set({ material: v })),
       h('div', { class: 'prop-line' }, checkbox('Solid colour', !!m.color, (v) => set({ color: v ? (l.model!.color ?? app.fg) : null }), 'Off: the layer\'s own picture covers it'),

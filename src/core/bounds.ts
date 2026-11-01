@@ -1,6 +1,7 @@
 import { alphaBox, trimBox } from './alphabox';
 import { ctx2d, localBounds } from './layers';
 import type { Rect } from './math';
+import { modelBox } from './model3d';
 import type { PlacedLayer } from './types';
 import { WorkerPool } from './workers/pool';
 
@@ -69,6 +70,11 @@ export function layerBoxReady(l: PlacedLayer, pool: Map<string, HTMLCanvasElemen
  */
 export function layerBox(l: PlacedLayer, pool: Map<string, HTMLCanvasElement>, mode: BoxMode, onReady?: () => void): Rect | null {
   if (mode === 'custom' && l.box) return l.box;
+  // (A 3D layer's content is the object: its shadow, like a layer style's, isn't.)
+  if (mode === 'content' && l.type === 'raster' && l.model && !l.warp) {
+    const c = pool.get(l.key);
+    if (c) return modelBox(c, l.model, l.key, false);
+  }
   if (mode === 'layer' || l.type !== 'raster' || l.warp || l.model) return localBounds(l, pool);
   const c = pool.get(l.key);
   if (!c) return localBounds(l, pool);

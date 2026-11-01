@@ -20,7 +20,20 @@ export interface Model3D {
   /** Turn, in degrees, about the horizontal (x), vertical (y) and facing (z) axes. */
   rotX: number; rotY: number; rotZ: number;
   /** Light direction (azimuth 0-360 measured from the right, counterclockwise; elevation 0-90 above the surface), strength and ambient light (0-100). */
-  light: { az: number; el: number; strength: number; ambient: number };
+  light: {
+    az: number; el: number; strength: number; ambient: number;
+    /**
+     * 'sun' (or unset): from far away, the same everywhere. 'lamp': from a point `dist` away (a multiple of the
+     * object's size, from its middle), brighter up close, its shadows spreading out.
+     */
+    kind?: 'sun' | 'lamp'; dist?: number;
+    /** Its colour (white if unset). */
+    color?: string;
+    /** It turns with the object, so the same side stays lit; otherwise it stays put in the picture as it turns. */
+    follow?: boolean;
+  };
+  /** Shadows: parts of the object on each other, and the whole object on what's behind it. */
+  shadow?: ModelShadow;
   material: 'matte' | 'plastic' | 'metal';
   /** A solid colour, or null to use the layer's own picture. */
   color: string | null;
@@ -54,6 +67,15 @@ export interface ModelTexture {
   /** Extrude: on every surface, only the front and back, or only the sides. */
   where: 'all' | 'faces' | 'sides';
 }
+
+/**
+ * A 3D layer's shadows. Behind the object is a wall facing the viewer, `gap` behind its back (% of its size), where
+ * its shadow falls; the shadow is part of the layer, so it darkens the layers below. `opacity` how dark (0-100),
+ * `soft` how blurred their edges are (0 = sharp).
+ */
+export interface ModelShadow { on: boolean; opacity: number; soft: number; gap: number }
+
+export const defaultShadow = (): ModelShadow => ({ on: true, opacity: 60, soft: 35, gap: 15 });
 
 export const defaultTexture = (key: string, name: string): ModelTexture => ({
   key, name, scale: 100, x: 0, y: 0, rotate: 0, tile: false, blend: 'replace', amount: 100, bump: 0, where: 'all',
@@ -1301,7 +1323,118 @@ function boundsOf(W: number, H: number, m: Model3D, mesh: Mesh): Rect {
   return { x: Math.floor(x0) - 2, y: Math.floor(y0) - 2, w: Math.ceil(x1 - x0) + 4, h: Math.ceil(y1 - y0) + 4 };
 }
 
+type V3 = [number, number, number];
+
+/**
+ * Everything about how a 3D layer is turned and lit, in the turned object's frame (x right, y down, z toward the
+ * viewer, layer pixels from the pivot): the turn, how far the object reaches from the pivot (`ext`), its nearest and
+ * farthest depth, which way the light comes from (`dir`, a unit vector toward it), a lamp's position, the light's
+ * colour, and for shadows, the wall behind (its depth) and how soft they are (layer pixels).
+ */
+interface Scene {
+  R: number[]; px: number; cy: number; f: number; ext: number; z0: number; z1: number;
+  dir: V3; lamp: V3 | null; color: V3; wall: number; blur: number;
+}
+
+function sceneOf(W: number, H: number, m: Model3D, mesh: Mesh): Scene {
+  const R = rotation(m), px = pivotX(W, m), cy = H / 2;
+  const ext = Math.max(1, ...[mesh.lo, mesh.hi].flatMap((p) => p.map((v, i) => Math.abs(v - (i === 0 ? px : i === 1 ? cy : 0)))));
+  let z0 = Infinity, z1 = -Infinity;
+  for (const x of [mesh.lo[0], mesh.hi[0]]) for (const y of [mesh.lo[1], mesh.hi[1]]) for (const z of [mesh.lo[2], mesh.hi[2]]) {
+    const pz = R[6] * (x - px) + R[7] * (y - cy) + R[8] * z;
+    z0 = Math.min(z0, pz); z1 = Math.max(z1, pz);
+  }
+  const L = m.light, el = L.el * D2R, az = L.az * D2R;
+  let dir: V3 = [Math.cos(el) * Math.cos(az), -Math.cos(el) * Math.sin(az), Math.sin(el)];
+  // Turning with the object: the direction is the object's own, turned with it.
+  if (L.follow) dir = [R[0] * dir[0] + R[1] * dir[1] + R[2] * dir[2], R[3] * dir[0] + R[4] * dir[1] + R[5] * dir[2], R[6] * dir[0] + R[7] * dir[1] + R[8] * dir[2]];
+  const d = (L.dist ?? 2) * ext;
+  const lamp: V3 | null = L.kind === 'lamp' ? [dir[0] * d, dir[1] * d, dir[2] * d] : null;
+  const hex = L.color ?? '#ffffff';
+  const color: V3 = [parseInt(hex.slice(1, 3), 16) / 255, parseInt(hex.slice(3, 5), 16) / 255, parseInt(hex.slice(5, 7), 16) / 255];
+  const sh = m.shadow;
+  return {
+    R, px, cy, f: CAM * Math.max(W, H), ext, z0, z1, dir, lamp, color,
+    wall: z0 - ((sh?.gap ?? 15) / 100) * 2 * ext, blur: ((sh?.soft ?? 35) / 100) * ext * 0.12,
+  };
+}
+
+/** Where a point of the turned object (relative to the pivot) throws its shadow on the wall behind. */
+function onWall(s: Scene, p: V3): V3 {
+  if (s.lamp) {
+    // Along the line from the lamp through the point (not too far, where it's almost level with the lamp).
+    const d: V3 = [p[0] - s.lamp[0], p[1] - s.lamp[1], p[2] - s.lamp[2]];
+    const t = Math.min(50, (s.wall - s.lamp[2]) / Math.min(d[2], -1e-3));
+    return [s.lamp[0] + d[0] * t, s.lamp[1] + d[1] * t, s.wall];
+  }
+  const t = (p[2] - s.wall) / Math.max(s.dir[2], 0.03);
+  return [p[0] - s.dir[0] * t, p[1] - s.dir[1] * t, s.wall];
+}
+
+/** The box (layer pixels) around a 3D layer's shadow on the wall, its blur included. */
+function shadowBounds(s: Scene, mesh: Mesh): Rect {
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const x of [mesh.lo[0], mesh.hi[0]]) for (const y of [mesh.lo[1], mesh.hi[1]]) for (const z of [mesh.lo[2], mesh.hi[2]]) {
+    const R = s.R, a = x - s.px, b = y - s.cy;
+    const q = onWall(s, [R[0] * a + R[1] * b + R[2] * z, R[3] * a + R[4] * b + R[5] * z, R[6] * a + R[7] * b + R[8] * z]);
+    const k = s.f / (s.f - q[2]);
+    const sx = s.px + q[0] * k, sy = s.cy + q[1] * k;
+    x0 = Math.min(x0, sx); y0 = Math.min(y0, sy); x1 = Math.max(x1, sx); y1 = Math.max(y1, sy);
+  }
+  // (A lamp nearly level with part of the object throws that part very far: kept to a few sizes away.)
+  const lim = 4 * s.ext, pad = 3 * s.blur + 2;
+  x0 = Math.max(x0, s.px - lim) - pad; x1 = Math.min(x1, s.px + lim) + pad;
+  y0 = Math.max(y0, s.cy - lim) - pad; y1 = Math.min(y1, s.cy + lim) + pad;
+  return { x: Math.floor(x0), y: Math.floor(y0), w: Math.ceil(x1 - x0), h: Math.ceil(y1 - y0) };
+}
+
+/** A 3D layer's box: the turned object, and with shadows on, its shadow behind it. */
+function frameOf(W: number, H: number, m: Model3D, mesh: Mesh, withShadow: boolean): Rect {
+  const b = boundsOf(W, H, m, mesh);
+  if (!withShadow || !m.shadow?.on) return b;
+  const s = shadowBounds(sceneOf(W, H, m, mesh), mesh);
+  const x0 = Math.min(b.x, s.x), y0 = Math.min(b.y, s.y);
+  return { x: x0, y: y0, w: Math.max(b.x + b.w, s.x + s.w) - x0, h: Math.max(b.y + b.h, s.y + s.h) - y0 };
+}
+
+/**
+ * The light's view for the shadow map, as a 4×4 matrix (column-major, for GLSL) from the turned object's frame:
+ * looking along the sunlight, square-on and just wide enough for the object; or from the lamp toward the object's
+ * middle, in perspective. Depth runs from near the light (-1) to far (+1).
+ */
+function lightView(s: Scene): Float32Array {
+  const E = s.ext * 1.75;
+  const fw: V3 = s.lamp ? (() => { const l = Math.hypot(...s.lamp!) || 1; return [-s.lamp![0] / l, -s.lamp![1] / l, -s.lamp![2] / l] as V3; })() : [-s.dir[0], -s.dir[1], -s.dir[2]];
+  const up: V3 = Math.abs(fw[1]) < 0.9 ? [0, 1, 0] : [1, 0, 0];
+  const cross = (a: V3, b: V3): V3 => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+  const r0 = cross(up, fw), rl = Math.hypot(...r0), r: V3 = [r0[0] / rl, r0[1] / rl, r0[2] / rl], u = cross(fw, r);
+  const M = new Float32Array(16);
+  // Columns: M[c * 4 + row].
+  const set = (row: number, v: V3, w: number) => { M[row] = v[0]; M[4 + row] = v[1]; M[8 + row] = v[2]; M[12 + row] = w; };
+  if (!s.lamp) {
+    set(0, [r[0] / E, r[1] / E, r[2] / E], 0);
+    set(1, [u[0] / E, u[1] / E, u[2] / E], 0);
+    set(2, [fw[0] / E, fw[1] / E, fw[2] / E], 0);
+    set(3, [0, 0, 0], 1);
+    return M;
+  }
+  const P = s.lamp, D = Math.hypot(...P);
+  const n = Math.max(D - E, D * 0.05, 1), far = D + E;
+  const t = Math.min(4, E / Math.sqrt(Math.max(D * D - E * E, (D * 0.2) ** 2)));
+  // Rows of view (eye at the lamp, looking along fw) then the projection.
+  const dot = (a: V3, b: V3) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+  const a = (far + n) / (far - n), b = (-2 * far * n) / (far - n);
+  set(0, [r[0] / t, r[1] / t, r[2] / t], -dot(r, P) / t);
+  set(1, [u[0] / t, u[1] / t, u[2] / t], -dot(u, P) / t);
+  set(2, [fw[0] * a, fw[1] * a, fw[2] * a], -dot(fw, P) * a + b);
+  set(3, fw, -dot(fw, P));
+  return M;
+}
+
 // ---------- rendering ----------
+
+/** The shadow map's size (pixels across). */
+const SM = 1024;
 
 const VS = `#version 300 es
 in vec3 aPos; in vec3 aNrm; in vec2 aUV; in float aSolid; in vec2 aT; in vec4 aEdge; in float aReach;
@@ -1334,7 +1467,30 @@ uniform vec3 uL; uniform vec4 uCol; uniform vec4 uMat; uniform float uAmb; unifo
 // uTxOpt: x multiply (else replace), y amount, z tile, w where (0 all, 1 front and back, 2 sides). uKind 1 = Extrude.
 uniform sampler2D uTx; uniform int uTxOn; uniform vec4 uTxFit; uniform float uTxRot; uniform vec4 uTxOpt;
 uniform float uBump; uniform int uKind;
+// A lamp (uLampOn 1) at uLamp instead of light from direction uL; the light's colour.
+uniform int uLampOn; uniform vec3 uLamp; uniform vec3 uLCol;
+// Shadows: the light's view (see lightView) and its depths, and uSh: x on, y how dark, z how soft (in the depth map's
+// width), w how far to step off the surface toward the light before looking (so it doesn't shadow itself).
+uniform highp sampler2DShadow uSM; uniform mat4 uLM; uniform vec4 uSh;
+const vec2 DISC[8] = vec2[](vec2(-0.613, 0.617), vec2(0.170, -0.040), vec2(-0.299, -0.792), vec2(0.645, 0.493),
+  vec2(-0.651, -0.172), vec2(0.421, -0.703), vec2(-0.002, 0.989), vec2(0.952, -0.104));
 float lum(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
+// How much light reaches this point (0-1): whether the light's view sees something nearer to it here, over a few
+// spots around it (softer the wider they're spread). g: the surface's facing as built (for stepping off it: smooth
+// facings may not match its triangles).
+float lit(vec3 p, vec3 toward, vec3 g) {
+  if (uSh.x < 0.5) return 1.0;
+  // Where the light only grazes it, the depth map's pixels span more depth across the surface: it steps further off,
+  // and allows more.
+  if (dot(g, toward) < 0.0) g = -g;
+  float ct = clamp(dot(g, toward), 0.0, 1.0), slope = min(10.0, sqrt(1.0 - ct * ct) / max(ct, 0.05));
+  vec4 q = uLM * vec4(p + g * uSh.w * (1.0 + 2.0 * (1.0 - ct)), 1.0);
+  vec3 c = q.xyz / q.w * 0.5 + 0.5;
+  if (c.x < 0.0 || c.y < 0.0 || c.x > 1.0 || c.y > 1.0 || c.z > 1.0) return 1.0;
+  float bias = (1.5 + 2.0 * slope) / ${SM}.0, s = 0.0;
+  for (int i = 0; i < 8; i++) s += texture(uSM, vec3(c.xy + DISC[i] * uSh.z, c.z - bias));
+  return s / 8.0;
+}
 void main() {
   // Faces are cut out by the picture's own edges; sides and revolved surfaces are always solid. Pass 0 draws it all
   // solid (faces cut where they're half covered), pass 1 adds the faces' soft edges over whatever is behind them.
@@ -1388,15 +1544,83 @@ void main() {
       N = normalize(abs(det) * N - g);
     }
   }
-  float diff = max(dot(N, uL), 0.0);
-  vec3 H = normalize(uL + vec3(0.0, 0.0, 1.0));
+  // Toward the light: a lamp's direction changes from point to point, and it's brighter nearer (by the square of how
+  // much nearer than the object's middle, up to three times).
+  vec3 Ld = uL;
+  float near = 1.0;
+  if (uLampOn == 1) {
+    vec3 d = uLamp - vP;
+    Ld = normalize(d);
+    near = min(3.0, dot(uLamp, uLamp) / max(dot(d, d), 1.0));
+  }
+  float diff = max(dot(N, Ld), 0.0);
+  vec3 H = normalize(Ld + vec3(0.0, 0.0, 1.0));
   float spec = pow(max(dot(N, H), 0.0), uMat.z) * uMat.y;
+  // (Only looked up where the light reaches it at all.)
+  vec3 g = normalize(cross(dFdx(vP), dFdy(vP)));
+  float shade = diff > 0.0 || spec > 0.002 ? lit(vP, Ld, g) : 1.0;
+  vec3 light = uLCol * uStr * near * mix(1.0, shade, uSh.y);
   // uMat: x diffuse weight, y specular weight, z shininess, w metal (specular takes the surface colour).
   vec3 specCol = mix(vec3(1.0), base, uMat.w);
-  vec3 c = base * (uAmb + uMat.x * diff * uStr) + specCol * spec * uStr;
+  vec3 c = base * (uAmb + uMat.x * diff * light) + specCol * spec * light;
   // A depth map instead: its nearest point white, its farthest dark grey.
   if (uOut == 1) c = vec3(mix(0.2, 1.0, clamp((vZ - uZ.x) / max(uZ.y - uZ.x, 1e-3), 0.0, 1.0)));
   o = vec4(c * a, a);
+}`;
+
+/**
+ * Flat drawing of the object, for shadows. uMode 0: from the light (see lightView), for the shadow map's depths.
+ * uMode 1: its shadow on the wall behind (depth uWall), along the light (see onWall), drawn black into its box.
+ */
+const FLAT_VS = `#version 300 es
+in vec3 aPos; in vec2 aUV; in float aSolid;
+uniform mat3 uR; uniform vec2 uC; uniform float uF; uniform vec4 uBox; uniform mat4 uLM; uniform int uMode;
+uniform vec3 uL; uniform int uLampOn; uniform vec3 uLamp; uniform float uWall;
+out vec2 vUV; out float vSolid;
+void main() {
+  vec3 p = uR * vec3(aPos.xy - uC, aPos.z);
+  vUV = aUV;
+  vSolid = aSolid;
+  if (uMode == 0) { gl_Position = uLM * vec4(p, 1.0); return; }
+  vec3 s;
+  if (uLampOn == 1) { vec3 d = p - uLamp; s = uLamp + d * min(50.0, (uWall - uLamp.z) / min(d.z, -1e-3)); }
+  else s = p - uL * ((p.z - uWall) / max(uL.z, 0.03));
+  vec2 q = uC + s.xy * (uF / (uF - uWall));
+  gl_Position = vec4((q.x - uBox.x) / uBox.z * 2.0 - 1.0, 1.0 - (q.y - uBox.y) / uBox.w * 2.0, 0.0, 1.0);
+}`;
+const FLAT_FS = `#version 300 es
+precision highp float;
+in vec2 vUV; in float vSolid; out vec4 o;
+uniform sampler2D uTex; uniform int uKind;
+void main() {
+  // (Faces cut out by the picture's edges, as when drawn.)
+  if (!(vSolid > 0.5 && vSolid < 1.5) && uKind != 0) {
+    vec2 inPic = step(vec2(0.0), vUV) * step(vUV, vec2(1.0));
+    if (texture(uTex, vUV).a * inPic.x * inPic.y < 0.5) discard;
+  }
+  o = vec4(0.0, 0.0, 0.0, 1.0);
+}`;
+
+/**
+ * The shadow on the wall, softened and laid down, over the whole canvas. uMode 0: a blur along uStep (a Gaussian
+ * of uSigma pixels, 25 looks across ±3 sigma); 1: laid down as black, as dark as uOpacity.
+ */
+const QUAD_VS = `#version 300 es
+in vec2 aQ; out vec2 vQ;
+void main() { vQ = aQ * 0.5 + 0.5; gl_Position = vec4(aQ, 0.0, 1.0); }`;
+const QUAD_FS = `#version 300 es
+precision highp float;
+in vec2 vQ; out vec4 o;
+uniform sampler2D uImg; uniform int uMode; uniform vec2 uStep; uniform float uSigma; uniform float uOpacity;
+void main() {
+  if (uMode == 1) { o = vec4(0.0, 0.0, 0.0, texture(uImg, vQ).a * uOpacity); return; }
+  float a = 0.0, wsum = 0.0;
+  for (int i = -12; i <= 12; i++) {
+    float x = float(i) / 4.0 * uSigma, w = exp(-0.5 * x * x / (uSigma * uSigma));
+    a += texture(uImg, vQ + uStep * x).a * w;
+    wsum += w;
+  }
+  o = vec4(0.0, 0.0, 0.0, a / wsum);
 }`;
 
 const MATERIALS = { matte: [1, 0, 1, 0], plastic: [1, 0.45, 40, 0], metal: [0.35, 1, 60, 1] } as const;
@@ -1430,20 +1654,66 @@ class ModelGL {
   private ibuf: WebGLBuffer | null = null;
   private bufMesh: Mesh | null = null;
   private u: Record<string, WebGLUniformLocation | null> = {};
+  /** The flat program (shadows) and its uniforms; the shadow map's depths and its framebuffer. */
+  private flat: WebGLProgram | null = null;
+  private fu: Record<string, WebGLUniformLocation | null> = {};
+  private smTex: WebGLTexture | null = null;
+  private smFbo: WebGLFramebuffer | null = null;
+  /** The quad program (softening and laying down the wall shadow), its corners, and two canvas-sized images for it. */
+  private quad: WebGLProgram | null = null;
+  private qu: Record<string, WebGLUniformLocation | null> = {};
+  private qVao: WebGLVertexArrayObject | null = null;
+  private shTex: WebGLTexture[] = [];
+  private shFbo: WebGLFramebuffer[] = [];
+  private shSize = '';
 
   private init() {
     if (this.gl) return this.gl;
     const gl = this.canvas.getContext('webgl2', { premultipliedAlpha: true, antialias: true, preserveDrawingBuffer: true });
     if (!gl) return null;
     const sh = (type: number, src: string) => { const s = gl.createShader(type)!; gl.shaderSource(s, src); gl.compileShader(s); if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) console.error(gl.getShaderInfoLog(s)); return s; };
-    const p = gl.createProgram()!;
-    gl.attachShader(p, sh(gl.VERTEX_SHADER, VS));
-    gl.attachShader(p, sh(gl.FRAGMENT_SHADER, FS));
-    ['aPos', 'aNrm', 'aUV', 'aSolid', 'aT', 'aEdge', 'aReach'].forEach((n, i) => gl.bindAttribLocation(p, i, n));
-    gl.linkProgram(p);
-    if (!gl.getProgramParameter(p, gl.LINK_STATUS)) { console.error('3D shader failed', gl.getProgramInfoLog(p)); return null; }
+    const link = (vs: string, fs: string, attrs: [string, number][]) => {
+      const p = gl.createProgram()!;
+      gl.attachShader(p, sh(gl.VERTEX_SHADER, vs));
+      gl.attachShader(p, sh(gl.FRAGMENT_SHADER, fs));
+      for (const [n, i] of attrs) gl.bindAttribLocation(p, i, n);
+      gl.linkProgram(p);
+      if (!gl.getProgramParameter(p, gl.LINK_STATUS)) { console.error('3D shader failed', gl.getProgramInfoLog(p)); return null; }
+      return p;
+    };
+    const p = link(VS, FS, ['aPos', 'aNrm', 'aUV', 'aSolid', 'aT', 'aEdge', 'aReach'].map((n, i) => [n, i]));
+    const fp = link(FLAT_VS, FLAT_FS, [['aPos', 0], ['aUV', 2], ['aSolid', 3]]);
+    const qp = link(QUAD_VS, QUAD_FS, [['aQ', 0]]);
+    if (!p || !fp || !qp) return null;
+    this.quad = qp;
+    for (const n of ['uImg', 'uMode', 'uStep', 'uSigma', 'uOpacity']) this.qu[n] = gl.getUniformLocation(qp, n);
+    this.qVao = gl.createVertexArray();
+    gl.bindVertexArray(this.qVao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+    gl.bindVertexArray(null);
     for (const n of ['uR', 'uC', 'uF', 'uBox', 'uZr', 'uTex', 'uBled', 'uPass', 'uOut', 'uZ', 'uL', 'uCol', 'uMat', 'uAmb', 'uStr',
-      'uTx', 'uTxOn', 'uTxFit', 'uTxRot', 'uTxOpt', 'uBump', 'uKind', 'uProf']) this.u[n] = gl.getUniformLocation(p, n);
+      'uTx', 'uTxOn', 'uTxFit', 'uTxRot', 'uTxOpt', 'uBump', 'uKind', 'uProf', 'uLampOn', 'uLamp', 'uLCol', 'uSM', 'uLM', 'uSh']) this.u[n] = gl.getUniformLocation(p, n);
+    for (const n of ['uR', 'uC', 'uF', 'uBox', 'uLM', 'uMode', 'uL', 'uLampOn', 'uLamp', 'uWall', 'uTex', 'uKind']) this.fu[n] = gl.getUniformLocation(fp, n);
+    this.flat = fp;
+    // The shadow map: depths only, compared when read (each look gives how much of the spot is lit, smoothly).
+    this.smTex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, this.smTex);
+    gl.texStorage2D(gl.TEXTURE_2D, 1, gl.DEPTH_COMPONENT24, SM, SM);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_COMPARE_MODE, gl.COMPARE_REF_TO_TEXTURE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_COMPARE_FUNC, gl.LEQUAL);
+    this.smFbo = gl.createFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.smFbo);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.TEXTURE_2D, this.smTex, 0);
+    gl.drawBuffers([gl.NONE]);
+    gl.readBuffer(gl.NONE);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     const mk = (wrap: number) => {
       const t = gl.createTexture();
       gl.bindTexture(gl.TEXTURE_2D, t);
@@ -1464,10 +1734,10 @@ class ModelGL {
   }
 
   /**
-   * The 3D layer (or its depth map) drawn into its box (layer pixels) at `scale` output pixels per layer pixel.
-   * `tex` is its texture's image, if it has one.
+   * Gets a render ready: the mesh in its buffers, the picture as textures, the canvas sized to the turned object's box
+   * (layer pixels) at `scale`, and the turn and light.
    */
-  render(src: HTMLCanvasElement, m: Model3D, key: string, scale: number, depth = false, tex?: HTMLCanvasElement | null): { canvas: HTMLCanvasElement; box: Rect } | null {
+  private prepare(src: HTMLCanvasElement, m: Model3D, key: string, scale: number) {
     const gl = this.init();
     if (!gl || !this.prog) return null;
     const W = src.width, H = src.height;
@@ -1477,13 +1747,6 @@ class ModelGL {
     while (s > 0.1 && Math.max(box.w, box.h) * s > 4096) s /= 2;
     const cw = Math.max(1, Math.ceil(box.w * s)), ch = Math.max(1, Math.ceil(box.h * s));
     if (this.canvas.width !== cw || this.canvas.height !== ch) { this.canvas.width = cw; this.canvas.height = ch; }
-    gl.viewport(0, 0, cw, ch);
-    gl.clearColor(0, 0, 0, 0);
-    gl.clearDepth(1);
-    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-    gl.enable(gl.DEPTH_TEST);
-    gl.depthFunc(gl.LESS);
-    gl.useProgram(this.prog);
     gl.bindBuffer(gl.ARRAY_BUFFER, this.buf);
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.ibuf);
     if (this.bufMesh !== mesh) {
@@ -1506,36 +1769,165 @@ class ModelGL {
     gl.bindTexture(gl.TEXTURE_2D, this.tex);
     gl.activeTexture(gl.TEXTURE1);
     gl.bindTexture(gl.TEXTURE_2D, this.bled);
-    const R = rotation(m);
+    const F = 4 * STRIDE;
+    gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 3, gl.FLOAT, false, F, 0);
+    gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 3, gl.FLOAT, false, F, 12);
+    gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 2, gl.FLOAT, false, F, 24);
+    gl.enableVertexAttribArray(3); gl.vertexAttribPointer(3, 1, gl.FLOAT, false, F, 32);
+    gl.enableVertexAttribArray(4); gl.vertexAttribPointer(4, 2, gl.FLOAT, false, F, 36);
+    gl.enableVertexAttribArray(5); gl.vertexAttribPointer(5, 4, gl.FLOAT, false, F, 44);
+    gl.enableVertexAttribArray(6); gl.vertexAttribPointer(6, 1, gl.FLOAT, false, F, 60);
+    return { gl, mesh, box, s, cw, ch, scene: sceneOf(W, H, m, mesh), kind: m.kind === 'extrude' ? 1 : m.kind === 'revolve' ? 2 : 0 };
+  }
+
+  /** The flat program's turn, light and wall (see FLAT_VS). */
+  private flatSetup(gl: WebGL2RenderingContext, sc: Scene, box: Rect, kind: number, mode: number) {
+    const u = this.fu, R = sc.R;
+    gl.useProgram(this.flat);
+    gl.uniformMatrix3fv(u.uR, false, [R[0], R[3], R[6], R[1], R[4], R[7], R[2], R[5], R[8]]);
+    gl.uniform2f(u.uC, sc.px, sc.cy);
+    gl.uniform1f(u.uF, sc.f);
+    gl.uniform4f(u.uBox, box.x, box.y, box.w, box.h);
+    gl.uniformMatrix4fv(u.uLM, false, lightView(sc));
+    gl.uniform1i(u.uMode, mode);
+    gl.uniform3f(u.uL, sc.dir[0], sc.dir[1], sc.dir[2]);
+    gl.uniform1i(u.uLampOn, sc.lamp ? 1 : 0);
+    if (sc.lamp) gl.uniform3f(u.uLamp, sc.lamp[0], sc.lamp[1], sc.lamp[2]);
+    gl.uniform1f(u.uWall, sc.wall);
+    gl.uniform1i(u.uTex, 0);
+    gl.uniform1i(u.uKind, kind);
+  }
+
+  /** Two images `w` by `h` for the wall shadow, made (or remade) at that size. */
+  private shadowImages(gl: WebGL2RenderingContext, w: number, h: number) {
+    const size = `${w}x${h}`;
+    if (this.shSize === size) return;
+    for (let i = 0; i < 2; i++) {
+      if (!this.shTex[i]) { this.shTex[i] = gl.createTexture()!; this.shFbo[i] = gl.createFramebuffer()!; }
+      gl.bindTexture(gl.TEXTURE_2D, this.shTex[i]);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, this.shFbo[i]);
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.shTex[i], 0);
+    }
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    this.shSize = size;
+  }
+
+  /**
+   * The 3D layer's shadow on the wall behind it, black on clear, softened and as dark as set, small: at a half, a
+   * quarter or less of the object's resolution (it's softened anyway), so it fits in the top-left corner of the canvas
+   * as sized for the object, where it's drawn (`w` by `h` pixels). `box` is where it goes (layer pixels), its blur
+   * included. Null without shadows.
+   */
+  renderWall(src: HTMLCanvasElement, m: Model3D, key: string, scale: number): { w: number; h: number; box: Rect } | null {
+    if (!m.shadow?.on) return null;
+    const r = this.prepare(src, m, key, scale);
+    if (!r) return null;
+    const { gl, mesh, s, cw, ch, scene } = r;
+    const box = shadowBounds(scene, mesh), blur = scene.blur * s;
+    let f = blur >= 4 ? 4 : 2;
+    while (f < 64 && (box.w * s > cw * f || box.h * s > ch * f)) f *= 2;
+    const w = Math.max(1, Math.min(cw, Math.ceil((box.w * s) / f))), h = Math.max(1, Math.min(ch, Math.ceil((box.h * s) / f)));
+    this.shadowImages(gl, w, h);
+    gl.disable(gl.DEPTH_TEST);
+    gl.viewport(0, 0, w, h);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.shFbo[0]);
+    gl.clearColor(0, 0, 0, 0);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    this.flatSetup(gl, scene, box, r.kind, 1);
+    gl.drawElements(gl.TRIANGLES, mesh.count, gl.UNSIGNED_INT, 0);
+    // Blurred (at least a little, which also smooths its stair-stepped edge), across into the other image, and back.
+    gl.useProgram(this.quad);
+    gl.bindVertexArray(this.qVao);
+    gl.activeTexture(gl.TEXTURE4);
+    gl.uniform1i(this.qu.uImg, 4);
+    gl.uniform1i(this.qu.uMode, 0);
+    gl.uniform1f(this.qu.uSigma, Math.max(0.6, blur / f));
+    for (const [from, to, sx, sy] of [[0, 1, 1 / w, 0], [1, 0, 0, 1 / h]] as const) {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, this.shFbo[to]);
+      gl.bindTexture(gl.TEXTURE_2D, this.shTex[from]);
+      gl.uniform2f(this.qu.uStep, sx, sy);
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    }
+    // Laid down in the canvas's top-left corner (GL counts rows from the bottom).
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(0, 0, cw, ch);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    gl.viewport(0, ch - h, w, h);
+    gl.bindTexture(gl.TEXTURE_2D, this.shTex[0]);
+    gl.uniform1i(this.qu.uMode, 1);
+    gl.uniform1f(this.qu.uOpacity, m.shadow!.opacity / 100);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    gl.bindVertexArray(null);
+    gl.activeTexture(gl.TEXTURE0);
+    return { w, h, box };
+  }
+
+  /**
+   * The 3D layer (or its depth map) drawn into its box (layer pixels) at `scale` output pixels per layer pixel.
+   * `tex` is its texture's image, if it has one.
+   */
+  render(src: HTMLCanvasElement, m: Model3D, key: string, scale: number, depth = false, tex?: HTMLCanvasElement | null): { canvas: HTMLCanvasElement; box: Rect } | null {
+    const r = this.prepare(src, m, key, scale);
+    if (!r) return null;
+    const { gl, mesh, box, cw, ch, scene: sc } = r;
+    const shadows = !depth && !!m.shadow?.on;
+    if (shadows) {
+      // First the shadow map: the object's depths as the light sees it.
+      gl.bindFramebuffer(gl.FRAMEBUFFER, this.smFbo);
+      gl.viewport(0, 0, SM, SM);
+      gl.clearDepth(1);
+      gl.clear(gl.DEPTH_BUFFER_BIT);
+      gl.enable(gl.DEPTH_TEST);
+      gl.depthFunc(gl.LESS);
+      gl.enable(gl.POLYGON_OFFSET_FILL);
+      gl.polygonOffset(2, 4);
+      this.flatSetup(gl, sc, box, r.kind, 0);
+      gl.drawElements(gl.TRIANGLES, mesh.count, gl.UNSIGNED_INT, 0);
+      gl.disable(gl.POLYGON_OFFSET_FILL);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    }
+    gl.viewport(0, 0, cw, ch);
+    gl.clearColor(0, 0, 0, 0);
+    gl.clearDepth(1);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    gl.enable(gl.DEPTH_TEST);
+    gl.depthFunc(gl.LESS);
+    gl.useProgram(this.prog);
+    const R = sc.R;
     // GLSL mat3 is column-major: pass the transpose of the row-major rotation.
     gl.uniformMatrix3fv(this.u.uR, false, [R[0], R[3], R[6], R[1], R[4], R[7], R[2], R[5], R[8]]);
-    const px = pivotX(W, m);
-    gl.uniform2f(this.u.uC, px, H / 2);
-    gl.uniform1f(this.u.uF, CAM * Math.max(W, H));
+    gl.uniform2f(this.u.uC, sc.px, sc.cy);
+    gl.uniform1f(this.u.uF, sc.f);
     gl.uniform4f(this.u.uBox, box.x, box.y, box.w, box.h);
-    const ext = Math.max(...[mesh.lo, mesh.hi].flatMap((p) => p.map((v, i) => Math.abs(v - (i === 0 ? px : i === 1 ? H / 2 : 0)))));
-    gl.uniform1f(this.u.uZr, ext * 2 + 1);
+    gl.uniform1f(this.u.uZr, sc.ext * 2 + 1);
     gl.uniform1i(this.u.uTex, 0);
     gl.uniform1i(this.u.uBled, 1);
     gl.uniform1i(this.u.uOut, depth ? 1 : 0);
-    if (depth) {
-      // The nearest and farthest the turned object reaches (its box's corners).
-      const P = projector(W, H, m);
-      let z0 = Infinity, z1 = -Infinity;
-      for (const x of [mesh.lo[0], mesh.hi[0]]) for (const y of [mesh.lo[1], mesh.hi[1]]) for (const z of [mesh.lo[2], mesh.hi[2]]) {
-        const pz = P(x, y, z).z;
-        z0 = Math.min(z0, pz); z1 = Math.max(z1, pz);
-      }
-      gl.uniform2f(this.u.uZ, z0, z1);
-    }
-    const el = m.light.el * D2R, az = m.light.az * D2R;
-    gl.uniform3f(this.u.uL, Math.cos(el) * Math.cos(az), -Math.cos(el) * Math.sin(az), Math.sin(el));
+    // (For the depth map: the nearest and farthest the turned object reaches, its box's corners.)
+    if (depth) gl.uniform2f(this.u.uZ, sc.z0, sc.z1);
+    gl.uniform3f(this.u.uL, sc.dir[0], sc.dir[1], sc.dir[2]);
+    gl.uniform1i(this.u.uLampOn, sc.lamp ? 1 : 0);
+    if (sc.lamp) gl.uniform3f(this.u.uLamp, sc.lamp[0], sc.lamp[1], sc.lamp[2]);
+    gl.uniform3f(this.u.uLCol, sc.color[0], sc.color[1], sc.color[2]);
+    gl.activeTexture(gl.TEXTURE3);
+    gl.bindTexture(gl.TEXTURE_2D, this.smTex);
+    gl.uniform1i(this.u.uSM, 3);
+    if (shadows) {
+      gl.uniformMatrix4fv(this.u.uLM, false, lightView(sc));
+      // Softness: up to 20 of the map's pixels across; a step of a pixel and a half off the surface.
+      gl.uniform4f(this.u.uSh, 1, m.shadow!.opacity / 100, (0.75 + (m.shadow!.soft / 100) * 20) / SM, (1.5 * 3.5 * sc.ext) / SM);
+    } else gl.uniform4f(this.u.uSh, 0, 0, 0, 0);
     const col = m.color ? [parseInt(m.color.slice(1, 3), 16) / 255, parseInt(m.color.slice(3, 5), 16) / 255, parseInt(m.color.slice(5, 7), 16) / 255, 1] : [0, 0, 0, 0];
     gl.uniform4f(this.u.uCol, col[0], col[1], col[2], col[3]);
     gl.uniform4fv(this.u.uMat, MATERIALS[m.material]);
     gl.uniform1f(this.u.uAmb, m.light.ambient / 100);
     gl.uniform1f(this.u.uStr, m.light.strength / 100);
-    gl.uniform1i(this.u.uKind, m.kind === 'extrude' ? 1 : m.kind === 'revolve' ? 2 : 0);
+    gl.uniform1i(this.u.uKind, r.kind);
     const t = m.texture;
     gl.uniform1i(this.u.uTxOn, t && tex && !depth ? 1 : 0);
     gl.uniform1i(this.u.uTx, 2);
@@ -1557,14 +1949,6 @@ class ModelGL {
       // Bump height: up to 30 layer pixels between black and white (textures rarely use the whole range).
       gl.uniform1f(this.u.uBump, (t.bump / 100) * 30);
     }
-    const F = 4 * STRIDE;
-    gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 3, gl.FLOAT, false, F, 0);
-    gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 3, gl.FLOAT, false, F, 12);
-    gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 2, gl.FLOAT, false, F, 24);
-    gl.enableVertexAttribArray(3); gl.vertexAttribPointer(3, 1, gl.FLOAT, false, F, 32);
-    gl.enableVertexAttribArray(4); gl.vertexAttribPointer(4, 2, gl.FLOAT, false, F, 36);
-    gl.enableVertexAttribArray(5); gl.vertexAttribPointer(5, 4, gl.FLOAT, false, F, 44);
-    gl.enableVertexAttribArray(6); gl.vertexAttribPointer(6, 1, gl.FLOAT, false, F, 60);
     gl.uniform2f(this.u.uProf, mesh.profile?.[0] ?? 0, mesh.profile?.[1] ?? 0);
     gl.uniform1i(this.u.uPass, 0);
     gl.drawElements(gl.TRIANGLES, mesh.count, gl.UNSIGNED_INT, 0);
@@ -1584,30 +1968,95 @@ class ModelGL {
 }
 
 const engine = new ModelGL();
-const outCache = new Map<string, { canvas: HTMLCanvasElement; box: Rect }>();
+
+/** A rendered 3D layer: the object and its box (layer pixels), and with shadows, its shadow behind it, the same way. */
+export interface ModelRender { canvas: HTMLCanvasElement; box: Rect; shadow?: { canvas: HTMLCanvasElement; box: Rect } }
+
+const outCache = new Map<string, ModelRender>();
 
 /**
- * The rendered 3D layer (a copy that stays valid) and its box in layer pixels; cached by its settings and the
- * output resolution (a power of two, so zooming reuses it). `depth`: its depth map instead (nearest white, farthest
- * dark grey). `texture` is the image of its texture (m.texture.key), if it has one. Null if WebGL2 isn't available.
+ * The rendered 3D layer (copies that stay valid); cached by its settings and the output resolution (a power of two, so
+ * zooming reuses it). Its shadow is a separate, smaller image (it's soft, and mostly empty space), to be drawn
+ * stretched to its box under the object. `depth`: its depth map instead (nearest white, farthest dark grey), no
+ * shadow. `texture` is the image of its texture (m.texture.key), if it has one. Null if WebGL2 isn't available.
  */
-export function renderModel(src: HTMLCanvasElement, m: Model3D, key: string, scale: number, depth = false, texture?: HTMLCanvasElement | null): { canvas: HTMLCanvasElement; box: Rect } | null {
+export function renderModel(src: HTMLCanvasElement, m: Model3D, key: string, scale: number, depth = false, texture?: HTMLCanvasElement | null): ModelRender | null {
   const s = 2 ** Math.ceil(Math.log2(Math.max(0.125, Math.min(4, scale))));
   const ck = `${key}|${src.width}x${src.height}|${JSON.stringify(m)}|${s}|${depth}|${!!texture}`;
   const hit = outCache.get(ck);
   if (hit) return hit;
+  let shadow: ModelRender['shadow'];
+  const wall = depth ? null : engine.renderWall(src, m, key, s);
+  if (wall) {
+    const c = document.createElement('canvas');
+    c.width = wall.w; c.height = wall.h;
+    c.getContext('2d')!.drawImage(engine.canvas, 0, 0, wall.w, wall.h, 0, 0, wall.w, wall.h);
+    shadow = { canvas: c, box: wall.box };
+  }
   const r = engine.render(src, m, key, s, depth, texture);
   if (!r) return null;
   if (outCache.size > 24) outCache.clear();
   const c = document.createElement('canvas');
   c.width = r.canvas.width; c.height = r.canvas.height;
   c.getContext('2d')!.drawImage(r.canvas, 0, 0);
-  const out = { canvas: c, box: r.box };
+  const out = { canvas: c, box: r.box, shadow };
   outCache.set(ck, out);
   return out;
 }
 
-/** The 3D layer's box (layer pixels) without rendering it. */
-export function modelBox(src: HTMLCanvasElement, m: Model3D, key: string): Rect {
-  return boundsOf(src.width, src.height, m, meshFor(src, m, key));
+/** A rendered 3D layer as one image (its shadow under it) and its box, at the object's resolution. */
+export function flattenRender(r: ModelRender): { canvas: HTMLCanvasElement; box: Rect } {
+  if (!r.shadow) return r;
+  const k = r.canvas.width / r.box.w, b = r.box, sb = r.shadow.box;
+  const x0 = Math.min(b.x, sb.x), y0 = Math.min(b.y, sb.y), x1 = Math.max(b.x + b.w, sb.x + sb.w), y1 = Math.max(b.y + b.h, sb.y + sb.h);
+  const c = document.createElement('canvas');
+  c.width = Math.max(1, Math.round((x1 - x0) * k)); c.height = Math.max(1, Math.round((y1 - y0) * k));
+  const x = c.getContext('2d')!;
+  x.imageSmoothingQuality = 'high';
+  x.drawImage(r.shadow.canvas, (sb.x - x0) * k, (sb.y - y0) * k, sb.w * k, sb.h * k);
+  x.drawImage(r.canvas, (b.x - x0) * k, (b.y - y0) * k, b.w * k, b.h * k);
+  return { canvas: c, box: { x: x0, y: y0, w: x1 - x0, h: y1 - y0 } };
+}
+
+/** The 3D layer's box (layer pixels) without rendering it: its shadow included, or the object alone. */
+export function modelBox(src: HTMLCanvasElement, m: Model3D, key: string, withShadow = true): Rect {
+  return frameOf(src.width, src.height, m, meshFor(src, m, key), withShadow);
+}
+
+/**
+ * For placing the light by dragging (layer pixels): the point the object turns around, and how far out the light's
+ * ring is drawn. A light straight on is at the middle, and one level with the picture on the ring; the direction around
+ * is the light's direction.
+ */
+export function lightRing(src: HTMLCanvasElement, m: Model3D, key: string): { x: number; y: number; r: number } {
+  const mesh = meshFor(src, m, key), b = boundsOf(src.width, src.height, m, mesh);
+  return { x: pivotX(src.width, m), y: src.height / 2, r: Math.max(24, Math.max(b.w, b.h) * 0.6) };
+}
+
+/**
+ * Which way the light comes from as seen (x right, y down, z toward the viewer): its own direction, or with Turns with
+ * object, that direction turned with the object.
+ */
+export function lightSeen(m: Model3D): V3 {
+  const el = m.light.el * D2R, az = m.light.az * D2R;
+  const d: V3 = [Math.cos(el) * Math.cos(az), -Math.cos(el) * Math.sin(az), Math.sin(el)];
+  if (!m.light.follow) return d;
+  const R = rotation(m);
+  return [R[0] * d[0] + R[1] * d[1] + R[2] * d[2], R[3] * d[0] + R[4] * d[1] + R[5] * d[2], R[6] * d[0] + R[7] * d[1] + R[8] * d[2]];
+}
+
+/**
+ * The light's direction and height from where it's seen to come from (as lightSeen): back into the object's own
+ * frame with Turns with object. Height stays 0-90 (a light from behind is put level with the picture).
+ */
+export function lightFromSeen(m: Model3D, d: V3): { az: number; el: number } {
+  let v = d;
+  if (m.light.follow) {
+    // The turn's inverse is its transpose.
+    const R = rotation(m);
+    v = [R[0] * d[0] + R[3] * d[1] + R[6] * d[2], R[1] * d[0] + R[4] * d[1] + R[7] * d[2], R[2] * d[0] + R[5] * d[1] + R[8] * d[2]];
+  }
+  const az = ((Math.atan2(-v[1], v[0]) / D2R) + 360) % 360;
+  const el = Math.max(0, Math.asin(Math.max(-1, Math.min(1, v[2]))) / D2R);
+  return { az: Math.round(az), el: Math.round(el) };
 }

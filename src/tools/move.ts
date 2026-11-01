@@ -6,7 +6,7 @@ import { apply, corners, decompose, identity, invert, mapRect, mul, pointInPoly,
 import type { PlacedLayer, RasterLayer, ShapeProps } from '../core/types';
 import { warpHandles, warpPoint } from '../core/warp';
 import { alignLayers, applyWarp, distributeLayers, ensureWarp, flipLayer, removeWarp, resetTransform, rotateLayer90, setModel, setPlacedTransform } from '../actions';
-import type { Model3D } from '../core/model3d';
+import { defaultShadow, lightFromSeen, lightRing, lightSeen, type Model3D } from '../core/model3d';
 import type { IconName } from '../ui/icons';
 import { view } from '../ui/canvasview';
 import { h } from '../ui/dom';
@@ -101,6 +101,7 @@ class MoveTool implements Tool {
   get hint() {
     const m = app.opts.move.mode;
     return m === 'rotate3d' ? 'Drag to turn the 3D layer (left/right turns, up/down tilts) · Shift+drag spins it · Enter when done'
+      : m === 'light3d' ? 'Drag to move the light: in the middle it shines straight on, out on the ring it skims from the side (long shadows) · Enter when done'
       : m === 'perspective' ? 'Drag the corners to fit the layer into a perspective · Enter when done · lossless until you Apply'
       : m === 'warp' ? 'Drag the grid points to bend the layer · Enter when done · lossless until you Apply'
         : this.boxEditable ? 'Drag the handles to resize the box, or inside it to move the box · the layer stays put'
@@ -115,7 +116,32 @@ class MoveTool implements Tool {
   /** A turn of the active 3D layer in progress: where it started and the settings then. */
   private turn: { x: number; y: number; m: Model3D } | null = null;
 
-  private setMode(m: 'transform' | 'perspective' | 'warp' | 'rotate3d') {
+  /** Moving the active 3D layer's light. */
+  private lighting = false;
+
+  /** The active 3D layer's light ring (see lightRing), with its layer and model; null without one. */
+  private ring() {
+    const doc = app.doc, l = doc?.activeRaster;
+    if (!doc || !l?.model) return null;
+    return { l, m: l.model, ...lightRing(doc.canvasOf(l), l.model, l.key) };
+  }
+
+  /** Points the light at where the pointer is over the ring (see lightRing). */
+  private aimLight(p: PInfo) {
+    const r = this.ring();
+    if (!r) return;
+    const lp = apply(invert(layerMatrix(r.l)), p.x, p.y);
+    let dx = (lp.x - r.x) / r.r, dy = (lp.y - r.y) / r.r;
+    const rho = Math.hypot(dx, dy);
+    if (rho > 1) { dx /= rho; dy /= rho; }
+    // (On the ring it's at 5°, not quite level: level light throws shadows endlessly far.)
+    const k = Math.cos(5 * (Math.PI / 180));
+    dx *= k; dy *= k;
+    const { az, el } = lightFromSeen(r.m, [dx, dy, Math.sqrt(Math.max(0, 1 - dx * dx - dy * dy))]);
+    setModel({ light: { ...r.m.light, az, el } });
+  }
+
+  private setMode(m: 'transform' | 'perspective' | 'warp' | 'rotate3d' | 'light3d') {
     if ((m === 'perspective' || m === 'warp') && !ensureWarp(m === 'warp' ? 'mesh' : 'perspective')) { app.emit('tool'); return; }
     app.opts.move.mode = m;
     app.emit('tool');
@@ -149,6 +175,7 @@ class MoveTool implements Tool {
 
   cursor(p: PInfo | null) {
     if (this.mode === 'rotate3d') return this.turn ? 'grabbing' : 'grab';
+    if (this.mode === 'light3d') return 'crosshair';
     if (this.mode !== 'transform') {
       const l = app.doc?.activeRaster;
       if (this.wdrag) return 'grabbing';
@@ -173,14 +200,29 @@ class MoveTool implements Tool {
     const is3D = !!app.doc?.activeRaster?.model;
     const modes = seg([
       { v: 'transform', label: 'Transform' },
-      ...(is3D ? [{ v: 'rotate3d' as const, label: 'Rotate 3D', title: 'Drag on the canvas to turn the 3D layer' }]
-        : [{ v: 'perspective' as const, label: 'Perspective' }, { v: 'warp' as const, label: 'Warp' }]),
+      ...(is3D ? [
+        { v: 'rotate3d' as const, label: 'Rotate 3D', title: 'Drag on the canvas to turn the 3D layer' },
+        { v: 'light3d' as const, label: 'Light', title: 'Drag on the canvas to move the 3D layer\'s light' },
+      ] : [{ v: 'perspective' as const, label: 'Perspective' }, { v: 'warp' as const, label: 'Warp' }]),
     ], o.mode, (v) => this.setMode(v));
     if (o.mode === 'rotate3d') {
+      const follow = !!app.doc?.activeRaster?.model?.light.follow;
       bar.append(modes,
         h('button', { class: 'btn small primary', type: 'button', onclick: () => this.setMode('transform') }, 'Done'),
         h('button', { class: 'btn small', type: 'button', onclick: () => setModel({ rotX: 0, rotY: 0, rotZ: 0 }, 'Face front') }, 'Face front'),
-        h('span', { class: 'opt-note' }, 'Drag to turn it · Shift+drag spins it · the light stays put, so it shades as it turns.'));
+        h('span', { class: 'opt-note' }, follow ? 'Drag to turn it · Shift+drag spins it · the light turns with it, so the same side stays lit.'
+          : 'Drag to turn it · Shift+drag spins it · the light stays put, so it shades as it turns.'));
+      return;
+    }
+    if (o.mode === 'light3d') {
+      const m = app.doc?.activeRaster?.model;
+      if (!m) { bar.append(modes); return; }
+      bar.append(modes,
+        h('button', { class: 'btn small primary', type: 'button', onclick: () => this.setMode('transform') }, 'Done'),
+        seg([{ v: 'sun', label: 'Sun', title: 'Light from far away, the same everywhere' }, { v: 'lamp', label: 'Lamp', title: 'Light from a point near the object: brighter up close, its shadows spreading out' }],
+          m.light.kind ?? 'sun', (v) => { setModel({ light: { ...app.doc!.activeRaster!.model!.light, kind: v } }, 'Light'); app.emit('tool'); }),
+        checkbox('Shadows', !!m.shadow?.on, (v) => setModel({ shadow: { ...(app.doc!.activeRaster!.model!.shadow ?? defaultShadow()), on: v } }, v ? 'Shadows on' : 'Shadows off')),
+        h('span', { class: 'opt-note' }, 'Drag to move the light · more settings in Properties › 3D › Light.'));
       return;
     }
     if (o.mode !== 'transform') {
@@ -264,6 +306,12 @@ class MoveTool implements Tool {
       if (m) this.turn = { x: p.sx, y: p.sy, m: { ...m } };
       return;
     }
+    if (this.mode === 'light3d') {
+      if (!doc.activeRaster?.model) return;
+      this.lighting = true;
+      this.aimLight(p);
+      return;
+    }
     if (this.mode !== 'transform') {
       const l = ensureWarp(this.mode === 'warp' ? 'mesh' : 'perspective');
       if (!l) return;
@@ -318,6 +366,7 @@ class MoveTool implements Tool {
   }
 
   move(p: PInfo) {
+    if (this.lighting) { this.aimLight(p); return; }
     if (this.turn) {
       // Half a degree per screen pixel; angles stay within -180..180.
       const t = this.turn, dx = p.sx - t.x, dy = p.sy - t.y;
@@ -410,6 +459,7 @@ class MoveTool implements Tool {
   up() {
     clearSnapLines();
     if (this.turn) { this.turn = null; app.doc?.commit('Rotate 3D'); return; }
+    if (this.lighting) { this.lighting = false; app.doc?.commit('Move light'); return; }
     if (this.wdrag) {
       const w = this.wdrag;
       this.wdrag = null;
@@ -464,8 +514,52 @@ class MoveTool implements Tool {
     ctx.restore();
   }
 
+  /**
+   * The light's ring around the 3D layer (as lightRing; drawn through the layer's own transform), a line from its
+   * middle to the light, and the light: a sun with rays, or a round lamp.
+   */
+  private lightOverlay(ctx: CanvasRenderingContext2D, accent: string) {
+    const r = this.ring();
+    if (!r) return;
+    const M = layerMatrix(r.l);
+    const sp = (x: number, y: number) => { const d = apply(M, x, y); return view.toScreen(d.x, d.y); };
+    const d = lightSeen(r.m);
+    const c = sp(r.x, r.y), at = sp(r.x + d[0] * r.r, r.y + d[1] * r.r);
+    ctx.save();
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = accent;
+    ctx.setLineDash([4, 4]);
+    ctx.beginPath();
+    for (let i = 0; i <= 64; i++) {
+      const t = (i / 64) * Math.PI * 2, q = sp(r.x + Math.cos(t) * r.r, r.y + Math.sin(t) * r.r);
+      if (i) ctx.lineTo(q.x, q.y); else ctx.moveTo(q.x, q.y);
+    }
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.beginPath(); ctx.moveTo(c.x, c.y); ctx.lineTo(at.x, at.y); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(c.x - 5, c.y); ctx.lineTo(c.x + 5, c.y); ctx.moveTo(c.x, c.y - 5); ctx.lineTo(c.x, c.y + 5); ctx.stroke();
+    const col = r.m.light.color ?? '#ffffff';
+    ctx.fillStyle = col;
+    ctx.strokeStyle = '#000';
+    ctx.lineWidth = 1.5;
+    if (r.m.light.kind === 'lamp') {
+      ctx.beginPath(); ctx.arc(at.x, at.y, 8, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      ctx.beginPath(); ctx.arc(at.x, at.y, 12, 0, Math.PI * 2); ctx.strokeStyle = accent; ctx.stroke();
+    } else {
+      for (let k = 0; k < 8; k++) {
+        const t = (k / 8) * Math.PI * 2;
+        ctx.beginPath(); ctx.moveTo(at.x + Math.cos(t) * 9, at.y + Math.sin(t) * 9); ctx.lineTo(at.x + Math.cos(t) * 13, at.y + Math.sin(t) * 13);
+        ctx.strokeStyle = '#000'; ctx.lineWidth = 3.5; ctx.stroke();
+        ctx.strokeStyle = col; ctx.lineWidth = 1.5; ctx.stroke();
+      }
+      ctx.beginPath(); ctx.arc(at.x, at.y, 6, 0, Math.PI * 2); ctx.fill(); ctx.strokeStyle = '#000'; ctx.stroke();
+    }
+    ctx.restore();
+  }
+
   overlay(ctx: CanvasRenderingContext2D) {
     const accentNow = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#2EE6BE';
+    if (this.mode === 'light3d') { this.lightOverlay(ctx, accentNow); return; }
     if (this.mode !== 'transform') {
       const r = app.doc?.activeRaster;
       if (r?.warp && r.visible) this.warpOverlay(ctx, r, accentNow);
