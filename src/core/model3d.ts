@@ -193,6 +193,11 @@ interface Mesh {
   data: Float32Array; index: Uint32Array; count: number; lo: [number, number, number]; hi: [number, number, number]; area: [number, number, number, number];
   /** Inflate's rounded profile, for shading by it near the edge: its height and how far in it reaches (pixels). */
   profile?: [number, number];
+  /**
+   * A plainer version for shadows, which are softened and only need its shape (Inflate: without the finer triangles
+   * beside the edge, its facings unset). Without it, the mesh itself.
+   */
+  lite?: { data: Float32Array; index: Uint32Array; count: number };
 }
 /**
  * 11 numbers per vertex as above, then 5 for Inflate's edge: the distance to the picture's edge (pixels), the
@@ -670,6 +675,8 @@ function heightSurfaces(g: Grid, h: Float32Array, W: number, H: number, out: Mes
 const shapeParts = new WeakMap<Grid, {
   rim?: Rim; outline?: Edge; edge?: { dist: Float32Array; dir: Float32Array; crease: Float32Array; reach: Float32Array }; contours?: Pt[][];
   surface?: { data: Float32Array; index: Uint32Array; recipe: Recipe };
+  /** The plainer surfaces for shadows (see Mesh.lite), the same way. */
+  lite?: { data: Float32Array; index: Uint32Array; recipe: Recipe };
 }>();
 const partsOf = (g: Grid) => { let p = shapeParts.get(g); if (!p) shapeParts.set(g, (p = {})); return p; };
 
@@ -728,10 +735,17 @@ function inflateMesh(g: Grid, src: HTMLCanvasElement, m: Model3D, W: number, H: 
     const out = new MeshBuilder(), recipe = new Recipe();
     heightSurfaces(g, new Float32Array(g.d.length), W, H, out, 0, rim, edgeAt, { d: (k) => (rim.on[k] ? 0 : dist[k]), r: (k) => reach[k], cut: 2, n: 3, exact: (x, y) => (nearestEdge(parts.outline!, x, y, 6 * cell)?.d ?? 0) / cell }, recipe);
     parts.surface = { ...out.parts, recipe };
+    // And for shadows, on the grid alone.
+    const lo = new MeshBuilder(), lr = new Recipe();
+    heightSurfaces(g, new Float32Array(g.d.length), W, H, lo, 0, rim, undefined, undefined, lr);
+    parts.lite = { ...lo.parts, recipe: lr };
   }
   const mesh = raise(parts.surface, h, lift, [W / 2, H / 2, W, H]);
+  // The plainer one only needs its heights.
+  const L = parts.lite!, ld = L.data.slice(), lr = L.recipe;
+  for (let v = 0; v < lr.n; v++) ld[v * STRIDE + 2] = lr.what[v] === Recipe.SAMPLE ? h[lr.from[v * 3]] * lr.side[v] : 0;
   // The rounded profile for the shader: its height and how far in it reaches (pixels).
-  return { ...mesh, profile: [depth, rr * cell] };
+  return { ...mesh, profile: [depth, rr * cell], lite: { data: ld, index: L.index, count: L.index.length } };
 }
 
 /** Inflate's surfaces from their recipe, at heights `h` (per grid sample) with the rounded profile `lift`. */
@@ -1666,6 +1680,43 @@ class ModelGL {
   private shTex: WebGLTexture[] = [];
   private shFbo: WebGLFramebuffer[] = [];
   private shSize = '';
+  /** The plainer mesh for shadows (Mesh.lite): its own vertex setup and buffers, and which one is in them. */
+  private liteVao: WebGLVertexArrayObject | null = null;
+  private liteBuf: WebGLBuffer | null = null;
+  private liteIx: WebGLBuffer | null = null;
+  private liteData: Float32Array | null = null;
+  /** What the shadow map holds: the mesh, the light's view of it, and the shape's kind. */
+  private smMesh: Mesh | null = null;
+  private smView: Float32Array | null = null;
+  private smKind = -1;
+
+  /** Draws the mesh for shadows (its plainer version, if it has one) with the flat program set up. */
+  private drawFlat(gl: WebGL2RenderingContext, mesh: Mesh) {
+    const lite = mesh.lite;
+    if (!lite) { gl.drawElements(gl.TRIANGLES, mesh.count, gl.UNSIGNED_INT, 0); return; }
+    if (!this.liteVao) {
+      this.liteVao = gl.createVertexArray();
+      this.liteBuf = gl.createBuffer();
+      this.liteIx = gl.createBuffer();
+      gl.bindVertexArray(this.liteVao);
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.liteBuf);
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.liteIx);
+      const F = 4 * STRIDE;
+      gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 3, gl.FLOAT, false, F, 0);
+      gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 2, gl.FLOAT, false, F, 24);
+      gl.enableVertexAttribArray(3); gl.vertexAttribPointer(3, 1, gl.FLOAT, false, F, 32);
+    } else gl.bindVertexArray(this.liteVao);
+    if (this.liteData !== lite.data) {
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.liteBuf);
+      gl.bufferData(gl.ARRAY_BUFFER, lite.data, gl.STATIC_DRAW);
+      gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, lite.index, gl.STATIC_DRAW);
+      this.liteData = lite.data;
+    }
+    gl.drawElements(gl.TRIANGLES, lite.count, gl.UNSIGNED_INT, 0);
+    gl.bindVertexArray(null);
+    // (Back to the full mesh's buffer for whatever's drawn next.)
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.buf);
+  }
 
   private init() {
     if (this.gl) return this.gl;
@@ -1839,7 +1890,7 @@ class ModelGL {
     gl.clearColor(0, 0, 0, 0);
     gl.clear(gl.COLOR_BUFFER_BIT);
     this.flatSetup(gl, scene, box, r.kind, 1);
-    gl.drawElements(gl.TRIANGLES, mesh.count, gl.UNSIGNED_INT, 0);
+    this.drawFlat(gl, mesh);
     // Blurred (at least a little, which also smooths its stair-stepped edge), across into the other image, and back.
     gl.useProgram(this.quad);
     gl.bindVertexArray(this.qVao);
@@ -1876,8 +1927,11 @@ class ModelGL {
     if (!r) return null;
     const { gl, mesh, box, cw, ch, scene: sc } = r;
     const shadows = !depth && !!m.shadow?.on;
-    if (shadows) {
-      // First the shadow map: the object's depths as the light sees it.
+    // First the shadow map: the object's depths as the light sees it. (Kept while the shape, its turn and the light
+    // stay the same: zooming, or changing the colour, finish or how dark the shadows are, doesn't need it again.)
+    const view = shadows ? lightView(sc) : null;
+    if (view && !(this.smMesh === mesh && this.smView?.every((v, i) => v === view[i]) && this.smKind === r.kind)) {
+      this.smMesh = mesh; this.smView = view; this.smKind = r.kind;
       gl.bindFramebuffer(gl.FRAMEBUFFER, this.smFbo);
       gl.viewport(0, 0, SM, SM);
       gl.clearDepth(1);
@@ -1887,7 +1941,7 @@ class ModelGL {
       gl.enable(gl.POLYGON_OFFSET_FILL);
       gl.polygonOffset(2, 4);
       this.flatSetup(gl, sc, box, r.kind, 0);
-      gl.drawElements(gl.TRIANGLES, mesh.count, gl.UNSIGNED_INT, 0);
+      this.drawFlat(gl, mesh);
       gl.disable(gl.POLYGON_OFFSET_FILL);
       gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     }
@@ -1917,8 +1971,8 @@ class ModelGL {
     gl.activeTexture(gl.TEXTURE3);
     gl.bindTexture(gl.TEXTURE_2D, this.smTex);
     gl.uniform1i(this.u.uSM, 3);
-    if (shadows) {
-      gl.uniformMatrix4fv(this.u.uLM, false, lightView(sc));
+    if (view) {
+      gl.uniformMatrix4fv(this.u.uLM, false, view);
       // Softness: up to 20 of the map's pixels across; a step of a pixel and a half off the surface.
       gl.uniform4f(this.u.uSh, 1, m.shadow!.opacity / 100, (0.75 + (m.shadow!.soft / 100) * 20) / SM, (1.5 * 3.5 * sc.ext) / SM);
     } else gl.uniform4f(this.u.uSh, 0, 0, 0, 0);
@@ -1973,6 +2027,7 @@ const engine = new ModelGL();
 export interface ModelRender { canvas: HTMLCanvasElement; box: Rect; shadow?: { canvas: HTMLCanvasElement; box: Rect } }
 
 const outCache = new Map<string, ModelRender>();
+const wallCache = new Map<string, NonNullable<ModelRender['shadow']>>();
 
 /**
  * The rendered 3D layer (copies that stay valid); cached by its settings and the output resolution (a power of two, so
@@ -1986,12 +2041,21 @@ export function renderModel(src: HTMLCanvasElement, m: Model3D, key: string, sca
   const hit = outCache.get(ck);
   if (hit) return hit;
   let shadow: ModelRender['shadow'];
-  const wall = depth ? null : engine.renderWall(src, m, key, s);
-  if (wall) {
-    const c = document.createElement('canvas');
-    c.width = wall.w; c.height = wall.h;
-    c.getContext('2d')!.drawImage(engine.canvas, 0, 0, wall.w, wall.h, 0, 0, wall.w, wall.h);
-    shadow = { canvas: c, box: wall.box };
+  if (!depth && m.shadow?.on) {
+    // (The shadow only depends on the shape, its turn, the light's place and the shadow settings: changing the
+    // colour, finish or texture keeps it.)
+    const L = m.light;
+    const wk = `${key}|${src.width}x${src.height}|${m.kind}|${m.depth}|${m.round}|${m.bevel}|${m.axis}|${m.rotX},${m.rotY},${m.rotZ}|${L.az},${L.el},${L.kind},${L.dist},${L.follow}|${JSON.stringify(m.shadow)}|${s}`;
+    shadow = wallCache.get(wk);
+    const wall = shadow ? null : engine.renderWall(src, m, key, s);
+    if (wall) {
+      const c = document.createElement('canvas');
+      c.width = wall.w; c.height = wall.h;
+      c.getContext('2d')!.drawImage(engine.canvas, 0, 0, wall.w, wall.h, 0, 0, wall.w, wall.h);
+      shadow = { canvas: c, box: wall.box };
+      if (wallCache.size > 24) wallCache.clear();
+      wallCache.set(wk, shadow);
+    }
   }
   const r = engine.render(src, m, key, s, depth, texture);
   if (!r) return null;
