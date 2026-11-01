@@ -2,6 +2,17 @@
 
 Each version's section becomes its release notes (`scripts/release.ps1` copies it to the download page).
 
+## 0.8.5
+
+Shadows and a light you can move.
+
+- **Shadows for 3D layers** (Properties › 3D › Shadows, off by default): the object shadows itself (one part on another, like a handle on the cup it sticks out of), and casts a soft shadow onto a wall behind it, which darkens the layers below. **Opacity**, **Softness** (0 is sharp-edged, like older games) and **Wall distance** (how far behind the object the shadow falls; further away moves it further out). The light's direction and height decide where it falls: a low light throws long shadows. It's done the way games do it (shadow mapping, not ray tracing), so it stays quick: about 5 ms per redraw on older hardware. The shadow is drawn at a lower resolution than the object, since it's soft anyway.
+- **Move the light on the canvas**: Move tool › Light (or Layer › 3D › Move Light, or Properties › Move on canvas). Drag the sun around the object: in the middle it shines straight on, out at the ring it skims from the side. Shading and shadows follow as you drag.
+- **Lamp**: besides the sun (light from far away, the same everywhere), a lamp near the object, **Lamp distance** away: brighter up close, its shadows spreading out wider.
+- **Light colour**: warm, cool or any colour, for the lit parts (the ambient light stays neutral).
+- **Turns with object**: the light can turn with the object, so the same side stays lit as you turn it. Off (as before), the light stays put in the picture, so the object shades as it turns.
+- Rasterize 3D bakes the shadow in with the object.
+
 ## 0.8.4
 
 Smoother Inflate shapes.
