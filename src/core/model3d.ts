@@ -173,11 +173,13 @@ interface Mesh {
   profile?: [number, number];
 }
 /**
- * 11 numbers per vertex as above, then 4 for Inflate's edge: the distance to the picture's edge (pixels), the
- * direction straight in from it, and how much the shader should shade by the exact rounded profile there (0-1, signed
- * by which face: + front, - back). Zero elsewhere.
+ * 11 numbers per vertex as above, then 5 for Inflate's edge: the distance to the picture's edge (pixels), the
+ * direction straight in from it, how much the shader should shade by the exact rounded profile there (0-1, signed by
+ * which face: + front, - back), and how far in that part of the shape reaches (pixels; see localRadius). Zero
+ * elsewhere.
  */
-const STRIDE = 15;
+const STRIDE = 16;
+type EdgeInfo = readonly [number, number, number, number, number];
 const meshCache = new Map<string, Mesh>();
 
 /**
@@ -190,17 +192,20 @@ class MeshBuilder {
   private ix = new Uint32Array(8192 * 3);
   private ni = 0;
 
-  vert(x: number, y: number, z: number, nx: number, ny: number, nz: number, u: number, v: number, kind: number, tx: number, ty: number, edge?: readonly [number, number, number, number] | null): number {
+  vert(x: number, y: number, z: number, nx: number, ny: number, nz: number, u: number, v: number, kind: number, tx: number, ty: number, edge?: EdgeInfo | null): number {
     if ((this.nv + 1) * STRIDE > this.v.length) { const n = new Float32Array(this.v.length * 2); n.set(this.v); this.v = n; }
     const a = this.v, o = this.nv * STRIDE;
     a[o] = x; a[o + 1] = y; a[o + 2] = z; a[o + 3] = nx; a[o + 4] = ny; a[o + 5] = nz;
     a[o + 6] = u; a[o + 7] = v; a[o + 8] = kind; a[o + 9] = tx; a[o + 10] = ty;
-    a[o + 11] = edge?.[0] ?? 0; a[o + 12] = edge?.[1] ?? 0; a[o + 13] = edge?.[2] ?? 0; a[o + 14] = edge?.[3] ?? 0;
+    for (let f = 0; f < 5; f++) a[o + 11 + f] = edge?.[f] ?? 0;
     return this.nv++;
   }
 
   /** How many vertices so far (the next one's number). */
   get count() { return this.nv; }
+
+  /** The vertices' numbers so far (STRIDE each; replaced when it grows, so not to be kept). */
+  get data() { return this.v; }
 
   /** A new vertex blended from existing ones p, q and r (-1 for none) by the weights. */
   blend(p: number, q: number, r: number, wp: number, wq: number, wr: number): number {
@@ -278,23 +283,24 @@ function meshOf(data: Float32Array, index: Uint32Array, area: [number, number, n
  * Where each vertex of Inflate's surfaces comes from, so that when only the depth or roundness changes, the heights
  * and facings are worked out again on the same triangles instead of building them anew. Per vertex: what it is (see
  * the constants), its grid sample or the earlier vertices it's blended from and their weights, its distance in from
- * the edge (samples), which face it's on, and whether it keeps its facing; and per face, its vertices and triangles.
+ * the edge and how far in its part of the shape reaches (samples), which face it's on, and whether it keeps its
+ * facing; and per face, its vertices and triangles.
  */
 class Recipe {
   static readonly SAMPLE = 0; static readonly RIM = 1; static readonly CURVED = 2; static readonly STRAIGHT = 3;
   n = 0;
   what = new Uint8Array(4096); from = new Int32Array(4096 * 3); w = new Float32Array(4096 * 3);
-  d = new Float32Array(4096); side = new Int8Array(4096); keep = new Uint8Array(4096);
+  d = new Float32Array(4096); r = new Float32Array(4096); side = new Int8Array(4096); keep = new Uint8Array(4096);
   faces: { v0: number; v1: number; i0: number; i1: number; side: number }[] = [];
 
   /** Records vertex number `v` (always the next one). */
-  add(v: number, what: number, a: number, b: number, c: number, wa: number, wb: number, wc: number, d: number, side: number) {
+  add(v: number, what: number, a: number, b: number, c: number, wa: number, wb: number, wc: number, d: number, r: number, side: number) {
     if (v >= this.what.length) {
       const grow = <T extends Uint8Array | Int8Array | Int32Array | Float32Array>(x: T): T => { const y = new (x.constructor as any)(x.length * 2) as T; y.set(x); return y; };
       this.what = grow(this.what); this.from = grow(this.from); this.w = grow(this.w);
-      this.d = grow(this.d); this.side = grow(this.side); this.keep = grow(this.keep);
+      this.d = grow(this.d); this.r = grow(this.r); this.side = grow(this.side); this.keep = grow(this.keep);
     }
-    this.what[v] = what; this.d[v] = d; this.side[v] = side;
+    this.what[v] = what; this.d[v] = d; this.r[v] = r; this.side[v] = side;
     this.from[v * 3] = a; this.from[v * 3 + 1] = b; this.from[v * 3 + 2] = c;
     this.w[v * 3] = wa; this.w[v * 3 + 1] = wb; this.w[v * 3 + 2] = wc;
     this.n = v + 1;
@@ -304,12 +310,13 @@ class Recipe {
 /**
  * The picture's traced edge (contours: smooth and accurate between pixels) as short segments, each end with the
  * outward direction there (averaged over the neighbouring segments, so it turns smoothly), bucketed on a grid so the
- * nearest point of the edge to anywhere is quick to find. Per segment: ax, ay, bx, by, then the two directions.
+ * nearest point of the edge to anywhere is quick to find. Per segment: ax, ay, bx, by, then the two directions; and
+ * in `bend`, how sharply the edge bends there (1 / radius, layer pixels; + outward, - inward).
  */
-interface Edge { seg: Float32Array; size: number; buckets: Map<number, number[]> }
+interface Edge { seg: Float32Array; bend: Float32Array; size: number; buckets: Map<number, number[]> }
 
 function edgeOf(loops: Pt[][], size: number): Edge {
-  const segs: number[] = [];
+  const segs: number[] = [], bends: number[] = [];
   for (const raw of loops) {
     const n = raw.length;
     if (n < 3) continue;
@@ -325,12 +332,20 @@ function edgeOf(loops: Pt[][], size: number): Edge {
       const l = Math.hypot(x, y) || 1;
       return [x / l, y / l];
     });
+    // How sharply it bends at each point (1 / the radius of the circle through it and the points two either side;
+    // + where it bulges outward, - where it dents in): from how far the middle of that chord is from the point.
+    const kp = pts.map((p, i) => {
+      const a = pts[(i - 2 + n) % n], b = pts[(i + 2) % n], cx = (a.x + b.x) / 2 - p.x, cy = (a.y + b.y) / 2 - p.y;
+      const half2 = ((b.x - a.x) ** 2 + (b.y - a.y) ** 2) / 4;
+      return half2 > 1e-6 ? (2 * -(cx * pn[i][0] + cy * pn[i][1])) / half2 : 0;
+    });
     for (let i = 0; i < n; i++) {
       const p = pts[i], q = pts[(i + 1) % n], a = pn[i], b = pn[(i + 1) % n];
       segs.push(p.x, p.y, q.x, q.y, a[0], a[1], b[0], b[1]);
+      bends.push((kp[i] + kp[(i + 1) % n]) / 2);
     }
   }
-  const seg = new Float32Array(segs), buckets = new Map<number, number[]>();
+  const seg = new Float32Array(segs), bend = new Float32Array(bends), buckets = new Map<number, number[]>();
   const key = (i: number, j: number) => j * 100003 + i;
   for (let s = 0; s < seg.length / 8; s++) {
     const o = s * 8;
@@ -342,7 +357,7 @@ function edgeOf(loops: Pt[][], size: number): Edge {
       if (b) b.push(s); else buckets.set(k, [s]);
     }
   }
-  return { seg, size, buckets };
+  return { seg, bend, size, buckets };
 }
 
 /**
@@ -453,10 +468,12 @@ function rimOf(g: Grid, edge?: Edge): Rim {
 }
 
 /**
- * Where a height field curves too sharply for the grid: each sample's distance in from the edge (`d`, in samples);
- * triangles with a corner nearer than `cut` are split `n` by `n`.
+ * Where a height field curves too sharply for the grid: each sample's distance in from the edge (`d`, in samples) and
+ * how far in its part of the shape reaches (`r`); triangles with a corner nearer than `cut` are split `n` by `n`. A
+ * new point between corners on opposite sides of a stroke's middle (going in opposite ways) gets its distance from
+ * `exact` (at a layer pixel) instead: in between, the distance doesn't run straight from one corner to the other.
  */
-interface Refine { d: (k: number) => number; cut: number; n: number }
+interface Refine { d: (k: number) => number; r: (k: number) => number; cut: number; n: number; exact: (x: number, y: number) => number }
 
 /**
  * Front and back surfaces of a height field over the silhouette (`h` per grid sample; the back mirrors it). `back`
@@ -465,7 +482,7 @@ interface Refine { d: (k: number) => number; cut: number; n: number }
  * picture's edges. With `refine`, triangles where the surface curves too sharply for the grid are split finer: their
  * new points only get their heights from the `recipe` (see raise), where each vertex's origin is noted.
  */
-function heightSurfaces(g: Grid, h: Float32Array, W: number, H: number, out: MeshBuilder, back: 0 | 2, rim?: Rim, edgeAt?: (k: number) => [number, number, number, number] | null, refine?: Refine, recipe?: Recipe) {
+function heightSurfaces(g: Grid, h: Float32Array, W: number, H: number, out: MeshBuilder, back: 0 | 2, rim?: Rim, edgeAt?: (k: number) => EdgeInfo | null, refine?: Refine, recipe?: Recipe) {
   const { gw, gh, cx, cy } = g;
   const at = (i: number, j: number) => h[Math.min(gh - 1, Math.max(0, j)) * gw + Math.min(gw - 1, Math.max(0, i))];
   const ins = (i: number, j: number) => i >= 0 && j >= 0 && i < gw && j < gh && g.inside[j * gw + i] === 1;
@@ -479,11 +496,27 @@ function heightSurfaces(g: Grid, h: Float32Array, W: number, H: number, out: Mes
     keep[v] = 1;
     if (recipe) recipe.keep[v] = 1;
   };
-  const note = (v: number, what: number, a: number, b: number, c: number, wa: number, wb: number, wc: number, d: number) =>
-    recipe?.add(v, what, a, b, c, wa, wb, wc, d, side);
+  // A sample's vertex (a is its sample) or one blended from vertices a, b and c (-1 for none), into the recipe.
+  const note = (v: number, what: number, a: number, b: number, c: number, wa: number, wb: number, wc: number) => {
+    if (!recipe) return;
+    const R = recipe, sample = what === Recipe.SAMPLE || what === Recipe.RIM;
+    let d = sample ? refine?.d(a) ?? 0 : wa * R.d[a] + wb * R.d[b] + (c >= 0 ? wc * R.d[c] : 0);
+    if (!sample && refine) {
+      // Corners going in opposite ways (directions in, see STRIDE): measure this point's distance itself, and give it
+      // to the shader too.
+      const D = out.data, way = (p: number, q: number) => D[p * STRIDE + 12] * D[q * STRIDE + 12] + D[p * STRIDE + 13] * D[q * STRIDE + 13];
+      if (way(a, b) < 0 || (c >= 0 && (way(a, c) < 0 || way(b, c) < 0))) {
+        const o = v * STRIDE;
+        d = refine.exact(D[o], D[o + 1]);
+        D[o + 11] = d * (cx + cy) / 2;
+      }
+    }
+    const r = sample ? refine?.r(a) ?? 0 : wa * R.r[a] + wb * R.r[b] + (c >= 0 ? wc * R.r[c] : 0);
+    R.add(v, what, a, b, c, wa, wb, wc, d, r, side);
+  };
   let side: 1 | -1 = 1;
   // The edge numbers for the shader (see STRIDE), with the weight signed by the face.
-  const edgeOf = (k: number) => { const e = edgeAt?.(k); return e ? [e[0], e[1], e[2], e[3] * side] as const : null; };
+  const edgeOf = (k: number): EdgeInfo | null => { const e = edgeAt?.(k); return e ? [e[0], e[1], e[2], e[3] * side, e[4]] : null; };
   const vert = (i: number, j: number) => {
     const k = j * gw + i;
     if (made[k] >= 0) return made[k];
@@ -492,7 +525,7 @@ function heightSurfaces(g: Grid, h: Float32Array, W: number, H: number, out: Mes
       // On the rim: upright, facing outward.
       const x = rim.pos[k * 2], y = rim.pos[k * 2 + 1];
       made[k] = out.vert(x, y, 0, rim.nrm[k * 2], rim.nrm[k * 2 + 1], 0, x / W, y / H, kind, x, y, edgeOf(k));
-      note(made[k], Recipe.RIM, k, -1, -1, 0, 0, 0, 0);
+      note(made[k], Recipe.RIM, k, -1, -1, 0, 0, 0);
       keepAdd(made[k]);
       return made[k];
     }
@@ -501,7 +534,7 @@ function heightSurfaces(g: Grid, h: Float32Array, W: number, H: number, out: Mes
     const l = Math.hypot(dx, dy, 1);
     const x = g.x0 + i * cx, y = g.y0 + j * cy;
     made[k] = out.vert(x, y, at(i, j) * side, -dx / l, -dy / l, side / l, x / W, y / H, kind, x, y, edgeOf(k));
-    note(made[k], Recipe.SAMPLE, k, -1, -1, 0, 0, 0, refine ? refine.d(k) : 0);
+    note(made[k], Recipe.SAMPLE, k, -1, -1, 0, 0, 0);
     return made[k];
   };
   const vk = (k: number) => vert(k % gw, (k - (k % gw)) / gw);
@@ -517,11 +550,13 @@ function heightSurfaces(g: Grid, h: Float32Array, W: number, H: number, out: Mes
     const lo = Math.min(ka, kb), hi = Math.max(ka, kb), key = lo * 4 + runs.indexOf(hi - lo);
     if (splits![key] >= 0) return splits![key];
     const da = r.d(lo), db = r.d(hi), va = vk(lo), vb = vk(hi);
-    const bent = Math.min(da, db) < r.cut, upright = !!rim?.on[lo] && !!rim.on[hi];
+    // (Upright along the rim, not across a stroke from one side to the other.)
+    const bent = Math.min(da, db) < r.cut, upright = !!rim?.on[lo] && !!rim.on[hi]
+      && rim.nrm[lo * 2] * rim.nrm[hi * 2] + rim.nrm[lo * 2 + 1] * rim.nrm[hi * 2 + 1] > 0;
     const first = out.count;
     for (let s = 1; s < r.n; s++) {
       const f = s / r.n, v = out.blend(va, vb, -1, 1 - f, f, 0);
-      note(v, bent ? Recipe.CURVED : Recipe.STRAIGHT, va, vb, -1, 1 - f, f, 0, da + (db - da) * f);
+      note(v, bent ? Recipe.CURVED : Recipe.STRAIGHT, va, vb, -1, 1 - f, f, 0);
       if (upright) keepAdd(v);
     }
     return (splits![key] = first);
@@ -551,7 +586,7 @@ function heightSurfaces(g: Grid, h: Float32Array, W: number, H: number, out: Mes
       else {
         const wb = i / n, wc = j / n, wa = 1 - wb - wc;
         v = out.blend(a, b, c, wa, wb, wc);
-        note(v, Recipe.CURVED, a, b, c, wa, wb, wc, wa * da + wb * db + wc * dc);
+        note(v, Recipe.CURVED, a, b, c, wa, wb, wc);
       }
       pt[j * N1 + i] = v;
     }
@@ -611,7 +646,7 @@ function heightSurfaces(g: Grid, h: Float32Array, W: number, H: number, out: Mes
  * changes the depth, roundness or bevel, the mesh is rebuilt from these instead of from scratch.
  */
 const shapeParts = new WeakMap<Grid, {
-  rim?: Rim; edge?: { dist: Float32Array; dir: Float32Array; crease: Float32Array }; contours?: Pt[][];
+  rim?: Rim; outline?: Edge; edge?: { dist: Float32Array; dir: Float32Array; crease: Float32Array; reach: Float32Array }; contours?: Pt[][];
   surface?: { data: Float32Array; index: Uint32Array; recipe: Recipe };
 }>();
 const partsOf = (g: Grid) => { let p = shapeParts.get(g); if (!p) shapeParts.set(g, (p = {})); return p; };
@@ -625,19 +660,29 @@ function inflateMesh(g: Grid, src: HTMLCanvasElement, m: Model3D, W: number, H: 
   // to it.
   const cell = (g.cx + g.cy) / 2;
   if (!parts.rim) {
-    const edge = edgeOf((parts.contours ??= contours(src, shapeBox(g, W, H))), Math.max(4, cell * 2));
+    const edge = (parts.outline = edgeOf((parts.contours ??= contours(src, shapeBox(g, W, H))), Math.max(4, cell * 2)));
     parts.rim = rimOf(g, edge);
-    const { dist, dir } = edgeDistance(g, parts.rim, edge);
-    parts.edge = { dist, dir, crease: creases(g, dist, dir) };
+    const { dist, dir, bend } = edgeDistance(g, edge);
+    // Creases to smooth are where the sides meet at an angle (at a corner); where they meet head on, the rounding
+    // itself levels off there.
+    const { reach, head } = localRadius(g, dist, dir, bend), crease = creases(g, dist, dir);
+    for (let k = 0; k < crease.length; k++) crease[k] *= 1 - head[k];
+    parts.edge = { dist: softenCreases(g, dist, crease), dir, crease, reach };
   }
-  const rim = parts.rim, { dist, dir, crease } = parts.edge!;
-  // The rounded profile: its height at a distance in from the edge (samples).
-  const lift = (d: number) => { const u = Math.min(1, d / rr); return depth * Math.sqrt(Math.max(0, 1 - (1 - u) * (1 - u))); };
-  let h = new Float32Array(g.d.length);
-  for (let k = 0; k < h.length; k++) if (g.inside[k]) h[k] = lift(dist[k]);
-  // Soften the creases where the distances from opposite edges meet (the middle of a stroke) into a smooth crown.
-  // Only there: averaging the steep rounding beside the edge would bend it a little differently in each row of
-  // samples, which shows as streaks when it's turned.
+  const rim = parts.rim, { dist, dir, crease, reach } = parts.edge!;
+  // The rounded profile: its height at a distance in from the edge, in a part of the shape that reaches `r` in
+  // (samples). A quarter of an ellipse, `rr` across, levelling off to the full depth. A narrower band (a thin stroke,
+  // a round end) rises as high as that would in its middle, but in a quarter ellipse of its own width, level there, so
+  // its two sides meet smoothly rather than in a ridge.
+  const lift = (d: number, r: number) => {
+    const e = Math.max(1e-3, Math.min(r, rr)), q = e / rr, v = Math.min(1, d / e);
+    return depth * Math.sqrt(q * (2 - q)) * Math.sqrt(v * (2 - v));
+  };
+  const h = new Float32Array(g.d.length);
+  for (let k = 0; k < h.length; k++) if (g.inside[k]) h[k] = lift(dist[k], reach[k]);
+  // Soften the creases left where the distances from the sides of a corner meet into a smooth crown. Only there:
+  // averaging the steep rounding beside the edge would bend it a little differently in each row of samples, which
+  // shows as streaks when it's turned.
   const soft = smooth(g, h, 3, 1.2);
   for (let k = 0; k < h.length; k++) if (crease[k]) h[k] += (soft[k] - h[k]) * crease[k];
   // Next to the edge the surface rises almost straight up, faster than even finer triangles can follow. There, the
@@ -645,12 +690,13 @@ function inflateMesh(g: Grid, src: HTMLCanvasElement, m: Model3D, W: number, H: 
   // the smooth shape it stands for. That's done for every pixel in the shader, from each vertex's distance and
   // direction to the edge, which blend smoothly across a triangle. Fully right beside the edge, fading out three
   // samples in (a hard switch would itself fall a little differently in each row), and not at a crease (smoothed).
-  const edgeAt = (k: number): [number, number, number, number] | null => {
+  const edgeAt = (k: number): EdgeInfo | null => {
     // On the rim: right on the edge, straight in is against its outward direction.
-    if (rim.on[k]) return [0, -rim.nrm[k * 2], -rim.nrm[k * 2 + 1], 1];
-    if (!g.inside[k] || dist[k] >= 4 || (!dir[k * 2] && !dir[k * 2 + 1])) return null;
+    if (rim.on[k]) return [0, -rim.nrm[k * 2], -rim.nrm[k * 2 + 1], 1, reach[k] * cell];
+    if (!g.inside[k]) return null;
     const t = Math.min(1, Math.max(0, (dist[k] - 1.2) / 1.8));
-    return [dist[k] * cell, dir[k * 2], dir[k * 2 + 1], (1 - t * t * (3 - 2 * t)) * (1 - crease[k])];
+    const w = dist[k] >= 4 || (!dir[k * 2] && !dir[k * 2 + 1]) ? 0 : (1 - t * t * (3 - 2 * t)) * (1 - crease[k]);
+    return [dist[k] * cell, dir[k * 2], dir[k * 2 + 1], w, reach[k] * cell];
   };
   // The triangles within two samples of the edge are split three by three, following the rounding (its steepest
   // part) closely: with single triangles, how each row cuts across the curve differs along the edge, which shows as
@@ -658,7 +704,7 @@ function inflateMesh(g: Grid, src: HTMLCanvasElement, m: Model3D, W: number, H: 
   // each vertex comes from; for each depth and roundness only the heights and facings are worked out.
   if (!parts.surface) {
     const out = new MeshBuilder(), recipe = new Recipe();
-    heightSurfaces(g, new Float32Array(g.d.length), W, H, out, 0, rim, edgeAt, { d: (k) => (rim.on[k] ? 0 : dist[k]), cut: 2, n: 3 }, recipe);
+    heightSurfaces(g, new Float32Array(g.d.length), W, H, out, 0, rim, edgeAt, { d: (k) => (rim.on[k] ? 0 : dist[k]), r: (k) => reach[k], cut: 2, n: 3, exact: (x, y) => (nearestEdge(parts.outline!, x, y, 6 * cell)?.d ?? 0) / cell }, recipe);
     parts.surface = { ...out.parts, recipe };
   }
   const mesh = raise(parts.surface, h, lift, [W / 2, H / 2, W, H]);
@@ -667,10 +713,10 @@ function inflateMesh(g: Grid, src: HTMLCanvasElement, m: Model3D, W: number, H: 
 }
 
 /** Inflate's surfaces from their recipe, at heights `h` (per grid sample) with the rounded profile `lift`. */
-function raise(base: { data: Float32Array; index: Uint32Array; recipe: Recipe }, h: Float32Array, lift: (d: number) => number, area: [number, number, number, number]): Mesh {
+function raise(base: { data: Float32Array; index: Uint32Array; recipe: Recipe }, h: Float32Array, lift: (d: number, r: number) => number, area: [number, number, number, number]): Mesh {
   const { recipe: r, index } = base, a = base.data.slice(), n = r.n;
   const L = new Float32Array(n);
-  for (let v = 0; v < n; v++) L[v] = lift(r.d[v]);
+  for (let v = 0; v < n; v++) L[v] = lift(r.d[v], r.r[v]);
   for (let v = 0; v < n; v++) {
     const o = v * STRIDE, what = r.what[v];
     if (what === Recipe.SAMPLE) { a[o + 2] = h[r.from[v * 3]] * r.side[v]; continue; }
@@ -709,93 +755,189 @@ function creases(g: Grid, dist: Float32Array, dir: Float32Array): Float32Array {
 }
 
 /**
- * How far each inside sample is from the picture's edge, in samples, and which way is straight in from the nearest
- * point of it (a unit vector). Measured to the traced edge where there is one: smooth along the edge, so neither the
- * distance nor the direction steps from one sample to the next (without one, measured to the rim, with no directions).
+ * For averaging only over inside samples: 1 / the share of inside samples around each sample, at blur size `r`
+ * (see boxBlur), 0 where there are none. Kept per grid and size, since several averages share it.
  */
-function edgeDistance(g: Grid, rim: Rim, edge?: Edge): { dist: Float32Array; dir: Float32Array } {
+const insideShares = new WeakMap<Grid, Map<number, Float32Array>>();
+function insideShare(g: Grid, r: number): Float32Array {
+  let byR = insideShares.get(g);
+  if (!byR) insideShares.set(g, (byR = new Map()));
+  let w = byR.get(r);
+  if (!w) {
+    const m = new Float32Array(g.inside.length);
+    for (let k = 0; k < m.length; k++) m[k] = g.inside[k];
+    w = boxBlur(m, g.gw, g.gh, r);
+    for (let k = 0; k < w.length; k++) w[k] = w[k] > 1e-4 ? 1 / w[k] : 0;
+    byR.set(r, w);
+  }
+  return w;
+}
+
+/**
+ * The distances with the creases at corners (`crease`, 0-1) rounded off, more the further in they are: where a
+ * corner's two sides' distances meet, the rounding would otherwise come to a sharp ridge running in from the corner.
+ * Each crease sample is averaged with the samples around it, over about 40% of its distance from the edge (a few sizes
+ * are made, and the nearest two mixed), leaving the steep part beside the edge as it is.
+ */
+function softenCreases(g: Grid, dist: Float32Array, crease: Float32Array): Float32Array {
+  const { gw, gh } = g, n = dist.length, out = Float32Array.from(dist);
+  let far = 0;
+  for (let k = 0; k < n; k++) if (crease[k] > 0 && dist[k] > far) far = dist[k];
+  if (far < 3) return out;
+  // Averages over 1, 2, 4... samples (three box blurs each), of the distances and of the creases (so the rounding fades
+  // in as wide as it reaches), counting only inside samples.
+  const sizes: number[] = [], bd: Float32Array[] = [], bc: Float32Array[] = [];
+  for (let r = 1; r <= Math.max(1, far / 2.5); r *= 2) {
+    const w = insideShare(g, r), a = boxBlur(dist, gw, gh, r), c = boxBlur(crease, gw, gh, r);
+    for (let k = 0; k < n; k++) { a[k] *= w[k]; c[k] *= w[k]; }
+    sizes.push(r); bd.push(a); bc.push(c);
+  }
+  for (let k = 0; k < n; k++) {
+    if (!g.inside[k] || dist[k] < 2) continue;
+    const want = Math.log2(Math.max(1, dist[k] / 2.5)), lo = Math.min(sizes.length - 1, Math.floor(want)), hi = Math.min(sizes.length - 1, lo + 1);
+    const f = Math.min(1, want - lo);
+    // (A crease is a few samples wide, so its share of a wider average is smaller: scaled back up.)
+    const c = (bc[lo][k] * sizes[lo] * (1 - f) + bc[hi][k] * sizes[hi] * f);
+    if (c <= 0) continue;
+    const near = Math.min(1, Math.max(0, (dist[k] - 2) / 2));
+    const w = Math.min(1, c * 2) * near * near * (3 - 2 * near);
+    out[k] = dist[k] + ((bd[lo][k] * (1 - f) + bd[hi][k] * f) - dist[k]) * w;
+  }
+  return out;
+}
+
+/**
+ * Where the shape is a band of its own width, such as a stroke, or a round end: there the lines straight in from the
+ * edge meet in the middle head on (from opposite edges) or all at once (at the centre of the end's curve). `reach` is
+ * how far in that is (samples: a stroke's half width, a round end's radius; a million elsewhere) and `head` how much
+ * the sample is in such a part (0-1; at a corner the lines meet at an angle, 0). Found from the middle outward, each
+ * sample taking them from the sample a step further in, then evened out between neighbours (they shape the rounding,
+ * so a step from one row to the next would show). Samples just outside, on the rim, get their neighbours'. `bend` is
+ * how sharply the edge bends where each sample's line comes from (see edgeDistance).
+ */
+function localRadius(g: Grid, dist: Float32Array, dir: Float32Array, bend: Float32Array): { reach: Float32Array; head: Float32Array } {
+  const { gw, gh } = g, n = dist.length;
+  // The inside samples furthest in first (sorted by distance in quarter samples, by counting).
+  let top = 0;
+  for (let k = 0; k < n; k++) if (g.inside[k] && dist[k] > top) top = dist[k];
+  const slots = Math.floor(top * 4) + 1, count = new Int32Array(slots + 1);
+  for (let k = 0; k < n; k++) if (g.inside[k]) count[slots - 1 - Math.floor(dist[k] * 4) + 1]++;
+  for (let s = 1; s <= slots; s++) count[s] += count[s - 1];
+  const order = new Int32Array(count[slots]);
+  for (let k = 0; k < n; k++) if (g.inside[k]) order[count[slots - 1 - Math.floor(dist[k] * 4)]++] = k;
+  // Per sample: how squarely, and 1 / reach (0 for no limit), so averaging leans to the narrower part.
+  const head = new Float32Array(n), inv = new Float32Array(n), done = new Uint8Array(n);
+  for (const k of order) {
+    const dx = dir[k * 2], dy = dir[k * 2 + 1];
+    done[k] = 1;
+    if (!dx && !dy) continue;
+    const i = k % gw, j = (k - i) / gw, ii = Math.round(i + dx), jj = Math.round(j + dy);
+    const q = jj * gw + ii;
+    if (ii >= 0 && jj >= 0 && ii < gw && jj < gh && done[q] && g.inside[q] && dist[q] > dist[k] + 0.3) { head[k] = head[q]; inv[k] = inv[q]; continue; }
+    // A step in doesn't take us further from the edge: this is the middle. Across it, in a band, whose sides run
+    // alongside each other, a neighbouring sample faces the other way (at a corner, or in a tapering point, which keep
+    // their mitred look, at an angle); at a round end the edge curves around this point, its radius as far away as the
+    // edge is. (A sharp corner bends far more tightly than that.)
+    let facing = 0, across = -1;
+    for (let dj = -1; dj <= 1; dj++) for (let di = -1; di <= 1; di++) {
+      const a = (j + dj) * gw + i + di;
+      if ((!di && !dj) || i + di < 0 || j + dj < 0 || i + di >= gw || j + dj >= gh || !g.inside[a]) continue;
+      const f = -(dx * dir[a * 2] + dy * dir[a * 2 + 1]);
+      if (f > Math.max(facing, 0.3)) { facing = f; across = a; }
+    }
+    const round = 1 - Math.abs(dist[k] * bend[k] - 1) / 0.4;
+    // (A stroke only a sample or so wide may have no sample across: this one is its middle.)
+    const slim = across < 0 && dist[k] < 1.5 ? 1 : 0;
+    const t = Math.min(1, Math.max(0, (facing - 0.86) / 0.1, round * 2, slim));
+    head[k] = t * t * (3 - 2 * t);
+    // The middle usually falls between this sample and the one across: the distance rises toward it from one and falls
+    // from it to the other, so it's where those meet (half their distances plus the gap between them, along the way in).
+    let far = slim ? dist[k] + 0.25 : dist[k];
+    if (across >= 0) {
+      const ai = across % gw, gap = (ai - i) * dx + ((across - ai) / gw - j) * dy;
+      if (gap > 0) far = Math.max(far, (dist[k] + dist[across] + gap) / 2);
+    }
+    inv[k] = head[k] / Math.max(0.5, far);
+  }
+  // Evened out over about half the reach (a few sizes are made, and the nearest two mixed): wide enough that where a
+  // stroke runs into a broader part it rises into it gradually, rather than in a step.
+  // (How squarely only needs evening out between neighbours.)
+  const w2 = insideShare(g, 2), bh = boxBlur(head, gw, gh, 2);
+  for (let k = 0; k < n; k++) head[k] = bh[k] * w2[k];
+  const sizes: number[] = [], bi: Float32Array[] = [];
+  for (let r = 2; r <= 32; r *= 2) {
+    const w = insideShare(g, r), b = boxBlur(inv, gw, gh, r);
+    let wide = false;
+    for (let k = 0; k < n; k++) { b[k] *= w[k]; if (b[k] > 0.02 && b[k] * r < 0.5) wide = true; }
+    sizes.push(r); bi.push(b);
+    // (No band is wide enough to want a bigger size.)
+    if (!wide) break;
+  }
+  const reach = new Float32Array(n);
+  for (let k = 0; k < n; k++) {
+    const near = 1 / Math.max(1e-6, bi[0][k]);
+    const want = Math.log2(Math.max(1, Math.min(near, 64) / 4));
+    const lo = Math.min(sizes.length - 1, Math.floor(want)), hi = Math.min(sizes.length - 1, lo + 1), f = Math.min(1, want - lo);
+    reach[k] = 1 / Math.max(1e-6, bi[lo][k] * (1 - f) + bi[hi][k] * f);
+  }
+  return { reach, head };
+}
+
+/**
+ * How far each inside sample is from the picture's traced edge, in samples, which way is straight in from the
+ * nearest point of it (a unit vector), and how sharply the edge bends there (see Edge; per sample). Smooth along the
+ * edge, so neither the distance nor the direction steps from one sample to the next.
+ */
+function edgeDistance(g: Grid, edge: Edge): { dist: Float32Array; dir: Float32Array; bend: Float32Array } {
   const { gw, gh } = g;
-  const dist = new Float32Array(g.d.length), dir = new Float32Array(g.d.length * 2);
+  const dist = new Float32Array(g.d.length), dir = new Float32Array(g.d.length * 2), bend = new Float32Array(g.d.length);
   const cell = (g.cx + g.cy) / 2;
-  if (edge) {
-    const X = (i: number) => g.x0 + i * g.cx, Y = (j: number) => g.y0 + j * g.cy;
-    // Each sample's nearest segment of the edge. Right beside the edge, found by looking around.
-    const near = new Int32Array(dist.length).fill(-1), best = new Float32Array(dist.length).fill(Infinity);
-    for (let k = 0; k < dist.length; k++) {
-      dist[k] = g.inside[k] ? g.d[k] - 0.5 : 0;
-      if (!g.inside[k] || g.d[k] > 1.5) continue;
-      const i = k % gw, j = (k - i) / gw;
-      const q = nearestEdge(edge, X(i), Y(j), 3 * cell);
-      if (q) { near[k] = q.s; best[k] = q.d; }
-    }
-    // Further in, handed on from neighbour to neighbour (forward, then back): each sample tries its neighbours' nearest
-    // segments and the two either side of those (a step between samples can pass more than one).
-    const segs = edge.seg.length / 8;
-    const pass = (from: number, to: number, step: number, nbr: readonly number[]) => {
-      for (let k = from; k !== to; k += step) {
-        if (!g.inside[k] || g.d[k] <= 1.5) continue;
-        const i = k % gw, j = (k - i) / gw, x = X(i), y = Y(j);
-        // (Neighbours' segments are mostly the same or next to each other: each is tried once.)
-        let lo = 1, hi = 0;
-        for (let n = 0; n < nbr.length; n += 2) {
-          const ii = i + nbr[n], jj = j + nbr[n + 1];
-          if (ii < 0 || jj < 0 || ii >= gw || jj >= gh) continue;
-          const s0 = near[jj * gw + ii];
-          if (s0 < 0) continue;
-          const a = Math.max(0, s0 - 2), b = Math.min(segs - 1, s0 + 2);
-          for (let s = a; s <= b; s++) {
-            if (s >= lo && s <= hi) continue;
-            const d = segDist(edge, s, x, y);
-            if (d < best[k]) { best[k] = d; near[k] = s; }
-          }
-          if (lo > hi) { lo = a; hi = b; }
-          else if (a <= hi + 1 && b >= lo - 1) { lo = Math.min(lo, a); hi = Math.max(hi, b); }
-        }
-      }
-    };
-    pass(0, dist.length, 1, [-1, 0, -1, -1, 0, -1, 1, -1]);
-    pass(dist.length - 1, -1, -1, [1, 0, 1, 1, 0, 1, -1, 1]);
-    for (let k = 0; k < dist.length; k++) {
-      if (near[k] < 0) continue;
-      const i = k % gw, j = (k - i) / gw, x = X(i), y = Y(j), q = onSeg(edge, near[k], x, y);
-      // (Right on the edge, or a hair outside it, straight in is against its outward direction.)
-      if (q.d < 1e-3 * cell || (x - q.px) * q.nx + (y - q.py) * q.ny > 0) { dist[k] = 0; dir[k * 2] = -q.nx; dir[k * 2 + 1] = -q.ny; }
-      else { dist[k] = q.d / cell; dir[k * 2] = (x - q.px) / q.d; dir[k * 2 + 1] = (y - q.py) / q.d; }
-    }
-    return { dist, dir };
-  }
-  // The rim as short segments (between neighbouring rim samples), in sample units.
-  const rx = (k: number) => (rim.pos[k * 2] - g.x0) / g.cx, ry = (k: number) => (rim.pos[k * 2 + 1] - g.y0) / g.cy;
-  const BAND = 5;
+  const X = (i: number) => g.x0 + i * g.cx, Y = (j: number) => g.y0 + j * g.cy;
+  // Each sample's nearest segment of the edge. Right beside the edge, found by looking around.
+  const near = new Int32Array(dist.length).fill(-1), best = new Float32Array(dist.length).fill(Infinity);
   for (let k = 0; k < dist.length; k++) {
-    if (!g.inside[k]) continue;
-    // Distance in from the edge. Near it (where the rounding is steep), measured to the rim itself, which sits on
-    // the picture's edge between samples; a distance counted in whole samples would step along slanted edges and
-    // show as ripples. Further in, the grid's distance is close enough (and the surface is nearly flat there).
-    dist[k] = g.d[k] - 0.5;
-    if (g.d[k] <= BAND) {
-      const i = k % gw, j = (k - i) / gw;
-      let best = Infinity;
-      const near = (x: number, y: number) => { best = Math.min(best, Math.hypot(i - x, j - y)); };
-      for (let jj = Math.max(0, j - BAND - 1); jj <= Math.min(gh - 1, j + BAND + 1); jj++) {
-        for (let ii = Math.max(0, i - BAND - 1); ii <= Math.min(gw - 1, i + BAND + 1); ii++) {
-          const r = jj * gw + ii;
-          if (!rim.on[r]) continue;
-          const px = rx(r), py = ry(r);
-          near(px, py);
-          for (const [di, dj] of [[1, 0], [0, 1], [1, 1], [1, -1]]) {
-            const i2 = ii + di, j2 = jj + dj;
-            if (i2 < 0 || j2 < 0 || i2 >= gw || j2 >= gh || !rim.on[j2 * gw + i2]) continue;
-            const qx = rx(j2 * gw + i2), qy = ry(j2 * gw + i2), sx = qx - px, sy = qy - py;
-            const t = Math.min(1, Math.max(0, ((i - px) * sx + (j - py) * sy) / (sx * sx + sy * sy || 1)));
-            near(px + sx * t, py + sy * t);
-          }
-        }
-      }
-      if (best < Infinity) dist[k] = best;
-    }
+    dist[k] = g.inside[k] ? g.d[k] - 0.5 : 0;
+    if (!g.inside[k] || g.d[k] > 1.5) continue;
+    const i = k % gw, j = (k - i) / gw;
+    const q = nearestEdge(edge, X(i), Y(j), 3 * cell);
+    if (q) { near[k] = q.s; best[k] = q.d; }
   }
-  return { dist, dir };
+  // Further in, handed on from neighbour to neighbour (forward, then back): each sample tries its neighbours' nearest
+  // segments and the two either side of those (a step between samples can pass more than one).
+  const segs = edge.seg.length / 8;
+  const pass = (from: number, to: number, step: number, nbr: readonly number[]) => {
+    for (let k = from; k !== to; k += step) {
+      if (!g.inside[k] || g.d[k] <= 1.5) continue;
+      const i = k % gw, j = (k - i) / gw, x = X(i), y = Y(j);
+      // (Neighbours' segments are mostly the same or next to each other: each is tried once.)
+      let lo = 1, hi = 0;
+      for (let n = 0; n < nbr.length; n += 2) {
+        const ii = i + nbr[n], jj = j + nbr[n + 1];
+        if (ii < 0 || jj < 0 || ii >= gw || jj >= gh) continue;
+        const s0 = near[jj * gw + ii];
+        if (s0 < 0) continue;
+        const a = Math.max(0, s0 - 2), b = Math.min(segs - 1, s0 + 2);
+        for (let s = a; s <= b; s++) {
+          if (s >= lo && s <= hi) continue;
+          const d = segDist(edge, s, x, y);
+          if (d < best[k]) { best[k] = d; near[k] = s; }
+        }
+        if (lo > hi) { lo = a; hi = b; }
+        else if (a <= hi + 1 && b >= lo - 1) { lo = Math.min(lo, a); hi = Math.max(hi, b); }
+      }
+    }
+  };
+  pass(0, dist.length, 1, [-1, 0, -1, -1, 0, -1, 1, -1]);
+  pass(dist.length - 1, -1, -1, [1, 0, 1, 1, 0, 1, -1, 1]);
+  for (let k = 0; k < dist.length; k++) {
+    if (near[k] < 0) continue;
+    const i = k % gw, j = (k - i) / gw, x = X(i), y = Y(j), q = onSeg(edge, near[k], x, y);
+    // (Right on the edge, or a hair outside it, straight in is against its outward direction.)
+    if (q.d < 1e-3 * cell || (x - q.px) * q.nx + (y - q.py) * q.ny > 0) { dist[k] = 0; dir[k * 2] = -q.nx; dir[k * 2 + 1] = -q.ny; }
+    else { dist[k] = q.d / cell; dir[k * 2] = (x - q.px) / q.d; dir[k * 2 + 1] = (y - q.py) / q.d; }
+    bend[k] = edge.bend[q.s] * cell;
+  }
+  return { dist, dir, bend };
 }
 
 /** Averages a height field with its neighbours `passes` times, inside the silhouette, past `edge` samples in. */
@@ -1162,9 +1304,9 @@ function boundsOf(W: number, H: number, m: Model3D, mesh: Mesh): Rect {
 // ---------- rendering ----------
 
 const VS = `#version 300 es
-in vec3 aPos; in vec3 aNrm; in vec2 aUV; in float aSolid; in vec2 aT; in vec4 aEdge;
+in vec3 aPos; in vec3 aNrm; in vec2 aUV; in float aSolid; in vec2 aT; in vec4 aEdge; in float aReach;
 uniform mat3 uR; uniform vec2 uC; uniform float uF; uniform vec4 uBox; uniform float uZr;
-out vec3 vN; out vec2 vUV; out float vSolid; out float vZ; out vec2 vT; out vec3 vP; out vec4 vEdge;
+out vec3 vN; out vec2 vUV; out float vSolid; out float vZ; out vec2 vT; out vec3 vP; out vec4 vEdge; out float vReach;
 void main() {
   vec3 p = uR * vec3(aPos.xy - uC, aPos.z);
   float k = uF / (uF - p.z);
@@ -1176,12 +1318,14 @@ void main() {
   vUV = aUV;
   vSolid = aSolid;
   vEdge = aEdge;
+  vReach = aReach;
   gl_Position = vec4((s.x - uBox.x) / uBox.z * 2.0 - 1.0, 1.0 - (s.y - uBox.y) / uBox.w * 2.0, -p.z / uZr, 1.0);
 }`;
 const FS = `#version 300 es
 precision highp float;
-in vec3 vN; in vec2 vUV; in float vSolid; in float vZ; in vec2 vT; in vec3 vP; in vec4 vEdge; out vec4 o;
-// Inflate's rounded profile (height and how far in it reaches, pixels); y = 0 for other shapes.
+in vec3 vN; in vec2 vUV; in float vSolid; in float vZ; in vec2 vT; in vec3 vP; in vec4 vEdge; in float vReach; out vec4 o;
+// Inflate's rounded profile (height and how far in it reaches, pixels; a narrower part of the shape is rounded by its
+// own reach, vReach); y = 0 for other shapes.
 uniform vec2 uProf;
 uniform int uOut; uniform vec2 uZ;
 uniform sampler2D uTex; uniform sampler2D uBled; uniform int uPass; uniform mat3 uR;
@@ -1210,10 +1354,12 @@ void main() {
   // Inflate, near the edge: face the way the rounded profile does at this exact distance from the edge (it turns
   // from upright to level faster than the grid's points can show), mixed in by the weight.
   float ew = abs(vEdge.w);
-  if (uProf.y > 0.0 && ew > 0.001 && length(vEdge.yz) > 0.01) {
-    vec2 dir = normalize(vEdge.yz);
-    float u = clamp(vEdge.x / uProf.y, 0.002, 1.0);
-    float rise = uProf.x * (1.0 - u) / sqrt(max(1e-6, 1.0 - (1.0 - u) * (1.0 - u))) / uProf.y;
+  if (uProf.y > 0.0 && ew > 0.001) {
+    // (Where a triangle spans the middle of a thin stroke, the directions in from its two sides average out shorter,
+    // and the slope with them, to level on top.)
+    vec2 dir = vEdge.yz;
+    float e = max(1e-3, min(vReach, uProf.y)), q = e / uProf.y, u = clamp(vEdge.x / e, 0.002, 1.0);
+    float rise = uProf.x * sqrt(q * (2.0 - q)) * (1.0 - u) / sqrt(max(1e-6, u * (2.0 - u))) / e;
     vec3 exact = normalize(uR * vec3(-rise * dir, sign(vEdge.w)));
     N = normalize(mix(N, exact, min(1.0, ew)));
   }
@@ -1293,7 +1439,7 @@ class ModelGL {
     const p = gl.createProgram()!;
     gl.attachShader(p, sh(gl.VERTEX_SHADER, VS));
     gl.attachShader(p, sh(gl.FRAGMENT_SHADER, FS));
-    ['aPos', 'aNrm', 'aUV', 'aSolid', 'aT', 'aEdge'].forEach((n, i) => gl.bindAttribLocation(p, i, n));
+    ['aPos', 'aNrm', 'aUV', 'aSolid', 'aT', 'aEdge', 'aReach'].forEach((n, i) => gl.bindAttribLocation(p, i, n));
     gl.linkProgram(p);
     if (!gl.getProgramParameter(p, gl.LINK_STATUS)) { console.error('3D shader failed', gl.getProgramInfoLog(p)); return null; }
     for (const n of ['uR', 'uC', 'uF', 'uBox', 'uZr', 'uTex', 'uBled', 'uPass', 'uOut', 'uZ', 'uL', 'uCol', 'uMat', 'uAmb', 'uStr',
@@ -1418,6 +1564,7 @@ class ModelGL {
     gl.enableVertexAttribArray(3); gl.vertexAttribPointer(3, 1, gl.FLOAT, false, F, 32);
     gl.enableVertexAttribArray(4); gl.vertexAttribPointer(4, 2, gl.FLOAT, false, F, 36);
     gl.enableVertexAttribArray(5); gl.vertexAttribPointer(5, 4, gl.FLOAT, false, F, 44);
+    gl.enableVertexAttribArray(6); gl.vertexAttribPointer(6, 1, gl.FLOAT, false, F, 60);
     gl.uniform2f(this.u.uProf, mesh.profile?.[0] ?? 0, mesh.profile?.[1] ?? 0);
     gl.uniform1i(this.u.uPass, 0);
     gl.drawElements(gl.TRIANGLES, mesh.count, gl.UNSIGNED_INT, 0);

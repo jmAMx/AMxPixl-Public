@@ -4,12 +4,14 @@ Each version's section becomes its release notes (`scripts/release.ps1` copies i
 
 ## 0.8.4
 
-Smoother Inflate edges.
+Smoother Inflate shapes.
 
 - **No more streaks along the sides of a strongly turned Inflate shape.** Near the edge, the rounding is now measured from the picture's traced outline, which is evened out first, instead of from the sampling grid, so it no longer comes out a little different in each row. The triangles beside the edge are split finer to follow the steep rounding, and each pixel there is shaded from the exact rounded shape.
 - **Straight, smooth outlines at high zoom**, instead of a zig-zag that followed the sampling grid.
+- **Strokes inflate into round tubes.** Brush strokes and the strokes of letters are rounded across their own width, level along the middle, instead of their two sides meeting in a ridge that showed as a rough texture close up, and a stroke's round end becomes a round cap. Even strokes a few pixels wide stay whole and smooth.
+- **Softer corners at high Roundness.** The ridge running in from a sharp corner (a square's diagonals) is rounded off, more the further in it goes, so a square becomes a pillow rather than a pyramid. Pointed shapes such as stars keep their crisp ridges.
 - **No dark marks** where an edge point sat exactly on the outline.
-- **Same speed where it counts**: turning a shape and dragging Depth or Roundness cost about the same as before (the finer edge is built once per shape and only raised to each new depth). Making an Inflate layer, or changing its picture, takes a little longer when the shape fills its layer (about 70 ms instead of 30 ms for a typical shape on older hardware) and about the same when it's a small shape on a large layer. Extrude is made faster: the picture's outline is now traced only where the shape is.
+- **Same speed where it counts**: turning a shape and dragging Depth or Roundness cost about the same as before (the finer edge is built once per shape and only raised to each new depth). Making an Inflate layer, or changing its picture, takes longer when the shape fills its layer (about 100 ms instead of 35 ms for a typical shape on older hardware) and a little longer when it's a small shape on a large layer. Extrude is made faster: the picture's outline is now traced only where the shape is.
 
 ## 0.8.3
 
