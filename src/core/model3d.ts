@@ -1685,10 +1685,9 @@ class ModelGL {
   private liteBuf: WebGLBuffer | null = null;
   private liteIx: WebGLBuffer | null = null;
   private liteData: Float32Array | null = null;
-  /** What the shadow map holds: the mesh, the light's view of it, and the shape's kind. */
+  /** What the shadow map holds: the mesh, and its turn, pivot, the light's view and the shape's kind (see render). */
   private smMesh: Mesh | null = null;
-  private smView: Float32Array | null = null;
-  private smKind = -1;
+  private smKey = '';
 
   /** Draws the mesh for shadows (its plainer version, if it has one) with the flat program set up. */
   private drawFlat(gl: WebGL2RenderingContext, mesh: Mesh) {
@@ -1928,10 +1927,12 @@ class ModelGL {
     const { gl, mesh, box, cw, ch, scene: sc } = r;
     const shadows = !depth && !!m.shadow?.on;
     // First the shadow map: the object's depths as the light sees it. (Kept while the shape, its turn and the light
-    // stay the same: zooming, or changing the colour, finish or how dark the shadows are, doesn't need it again.)
+    // stay the same: zooming, or changing the colour, finish or how dark the shadows are, doesn't need it again. The
+    // turn counts on its own: with the light staying put, turning the object leaves the light's view as it was.)
     const view = shadows ? lightView(sc) : null;
-    if (view && !(this.smMesh === mesh && this.smView?.every((v, i) => v === view[i]) && this.smKind === r.kind)) {
-      this.smMesh = mesh; this.smView = view; this.smKind = r.kind;
+    const smKey = view ? `${sc.R.join(',')}|${sc.px},${sc.cy}|${view.join(',')}|${r.kind}` : '';
+    if (view && !(this.smMesh === mesh && this.smKey === smKey)) {
+      this.smMesh = mesh; this.smKey = smKey;
       gl.bindFramebuffer(gl.FRAMEBUFFER, this.smFbo);
       gl.viewport(0, 0, SM, SM);
       gl.clearDepth(1);
