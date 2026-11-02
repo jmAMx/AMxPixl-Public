@@ -216,6 +216,7 @@ function dragSlot(e: PointerEvent, b: HTMLElement, grid: HTMLElement, slots: str
     b.removeEventListener('pointermove', move);
     b.removeEventListener('pointerup', up);
     b.removeEventListener('pointercancel', cancel);
+    b.removeEventListener('lostpointercapture', cancel);
     window.removeEventListener('keydown', key, true);
     if (!ghost) return;
     ghost.remove();
@@ -235,6 +236,8 @@ function dragSlot(e: PointerEvent, b: HTMLElement, grid: HTMLElement, slots: str
   b.addEventListener('pointermove', move);
   b.addEventListener('pointerup', up);
   b.addEventListener('pointercancel', cancel);
+  // (The toolbox redrawn mid-drag, by a tool shortcut say, takes the pointer away: the drag ends, nothing moves.)
+  b.addEventListener('lostpointercapture', cancel);
   window.addEventListener('keydown', key, true);
 }
 

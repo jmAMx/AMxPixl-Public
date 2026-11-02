@@ -65,7 +65,8 @@ class CanvasView {
     this.canvas.addEventListener('pointerdown', (e) => this.onDown(e));
     this.canvas.addEventListener('pointermove', (e) => this.onMove(e));
     this.canvas.addEventListener('pointerup', (e) => this.onUp(e));
-    this.canvas.addEventListener('pointercancel', (e) => this.onUp(e));
+    // (A cancelled pointer ends an Artboard tool drag as Escape would: it doesn't make, move or resize anything.)
+    this.canvas.addEventListener('pointercancel', (e) => { if (!(this.activeTool?.id === 'artboard' && this.cancelDrag())) this.onUp(e); });
     this.canvas.addEventListener('pointerleave', () => { if (!this.down) { this.hover = null; this.onCursor(null); this.requestOverlay(); } });
     this.canvas.addEventListener('wheel', (e) => this.onWheel(e), { passive: false });
     this.canvas.addEventListener('contextmenu', (e) => e.preventDefault());
@@ -110,9 +111,13 @@ class CanvasView {
       } else this.requestRender();
       this.syncAnts();
     });
-    app.on('docs', () => { this.ensureFitted(); this.requestRender(); this.syncAnts(); });
+    app.on('docs', () => {
+      // Kept pictures only of the file shown's other artboards (one switched to, or in another tab, goes).
+      for (const d of [...this.boardCache.keys()]) if (d === app.doc || !app.project?.has(d)) this.boardCache.delete(d);
+      this.ensureFitted(); this.requestRender(); this.syncAnts();
+    });
     app.on('tool', () => { this.updateCursor(); this.requestOverlay(); });
-    app.on('prefs', () => { this.checker = null; this.requestRender(); });
+    app.on('prefs', () => { this.checker = null; this.labelColors = null; this.requestRender(); });
   }
 
   get doc() { return app.doc; }
@@ -250,12 +255,11 @@ class CanvasView {
   }
 
   /** Draws `d` through `m` into the whole of `target` (composite pixels). */
-  private renderView(d: Doc, target: HTMLCanvasElement, m: Mat, depth: boolean) {
+  private renderView(d: Doc, target: HTMLCanvasElement, m: Mat, depth: boolean, big = this.marginCanvas) {
     const w = target.width, hh = target.height;
     const ext = this.withMargin(d, m, { x: 0, y: 0, w, h: hh }, dirtyPad(d));
     if (ext.w === w && ext.h === hh) { renderDoc(d, target, m, { screen: true, depth }); return; }
     // Zoomed in: draw past the view's edge too, so effects, styles and feathers there see the image beyond it.
-    const big = this.marginCanvas;
     if (big.width !== ext.w || big.height !== ext.h) { big.width = ext.w; big.height = ext.h; }
     renderDoc(d, big, [m[0], 0, 0, m[3], m[4] - ext.x, m[5] - ext.y], { screen: true, depth });
     const cx = ctx2d(target);
@@ -267,8 +271,13 @@ class CanvasView {
 
   // ---------- the file's other artboards ----------
 
-  /** Each other artboard's drawn copy, and what it was drawn for (see paintBoard). */
-  private boardCache = new WeakMap<Doc, { c: HTMLCanvasElement; sig: string }>();
+  /** Each other artboard's drawn copy (of `area` of it), what it was drawn for, oldest first (see paintBoard). */
+  private boardCache = new Map<Doc, { c: HTMLCanvasElement; sig: string; area: Rect }>();
+  /** paintBoard's own margin canvas, so drawing the other artboards doesn't resize the active one's every frame. */
+  private boardMargin = document.createElement('canvas');
+  /** The theme's label colours (read again when the theme changes), and names shortened to fit, by name and room. */
+  private labelColors: { dim: string; accent: string } | null = null;
+  private fitted = new Map<string, { text: string; w: number }>();
   /** Where the artboards' names were drawn (CSS px), for clicking them. */
   private labels: { b: Board; r: Rect }[] = [];
   /** Where the link chips beside them were drawn (see paintLabels). */
@@ -276,7 +285,19 @@ class CanvasView {
 
   /** The artboard whose link chip is under a point (CSS px), if any. */
   chipAt(sx: number, sy: number): Doc | null {
+    if (this.onActive(sx, sy)) return null;
     return this.chips.find((c) => sx >= c.r.x && sx <= c.r.x + c.r.w && sy >= c.r.y && sy <= c.r.y + c.r.h)?.d ?? null;
+  }
+
+  /**
+   * Whether a point is on the artboard being worked on. It wins over another artboard's name or link chip drawn over
+   * it (artboards close together at a low zoom), so painting near its edge paints.
+   */
+  private onActive(sx: number, sy: number): boolean {
+    const p = app.project;
+    if (!p || p.boards.length < 2) return false;
+    const r = this.boardRect(p.boardOf(p.active)!);
+    return sx >= r.x && sx <= r.x + r.w && sy >= r.y && sy <= r.y + r.h;
   }
 
   /** Where an artboard is on screen (CSS px). */
@@ -292,9 +313,10 @@ class CanvasView {
   boardAt(sx: number, sy: number): { b: Board; label: boolean } | null {
     const p = app.project;
     if (!p || p.boards.length < 2) return null;
+    const a = p.boardOf(p.active)!;
+    if (this.onActive(sx, sy)) return { b: a, label: false };
     for (const l of this.labels) if (sx >= l.r.x && sx <= l.r.x + l.r.w && sy >= l.r.y && sy <= l.r.y + l.r.h) return { b: l.b, label: true };
     const inside = (r: Rect, m: number) => sx >= r.x - m && sx <= r.x + r.w + m && sy >= r.y - m && sy <= r.y + r.h + m;
-    const a = p.boardOf(p.active)!;
     if (inside(this.boardRect(a), 8)) return { b: a, label: false };
     for (const b of [...p.boards].reverse()) if (inside(this.boardRect(b), 0)) return { b, label: false };
     return null;
@@ -322,44 +344,65 @@ class CanvasView {
     ctx.clip();
     ctx.fillStyle = this.checkerPattern(ctx);
     ctx.fillRect(vis.x, vis.y, vis.w, vis.h);
-    const whole = r.w <= 4096 && r.h <= 4096 && r.w * r.h <= 2 * this.canvas.width * this.canvas.height;
-    const area = whole ? { x: 0, y: 0, w: r.w, h: r.h }
-      : roundOut({ x: vis.x - r.x, y: vis.y - r.y, w: vis.w, h: vis.h });
+    // In view (artboard pixels at this zoom). A large artboard keeps only the part in view, with half a window more each
+    // side, so scrolling a little doesn't draw it again.
+    const v = roundOut({ x: vis.x - r.x, y: vis.y - r.y, w: vis.w, h: vis.h });
     const z = r.w / d.width;
-    const sig = `${d.version}:${d.frame}:${app.showDepth}:${z}:${r.h}:${whole ? '' : `${area.x},${area.y},${area.w},${area.h}`}`;
+    const sig = `${d.version}:${d.frame}:${app.showDepth}:${z}:${r.h}`;
     let kept = this.boardCache.get(d);
-    if (!kept || kept.sig !== sig) {
+    const fits = (a: Rect) => v.x >= a.x && v.y >= a.y && v.x + v.w <= a.x + a.w && v.y + v.h <= a.y + a.h;
+    if (!kept || kept.sig !== sig || !fits(kept.area)) {
+      const whole = r.w <= 4096 && r.h <= 4096 && r.w * r.h <= 2 * this.canvas.width * this.canvas.height;
+      const mx = Math.round(this.canvas.width / 2), my = Math.round(this.canvas.height / 2);
+      const area = whole ? { x: 0, y: 0, w: r.w, h: r.h } : intersect({ x: v.x - mx, y: v.y - my, w: v.w + mx * 2, h: v.h + my * 2 }, { x: 0, y: 0, w: r.w, h: r.h })!;
       const c = kept?.c ?? document.createElement('canvas');
       if (c.width !== area.w || c.height !== area.h) { c.width = area.w; c.height = area.h; }
-      this.renderView(d, c, [z, 0, 0, r.h / d.height, -area.x, -area.y], app.showDepth);
-      kept = { c, sig };
-      this.boardCache.set(d, kept);
+      this.renderView(d, c, [z, 0, 0, r.h / d.height, -area.x, -area.y], app.showDepth, this.boardMargin);
+      kept = { c, sig, area };
     }
-    ctx.drawImage(kept.c, r.x + area.x, r.y + area.y);
+    // Most recently drawn last; the oldest go once they hold more than a few windows' worth of pixels.
+    this.boardCache.delete(d);
+    this.boardCache.set(d, kept);
+    let total = 0;
+    for (const k of this.boardCache.values()) total += k.c.width * k.c.height;
+    for (const [od, k] of this.boardCache) {
+      if (total <= Math.max(8e6, 4 * this.canvas.width * this.canvas.height) || od === d) break;
+      total -= k.c.width * k.c.height;
+      this.boardCache.delete(od);
+    }
+    ctx.drawImage(kept.c, r.x + kept.area.x, r.y + kept.area.y);
     ctx.restore();
   }
 
   /** The artboards' names above them, the one worked on picked out (CSS px; sets `labels`). */
   private paintLabels(ctx: CanvasRenderingContext2D) {
     const p = app.project!;
-    const css = getComputedStyle(document.documentElement);
-    const dim = css.getPropertyValue('--text-dim').trim() || '#8b9a95';
-    const accent = css.getPropertyValue('--accent').trim() || '#2ee6be';
+    if (!this.labelColors) {
+      const css = getComputedStyle(document.documentElement);
+      this.labelColors = { dim: css.getPropertyValue('--text-dim').trim() || '#8b9a95', accent: css.getPropertyValue('--accent').trim() || '#2ee6be' };
+    }
+    const { dim, accent } = this.labelColors;
     ctx.save();
     ctx.font = '600 12px "Segoe UI", sans-serif';
     ctx.textBaseline = 'alphabetic';
     this.labels = [];
     this.chips = [];
+    if (this.fitted.size > 500) this.fitted.clear();
     for (const b of p.boards) {
       const r = this.boardRect(b), on = b.doc === p.active, picked = p.picked.has(b.doc);
       // As wide as the artboard (at least a little), shortened with an ellipsis when the name is longer.
-      const room = Math.max(60, r.w);
-      let text = b.doc.name;
-      if (ctx.measureText(text).width > room) {
-        while (text.length > 1 && ctx.measureText(text + '…').width > room) text = text.slice(0, -1);
-        text += '…';
+      const room = Math.max(60, Math.round(r.w)), fk = `${room}|${b.doc.name}`;
+      let fit = this.fitted.get(fk);
+      if (!fit) {
+        let text = b.doc.name;
+        if (ctx.measureText(text).width > room) {
+          while (text.length > 1 && ctx.measureText(text + '…').width > room) text = text.slice(0, -1);
+          text += '…';
+        }
+        fit = { text, w: ctx.measureText(text).width };
+        this.fitted.set(fk, fit);
       }
-      const w = ctx.measureText(text).width;
+      const { text, w } = fit;
       ctx.fillStyle = on || picked ? accent : dim;
       ctx.fillText(text, Math.round(r.x), Math.round(r.y) - 6);
       this.labels.push({ b, r: { x: r.x, y: r.y - LABEL, w: w + 4, h: LABEL } });

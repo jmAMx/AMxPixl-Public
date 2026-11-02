@@ -1,6 +1,6 @@
 import type { ChangeKind, Doc } from './core/document';
-import { Project, type Layout, type TabState } from './core/project';
-import { clearRecovery } from './core/recovery';
+import { Project, type Layout } from './core/project';
+import { autosave, clearRecovery } from './core/recovery';
 import type { Tool } from './tools/tool';
 import { setSetting } from './core/settings';
 
@@ -145,32 +145,46 @@ class App {
 
   addProject(p: Project, show = true) {
     for (const d of p.docs) this.watch(d);
-    p.onLayout = (l) => this.layoutUndone(p, l);
+    p.onLayout = (to, from) => this.layoutUndone(p, to, from);
     this.projects.push(p);
     if (show) this.setDoc(p.active); else this.emit('docs');
   }
 
   /**
-   * Undo or redo moved, added or removed artboards of `p`. An artboard back in it from a tab of its own (it had been
-   * taken out, or its file put into this one) leaves that tab; ones the step has in a tab of their own open in one.
+   * Undo or redo changed `p`'s artboards, from layout `from` to `to`. Another file the step closed (one put into `p` as
+   * copies) or opened (a copy of an artboard taken out of `p`) opens again or closes to match: it's only closed if
+   * nothing was done in it since, so no work is lost (and only copies ever went across, so its artboards and history
+   * are its own). One opened again is fitted to the window when it's next shown.
    */
-  private layoutUndone(p: Project, l: Layout) {
-    for (const d of p.docs) {
-      this.watch(d);
-      const q = this.projects.find((x) => x !== p && x.has(d));
-      if (q) { this.projects.splice(this.projects.indexOf(q), 1); clearRecovery(q).catch(() => {}); d.joinHistory(p.history); }
+  private layoutUndone(p: Project, to: Layout, from: Layout) {
+    for (const d of p.docs) this.watch(d);
+    const keep = new Set((to.tabs ?? []).map((t) => t.project));
+    for (const t of to.tabs ?? []) {
+      if (this.projects.includes(t.project) || t.project.closed) continue;
+      t.project.active.fitted = false;
+      this.addProject(t.project, false);
+      // (Its recovery copy went when it closed: make one again.)
+      t.project.active.touch('meta');
     }
-    for (const t of l.tabs ?? []) if (!this.projectOf(t.boards[0].doc)) this.openTab(t, false);
+    for (const t of from.tabs ?? []) {
+      const q = t.project, h = q.history;
+      if (keep.has(q) || !this.projects.includes(q) || h.index !== t.at || h.entries.length !== t.at) continue;
+      this.parkProject(q, p);
+    }
     this.emit('docs');
   }
 
-  /** Opens artboards in a tab of their own, as `t` describes it (with a history of its own from now). */
-  openTab(t: TabState, show: boolean) {
-    t.boards[0].doc.resetHistory('Open');
-    const q = new Project(t.name, t.boards.map((b) => ({ ...b })));
-    q.file = t.file;
-    if (t.dirty) q.history.savedIndex = -1;
-    this.addProject(q, show);
+  /**
+   * Closes a file whose artboards went into `into` as copies (still in memory, for undo to open again). Its recovery
+   * copy goes once `into`'s has been written, so a crash in between can't lose it.
+   */
+  parkProject(q: Project, into: Project) {
+    const i = this.projects.indexOf(q);
+    if (i < 0) return;
+    if (this.project === q) this.setDoc(into.active);
+    this.projects.splice(i, 1);
+    autosave(into).then(() => clearRecovery(q)).catch(() => {});
+    this.emit('docs');
   }
 
   /** Changes to an image are reported as the app's 'change' event. */
@@ -212,6 +226,7 @@ class App {
   removeProject(p: Project) {
     const i = this.projects.indexOf(p);
     if (i < 0) return;
+    p.closed = true;
     this.projects.splice(i, 1);
     if (this.project === p) this.setDoc(this.projects[Math.min(i, this.projects.length - 1)]?.active ?? null);
     else this.emit('docs');

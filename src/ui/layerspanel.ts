@@ -325,9 +325,12 @@ export function layersPanel() {
     name.addEventListener('dblclick', (e) => {
       e.stopPropagation();
       const inp = h('input', { class: 'rename', type: 'text', value: d.name, spellcheck: false });
-      const done = (save: boolean) => { if (save) renameArtboard(d, inp.value); build(); };
+      let finished = false;
+      const done = (save: boolean) => { if (finished) return; finished = true; if (save) renameArtboard(d, inp.value); build(); };
       inp.addEventListener('keydown', (ev) => { ev.stopPropagation(); if (ev.key === 'Enter') done(true); if (ev.key === 'Escape') done(false); });
       inp.addEventListener('blur', () => done(true));
+      // (Clicks in the box, to place the caret, aren't clicks on the row, which would pick the artboard and end the edit.)
+      for (const t of ['click', 'pointerdown', 'dblclick']) inp.addEventListener(t, (ev) => ev.stopPropagation());
       name.replaceWith(inp);
       inp.focus(); inp.select();
     });

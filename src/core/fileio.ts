@@ -120,12 +120,11 @@ export async function encodePixl(p: Pick<Project, 'name' | 'boards'>): Promise<B
   jobs.forEach((j, n) => { index[j.i][j.key] = [offset, encoded[n].size]; offset += encoded[n].size; });
   const one = boards.length === 1;
   const version = one ? 1 : 2;
+  const sourceOf = (d: Doc): BoardHead['source'] => (d.source?.file.path ? { name: d.source.name, path: d.source.file.path, linked: d.source.linked, hash: d.source.hash } : undefined);
+  // (Version 1 with `board`: the artboard's own name and link, which earlier versions ignore.)
   const head = one
-    ? { app: 'AMxPixl', version, name: p.name, meta: boards[0].meta, blobs: index[0] }
-    : { app: 'AMxPixl', version, name: p.name, boards: boards.map(({ b, meta }, i): BoardHead => {
-      const s = b.doc.source;
-      return { name: b.doc.name, x: b.x, y: b.y, meta, blobs: index[i], source: s?.file.path ? { name: s.name, path: s.file.path, linked: s.linked, hash: s.hash } : undefined };
-    }) };
+    ? { app: 'AMxPixl', version, name: p.name, meta: boards[0].meta, blobs: index[0], board: { name: boards[0].b.doc.name, source: sourceOf(boards[0].b.doc) } }
+    : { app: 'AMxPixl', version, name: p.name, boards: boards.map(({ b, meta }, i): BoardHead => ({ name: b.doc.name, x: b.x, y: b.y, meta, blobs: index[i], source: sourceOf(b.doc) })) };
   const header = new TextEncoder().encode(JSON.stringify(head));
   const pre = new ArrayBuffer(12);
   const dv = new DataView(pre);
@@ -143,10 +142,10 @@ export async function decodePixl(blob: Blob, fallbackName: string): Promise<Proj
   if (dv.getUint32(4, true) > FORMAT_VERSION) throw new Error('it was saved by a newer version of Pixl. Update Pixl to open it.');
   const hlen = dv.getUint32(8, true);
   const head = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 12, hlen))) as
-    { name?: string; meta?: Meta; blobs?: Record<string, [number, number]>; boards?: BoardHead[] };
+    { name?: string; meta?: Meta; blobs?: Record<string, [number, number]>; boards?: BoardHead[]; board?: { name?: string; source?: BoardHead['source'] } };
   const base = 12 + hlen;
   const name = head.name || fallbackName;
-  const heads: BoardHead[] = head.boards ?? [{ name, x: 0, y: 0, meta: head.meta!, blobs: head.blobs! }];
+  const heads: BoardHead[] = head.boards ?? [{ name: head.board?.name || name, x: 0, y: 0, meta: head.meta!, blobs: head.blobs!, source: head.board?.source }];
   const jobs = heads.flatMap((b, i) => Object.entries(b.blobs).map(([key, [off, len]]) => ({ i, key, off, len })));
   const canvases = await fewAtOnce(jobs, (j) => decodeImage(new Blob([new Uint8Array(buf, base + j.off, j.len)], { type: 'image/png' })));
   const docs = heads.map((b) => {

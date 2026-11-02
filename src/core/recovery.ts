@@ -103,7 +103,18 @@ function keysOf(m: Meta): string[] {
   return [...keys];
 }
 
-export async function autosave(p: Project) {
+/** Autosaves in progress, by file: one file's copies are written one at a time (the timer's, and one asked for now). */
+const writing = new Map<string, Promise<void>>();
+
+/** Copies a file's unsaved state to the recovery store (after any copy of it still being written). */
+export function autosave(p: Project): Promise<void> {
+  const next = (writing.get(p.uid) ?? Promise.resolve()).catch(() => {}).then(() => writeCopy(p));
+  writing.set(p.uid, next);
+  next.finally(() => { if (writing.get(p.uid) === next) writing.delete(p.uid); }).catch(() => {});
+  return next;
+}
+
+async function writeCopy(p: Project) {
   const boards: BoardRecord[] = [];
   for (const { doc, x, y } of p.boards) {
     const meta = doc.snapshot();
@@ -135,6 +146,8 @@ export async function autosave(p: Project) {
 
 export async function clearRecovery(p: Project | string) {
   const uid = typeof p === 'string' ? p : p.uid;
+  // A copy still being written would otherwise land after this and come back as "unsaved work" next time.
+  await writing.get(uid)?.catch(() => {});
   await store.clear(uid);
   if (isDesktop) await browserStore.clear(uid).catch(() => {});
   if (typeof p !== 'string') for (const d of p.docs) d.storedKeys.clear();

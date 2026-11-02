@@ -32,8 +32,8 @@ export class History {
   entries: Entry[] = [];
   index = 0;
   savedIndex = 0;
-  /** Puts the file's artboards back as a step left them (set by the file). */
-  setLayout: (layout: unknown) => void = () => {};
+  /** Puts the file's artboards back as a step left them, from how they are (set by the file). */
+  setLayout: (to: unknown, from: unknown) => void = () => {};
 }
 
 /** Steps with the same merge key this close together become one (holding an arrow key to nudge, say). */
@@ -310,7 +310,7 @@ export class Doc {
     this.last = m;
     this.maskCache = null;
     for (const o of e.others ?? []) o.doc.setState(dir === 'undo' ? o.before : o.after);
-    if (e.layout) h.setLayout(dir === 'undo' ? e.layout.before : e.layout.after);
+    if (e.layout) h.setLayout(dir === 'undo' ? e.layout.before : e.layout.after, dir === 'undo' ? e.layout.after : e.layout.before);
     this.touch('history');
   }
 

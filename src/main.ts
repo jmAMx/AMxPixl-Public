@@ -86,7 +86,7 @@ async function offerRecovery() {
 
 // After a graphics reset, draw again what was drawn without the graphics card (adjustment, effect and 3D layers, and
 // their thumbnails). Other open images redraw when they're switched to.
-onGpuRestored(() => { for (const d of app.project?.docs ?? []) d.touch('meta'); });
+onGpuRestored(() => { for (const d of app.docs) d.touch('meta'); });
 
 // Something that failed with nothing to catch it (opening, placing or pasting, say) says so instead of doing nothing.
 // A burst of the same failure shows once.

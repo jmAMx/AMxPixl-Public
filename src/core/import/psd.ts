@@ -193,7 +193,7 @@ export async function importPsd(buf: ArrayBuffer, name: string): Promise<Board[]
           const at = r.pos;
           if (key === 'luni') { const n = r.u32(); let s = ''; for (let k = 0; k < n; k++) s += String.fromCharCode(r.u16()); rec.name = s.replace(/\0+$/, ''); }
           else if (key === 'lsct' || key === 'lsdk') { rec.divider = r.u32(); if (len >= 12) { r.skip(4); rec.blend = r.str(4); } }
-          else if (key === 'artb' || key === 'abdd') {
+          else if (key === 'artb' || key === 'artd' || key === 'abdd') {
             // An artboard: version, then a descriptor with its rectangle.
             try {
               r.skip(4);
@@ -302,16 +302,16 @@ export async function importPsd(buf: ArrayBuffer, name: string): Promise<Board[]
 
 /**
  * Photoshop artboards (top-level groups marked as such) each become an artboard of their own, with that group's
- * layers placed within it; without any, the document is one image.
+ * layers placed within it; without any, the document is one image. Layers outside them (and any artboard that
+ * couldn't be read, as a group) go on one more artboard, "Other layers", the document's size, beside the others.
  */
 function splitArtboards(doc: Doc, rects: Map<string, { x: number; y: number; w: number; h: number }>, notes: Set<string>): Board[] {
   const groups = doc.layers.filter((l): l is GroupLayer => l.type === 'group' && rects.has(l.id));
   if (!groups.length) return [{ doc, x: 0, y: 0 }];
-  if (groups.length < doc.layers.length) notes.add('Layers outside the artboards were left out.');
-  return groups.map((g) => {
-    const a = rects.get(g.id)!;
-    const d = new Doc(g.name, a.w, a.h);
-    d.layers = g.children;
+  /** An artboard of `layers` (taking their pixels from the document), the document's point (x, y) at its corner. */
+  const board = (name: string, layers: Layer[], a: { x: number; y: number; w: number; h: number }): Board => {
+    const d = new Doc(name, a.w, a.h);
+    d.layers = layers;
     const shift = <T extends { x: number; y: number }>(t: T): T => ({ ...t, x: t.x - a.x, y: t.y - a.y });
     for (const l of flatLayers(d.layers)) {
       if (l.type === 'raster') { l.t = shift(l.t); d.pool.set(l.key, doc.pool.get(l.key)!); }
@@ -320,5 +320,18 @@ function splitArtboards(doc: Doc, rects: Map<string, { x: number; y: number; w: 
     d.activeId = d.layers[d.layers.length - 1]?.id ?? null;
     d.counter = doc.counter;
     return { doc: d, x: a.x, y: a.y };
+  };
+  const boards = groups.map((g) => {
+    if (!g.visible || g.opacity < 1 || g.mask) notes.add('An artboard\'s own visibility, opacity or mask was left out (its layers keep theirs).');
+    return board(g.name, g.children, rects.get(g.id)!);
   });
+  const rest = doc.layers.filter((l) => !groups.includes(l as GroupLayer));
+  if (rest.length) {
+    const right = Math.max(...boards.map((b) => b.x + b.doc.width));
+    // (Placed after the others; its layers keep their places on the document.)
+    const other = board('Other layers', rest, { x: 0, y: 0, w: doc.width, h: doc.height });
+    boards.push({ ...other, x: right + 100, y: 0 });
+    notes.add('Layers outside the artboards are on an artboard of their own, "Other layers".');
+  }
+  return boards;
 }

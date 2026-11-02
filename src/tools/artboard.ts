@@ -44,12 +44,15 @@ function snapAxis(m: Span, others: Span[], which: number[], tol: number, axis: '
     const target = o.pos + o.size * t;
     take(target, m.pos + m.size * k, { axis, pos: target });
   }
-  // Gaps the others already have between neighbours that face each other (overlapping across).
+  // Gaps the others already have between neighbours: two that face each other (overlapping across) with nothing
+  // facing them in between.
   const overlaps = (a: Span, b: Span) => a.across[0] < b.across[1] && b.across[0] < a.across[1];
   const gaps = new Set<number>();
   for (const a of others) for (const b of others) {
     const g = b.pos - (a.pos + a.size);
-    if (a !== b && g > 0 && overlaps(a, b)) gaps.add(Math.round(g));
+    if (a === b || g <= 0 || !overlaps(a, b)) continue;
+    const between = others.some((c) => c !== a && c !== b && c.pos < b.pos && c.pos + c.size > a.pos + a.size && overlaps(c, a) && overlaps(c, b));
+    if (!between) gaps.add(Math.round(g));
   }
   for (const o of others) {
     if (!overlaps(o, m)) continue;
@@ -80,10 +83,10 @@ function tabDropSpot(state: 'off' | 'near' | 'over', name = '', copy = false) {
   if (!spot) {
     spot = h('div', { class: 'tab-drop-spot' });
     bar.insertBefore(spot, bar.querySelector('.tab-new'));
+    spot.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   }
   const text = state === 'over' ? `Let go: ${name} ${copy ? '(a copy) ' : ''}in its own tab` : `Drag up here: ${name} in its own tab`;
   if (spot.textContent !== text) spot.replaceChildren(icon('artboard'), h('span', null, text));
-  spot.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 }
 
 /**
@@ -342,7 +345,8 @@ class ArtboardTool implements Tool {
     const name = h('input', { type: 'text', class: 'opt-text', spellcheck: false, title: 'The artboard\'s name (also shown above it)' }) as HTMLInputElement;
     const commit = () => { const d = app.doc; if (d) renameArtboard(d, name.value); this.syncOptions(); };
     name.addEventListener('change', commit);
-    name.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter') name.blur(); if (e.key === 'Escape') { this.syncOptions(); name.blur(); } });
+    // (Escape puts the name back before leaving the field, so leaving it doesn't rename.)
+    name.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter') name.blur(); if (e.key === 'Escape') { name.value = app.doc?.name ?? ''; name.blur(); } });
     this.nameField = name;
     // Size: typed, picked from the sizes and ratios, or turned (W and H swapped), for every selected artboard; each keeps
     // its top-left corner, and a ratio keeps each one's width.
