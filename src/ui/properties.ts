@@ -2,7 +2,7 @@ import { app } from '../app';
 import {
   applyMask, applyWarp, clearStyles, createAnimation, deleteMask, depthFrom3D, editBlendIf, editStyles, flipLayer, invertMask, loadLut, newDepthLayer,
   rasterize3D, rasterizeLayer, removeTexture, removeWarp, resetTransform, setMaskProp, setPlacedTransform, textureFromFile, textureFromLayer, toggleDepthLayer,
-  editLinked, unlinkLayer,
+  editLinked, unlinkLayer, editSmartObject, rasterizeSmartObject,
 } from '../actions';
 import { flatLayers } from '../core/document';
 import { defaultStyles } from '../core/styles';
@@ -112,6 +112,9 @@ export function propertiesPanel() {
       const pct = Math.round(Math.abs(l.t.sx) * 100);
       note = h('div', null,
         h('p', { class: 'props-note' }, `Original pixels: ${c.width} × ${c.height}${pct !== 100 ? ` · shown at ${pct}%` : ''}. Scaling never touches the original.`),
+        l.embed ? h('div', { class: 'btn-row' }, h('span', { class: 'dim' }, `Smart object (${l.embed.layers.length} layer${l.embed.layers.length === 1 ? '' : 's'} inside)`),
+          h('button', { class: 'btn small', type: 'button', title: 'Open what\'s inside in a tab of its own: Save there updates this layer', onclick: editSmartObject }, 'Edit contents'),
+          h('button', { class: 'btn small', type: 'button', title: 'Keep how it looks as plain pixels', onclick: rasterizeSmartObject }, 'Rasterize')) : null,
         l.link ? h('div', { class: 'btn-row' }, h('span', { class: 'dim', title: l.link.path }, `Linked to ${l.link.name}`),
           h('button', { class: 'btn small', type: 'button', title: 'Open the file to edit it: saving it updates this layer', onclick: () => { void editLinked(); } }, 'Edit original'),
           h('button', { class: 'btn small', type: 'button', title: 'Keep the picture, stop following the file', onclick: unlinkLayer }, 'Unlink')) : null,

@@ -34,6 +34,10 @@ Artboards (several canvases, each its own size, in one file), filters that stay 
 - **Export to TIFF**: 8 bits a channel with transparency, compressed losslessly.
 - **Export to BMP and ICO**: BMP keeps transparency. ICO makes a Windows icon holding every common size from 16 to 256 pixels, with the picture fitted and centred in each; Nearest neighbour keeps pixel-art icons crisp.
 - **File › Quick Export** (Ctrl+Alt+E) exports again with the last export's format and settings, asking only where to save.
+- **Smart objects** (Layer › Smart Object): **Convert to Smart Object** puts the selected layers inside one layer that looks exactly the same, and moves, scales and takes filters as one.
+  - **Edit Contents** opens what's inside in a tab of its own. Save there puts the changes back as one undo step, keeping the smart object's size and place.
+  - **Rasterize Smart Object** keeps just the pixels.
+  - Contents are saved in the file, survive crash recovery, and come along when the layer is copied or moved to another artboard.
 - **Linked layers** (File › Place Linked): place a .pixl or an image as a layer that stays linked to its file.
   - **Edit Original** (Layer › Linked Layer, or Properties) opens the file. Saving it updates the layer at once, in every open file that uses it, keeping its size and place.
   - Opening a file whose linked files changed since it was saved offers to update them, and Update Linked Layers checks them all. Unlink keeps the picture and stops following.

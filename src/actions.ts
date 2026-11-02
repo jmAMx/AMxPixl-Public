@@ -15,7 +15,7 @@ import { Project, type Board, type Layout } from './core/project';
 import { cloneCanvas, ctx2d, drawPlaced, follow, layerMatrix, localBounds, newCanvas } from './core/layers';
 import { savedLooks, storeLooks, type Look, type LookItem } from './core/looks';
 import { parseCube } from './core/lut';
-import { apply, decompose, intersect, invert, mapRect, matScale, mul, roundOut, setT, tidy, union, xformMatrix, type Mat, type Pt, type Rect, type Xform } from './core/math';
+import { apply, decompose, identity, intersect, invert, mapRect, matScale, mul, roundOut, setT, tidy, union, xformMatrix, type Mat, type Pt, type Rect, type Xform } from './core/math';
 import { flatten, renderDoc } from './core/render';
 import { encodePsd } from './core/export/psd';
 import { encodeTiff } from './core/export/tiff';
@@ -269,6 +269,81 @@ export function placeCanvas(c: HTMLCanvasElement, name: string, at: Pt | null, f
   if (s < 1) toast(`Placed at ${Math.round(s * 100)}% to fit. The full-size original is kept, so scaling it up later loses nothing.`);
 }
 
+// ---------- smart objects ----------
+
+/**
+ * Layer › Smart Object › Convert: the selected layers go inside one new layer that shows them as they look together.
+ * It moves, scales and takes filters like any layer, and its contents can still be edited (Edit Contents). One step.
+ */
+export function convertToSmartObject() {
+  const doc = need(); if (!doc) return;
+  const order = flatLayers(doc.layers).map((l) => l.id);
+  const layers = selectedRoots(doc).sort((a, b) => order.indexOf(a) - order.indexOf(b)).map((id) => doc.layer(id)!).filter(Boolean);
+  if (!layers.length) { toast('Select the layers to turn into a smart object.'); return; }
+  if (layers.length === 1 && layers[0].type === 'raster' && layers[0].embed) { toast('That\'s a smart object already: Edit Contents to change what\'s in it.'); return; }
+  const c = newCanvas(doc.width, doc.height);
+  renderDoc(doc, c, identity(), { layers });
+  const top = layers[layers.length - 1];
+  const l: RasterLayer = {
+    id: newId(), type: 'raster', name: layers.length === 1 ? layers[0].name : 'Smart Object', visible: true, opacity: 1, blend: 'normal',
+    key: doc.addCanvas(c), t: { x: 0, y: 0, sx: 1, sy: 1, rot: 0 }, embed: { w: doc.width, h: doc.height, layers: structuredClone(layers) },
+  };
+  doc.insertLayer(l, top.id);
+  for (const x of layers) doc.removeLayer(x.id);
+  doc.setActive(l.id);
+  doc.commit('Convert to Smart Object');
+}
+
+/** Layer › Smart Object › Edit Contents: opens what's inside it in a tab of its own; Save there updates it. */
+export function editSmartObject() {
+  const doc = need(); const l = doc?.activeRaster;
+  if (!doc || !l?.embed) { toast('Select a smart object (Layer › Smart Object › Convert to Smart Object).'); return; }
+  const open = app.projects.find((p) => p.embedOf?.doc === doc && p.embedOf.layerId === l.id);
+  if (open) { app.setDoc(open.active); return; }
+  const inner = new Doc(`${l.name} (contents)`, l.embed.w, l.embed.h);
+  inner.layers = structuredClone(l.embed.layers);
+  // Its own copies of the pixels (same keys, in its own pool): the smart object only changes when saved back.
+  for (const k of layerKeys(inner)) { const c = doc.pool.get(k); if (c) inner.pool.set(k, cloneCanvas(c)); }
+  inner.activeId = inner.layers[inner.layers.length - 1]?.id ?? null;
+  inner.resetHistory('Edit Contents');
+  const p = app.addDoc(inner);
+  p.name = `${l.name} (smart object)`;
+  p.embedOf = { doc, layerId: l.id };
+  app.emit('docs');
+  toast(`Editing ${l.name}: Save (Ctrl+S) puts the changes back into ${app.projectOf(doc)?.name ?? 'its image'}.`);
+}
+
+/** Save in a smart object's tab: its contents go back into the smart object (new pixel keys, so undo still works). */
+function saveSmartObject(p: Project): boolean {
+  const { doc: outer, layerId } = p.embedOf!;
+  const l = outer.layer(layerId);
+  if (!l || l.type !== 'raster' || !l.embed || !app.projects.some((q) => q.docs.includes(outer))) {
+    toast('The smart object these contents came from is gone (its image was closed, or it was deleted). Save As keeps them as a file.', 'error');
+    return false;
+  }
+  const inner = p.active;
+  let json = JSON.stringify(inner.layers);
+  for (const k of layerKeys(inner)) { const c = inner.pool.get(k); if (c) json = json.split(JSON.stringify(k)).join(JSON.stringify(outer.addCanvas(cloneCanvas(c)))); }
+  const look = flatten(inner), old = outer.canvasOf(l);
+  // A changed canvas size keeps the smart object's box on the image (a warp made for the old size is dropped).
+  if (look.width !== old.width || look.height !== old.height) { l.t = { ...l.t, sx: (l.t.sx * old.width) / look.width, sy: (l.t.sy * old.height) / look.height }; l.warp = null; }
+  l.embed = { w: inner.width, h: inner.height, layers: JSON.parse(json) };
+  l.key = outer.addCanvas(look);
+  outer.commit(`Edit ${l.name}`);
+  inner.savedIndex = inner.index;
+  app.emit('docs');
+  toast(`Updated ${l.name} in ${app.projectOf(outer)?.name ?? 'its image'}.`);
+  return true;
+}
+
+/** Layer › Smart Object › Rasterize: keeps how it looks as plain pixels, and lets its contents go. */
+export function rasterizeSmartObject() {
+  const doc = need(); const l = doc?.activeRaster;
+  if (!doc || !l?.embed) return;
+  l.embed = null;
+  doc.commit(`Rasterize ${l.name}`);
+}
+
 // ---------- linked layers ----------
 
 /** What a linked layer shows of its file: a .pixl's (first) artboard as it looks, or the image. */
@@ -371,6 +446,7 @@ export function unlinkLayer() {
 export async function saveDoc(doc: Doc | null = app.doc, saveAs = false) {
   const p = doc && app.projectOf(doc);
   if (!p) return false;
+  if (p.embedOf && !saveAs) return saveSmartObject(p);
   for (const b of p.boards) {
     const s = b.doc.source;
     if (!s?.file.path || s.linked !== undefined) continue;
@@ -909,6 +985,8 @@ function cloneLayer(doc: Doc, l: Layer, into: Doc = doc): Layer {
     if (into !== doc && x.type === 'raster' && x.model?.texture) x.model = { ...x.model, texture: { ...x.model.texture, key: copy(x.model.texture.key) } };
     if (into !== doc && x.type === 'raster' && x.model?.texture2) x.model = { ...x.model, texture2: { ...x.model.texture2, key: copy(x.model.texture2.key) } };
     if (x.type === 'group') x.children.forEach(fix);
+    // A smart object's contents come along, with pixels of their own.
+    if (x.type === 'raster' && x.embed) x.embed.layers.forEach(fix);
   };
   fix(c);
   return c;

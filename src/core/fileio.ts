@@ -1,4 +1,4 @@
-import { Doc, flatLayers, newId } from './document';
+import { deepLayers, Doc, newId } from './document';
 import { ctx2d, newCanvas } from './layers';
 import { fileName, isDesktop, openDialog, readPath, saveDialog, writePath, type Filters } from './platform';
 import type { Layer, Meta } from './types';
@@ -86,8 +86,8 @@ async function pngOf(c: HTMLCanvasElement): Promise<Blob> {
 }
 
 /** Every pixel buffer a snapshot's layers use: raster layers anywhere in the tree, masks, LUTs and 3D textures. */
-export function layerKeys(meta: Meta): string[] {
-  return [...new Set(flatLayers(meta.layers).flatMap((l) => [
+export function layerKeys(meta: Pick<Meta, 'layers'>): string[] {
+  return [...new Set(deepLayers(meta.layers).flatMap((l) => [
     l.type === 'raster' ? l.key : null, l.mask?.key ?? null, l.type === 'adjust' && l.adj.kind === 'lut' ? l.adj.key : null,
     ...(l.type === 'raster' ? textureKeys(l.model) : []),
   ]))].filter((k): k is string => !!k);

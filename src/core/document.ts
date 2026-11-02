@@ -59,6 +59,18 @@ export function flatLayers(list: Layer[], out: Layer[] = []): Layer[] {
   return out;
 }
 
+/**
+ * Like flatLayers, also going into smart objects' contents (whose pixels share the image's pool): for keeping track
+ * of pixel buffers (saving, recovery, clearing out unused ones), not for showing layers.
+ */
+export function deepLayers(list: Layer[], out: Layer[] = []): Layer[] {
+  for (const l of flatLayers(list)) {
+    out.push(l);
+    if (l.type === 'raster' && l.embed) deepLayers(l.embed.layers, out);
+  }
+  return out;
+}
+
 /** Visible pixel-carrying layers in the order they're drawn (hidden groups hide their children). */
 export function visiblePlaced(list: Layer[], out: PlacedLayer[] = []): PlacedLayer[] {
   for (const l of list) {
@@ -383,7 +395,7 @@ export class Doc {
   gc() {
     const live = new Set<string>();
     const scan = (m: Pick<Meta, 'layers' | 'selection' | 'quickMask'>) => {
-      flatLayers(m.layers).forEach((l) => {
+      deepLayers(m.layers).forEach((l) => {
         if (l.type === 'raster') live.add(l.key);
         if (l.mask) live.add(l.mask.key);
         if (l.type === 'adjust' && l.adj.kind === 'lut' && l.adj.key) live.add(l.adj.key);

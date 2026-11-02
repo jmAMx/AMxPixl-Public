@@ -1,4 +1,4 @@
-import { flatLayers, type Doc } from './document';
+import { deepLayers, type Doc } from './document';
 import { canvasBlob, decodeImage, docFromMeta, fewAtOnce } from './fileio';
 import { Project } from './project';
 import { textureKeys } from './model3d';
@@ -93,7 +93,7 @@ const store = isDesktop ? fileStore : browserStore;
 /** Pixel buffers a snapshot needs: raster layers, 3D textures, masks, LUTs and raster selections. */
 function keysOf(m: Meta): string[] {
   const keys = new Set<string>();
-  for (const l of flatLayers(m.layers)) {
+  for (const l of deepLayers(m.layers)) {
     if (l.type === 'raster') keys.add(l.key);
     if (l.type === 'raster') for (const k of textureKeys(l.model)) keys.add(k);
     if (l.mask) keys.add(l.mask.key);

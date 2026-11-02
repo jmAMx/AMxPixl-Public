@@ -161,7 +161,14 @@ interface PlacedBase extends LayerBase { t: Xform; box?: Rect | null }
  * file's place, name and a hash of what it held when last read. The file keeps a copy of the picture, so it opens
  * without the other file.
  */
-export interface RasterLayer extends PlacedBase { type: 'raster'; key: string; warp?: Warp | null; model?: Model3D | null; depth?: boolean; link?: LayerLink | null }
+export interface RasterLayer extends PlacedBase {
+  type: 'raster'; key: string; warp?: Warp | null; model?: Model3D | null; depth?: boolean; link?: LayerLink | null;
+  /**
+   * A smart object (Layer › Smart Object): the layers it was made from, kept inside it (their pixels in the same
+   * pool) on a canvas of w × h, edited in a tab of their own; `key` holds how they look.
+   */
+  embed?: { w: number; h: number; layers: Layer[] } | null;
+}
 export interface LayerLink { name: string; path: string; hash: string }
 /** `envelope`: a warp preset (arc, flag, bulge...) bending the text or shape; it stays editable and refits to edits. */
 export interface TextLayer extends PlacedBase { type: 'text'; text: TextProps; envelope?: Envelope | null }

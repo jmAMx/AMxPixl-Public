@@ -14,6 +14,7 @@ const TOPICS: [string, string[]][] = [
   ['Layers', [
     'Every image is a stack of **layers**: pictures, text, shapes, groups, and **adjustment** or **effect layers** that change everything below them. Drag them in the Layers panel to reorder; the eye hides one.',
     '**Nothing is lost by transforming.** Scaling, rotating or warping a layer keeps its original pixels, so you can resize it again and again without it going soft. Pixels are only resampled when you export.',
+    '**Smart objects** (Layer › Smart Object › Convert) put the selected layers inside one layer that moves, scales and takes filters as one, while what\'s inside stays editable: **Edit Contents** opens them in a tab of their own, and Save there updates the smart object.',
     '**Linked layers** (File › Place Linked) show another .pixl or image file and follow it: **Edit Original** (Layer › Linked Layer, or Properties) opens it, and saving it updates the layer, in every open file that uses it. Opening a file whose linked files changed offers to update them. The file keeps a copy, so it opens without them.',
     '**Masks** hide part of a layer without erasing it (Layer › Layer Mask): paint black to hide, white to show. A **clipping mask** (Layer › Create/Release Clipping Mask) shows a layer only where the one below has pixels. **Blend modes**, **opacity** and **Blend If** (Properties) control how a layer mixes with what\'s under it.',
   ]],

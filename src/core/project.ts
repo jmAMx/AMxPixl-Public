@@ -33,6 +33,8 @@ export class Project {
   name: string;
   /** Where it was opened from / last saved to as .pixl (for Save and Recent Files). */
   file: FileRef | null = null;
+  /** A smart object's contents opened to edit (Layer › Smart Object › Edit Contents): Save puts them back in it. */
+  embedOf?: { doc: Doc; layerId: string };
   /** Stable id for crash-recovery storage (a recovered file keeps the id of its copy). */
   uid = `F${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
   boards: Board[];

@@ -160,6 +160,14 @@ const MENUS: MenuDef[] = [
       { label: 'Ungroup', accel: 'Ctrl+Shift+G', run: A.ungroup, enabled: hasLayer },
       { label: 'Create/Release Clipping Mask', accel: 'Ctrl+Alt+G', run: A.toggleClip, enabled: hasLayer },
       { label: 'Layer Mask', sub: () => (app.doc?.active ? maskMenuItems() : [{ label: 'Select a layer first', disabled: true }]) },
+      { label: 'Smart Object', sub: () => {
+        const smart = !!app.doc?.activeRaster?.embed;
+        return [
+          { label: 'Convert to Smart Object', disabled: !app.doc?.active, onClick: A.convertToSmartObject },
+          { label: 'Edit Contents', disabled: !smart, onClick: A.editSmartObject },
+          { label: 'Rasterize Smart Object', disabled: !smart, onClick: A.rasterizeSmartObject },
+        ];
+      } },
       { label: 'Linked Layer', sub: () => {
         const linked = !!app.doc?.activeRaster?.link;
         return [
