@@ -466,10 +466,13 @@ export function flatten(doc: Doc, scaleBy = 1, opts: RenderOpts = {}): HTMLCanva
 
 /** Colour of the composite at a document point, averaged over size x size pixels. */
 export function sampleDoc(doc: Doc, x: number, y: number, size = 1): [number, number, number, number] {
-  const out = newCanvas(size, size);
+  // Styles, feathered masks and effects reach in from neighbouring pixels, so a margin around the sample is drawn too
+  // (capped: effects that can move pixels from anywhere are sampled from a large area around the point).
+  const pad = Math.min(Math.ceil(dirtyPad(doc)), 1024);
+  const out = newCanvas(size + pad * 2, size + pad * 2);
   const h = Math.floor(size / 2);
-  renderDoc(doc, out, [1, 0, 0, 1, -Math.floor(x) + h, -Math.floor(y) + h]);
-  const d = ctx2d(out).getImageData(0, 0, size, size).data;
+  renderDoc(doc, out, [1, 0, 0, 1, -Math.floor(x) + h + pad, -Math.floor(y) + h + pad]);
+  const d = ctx2d(out).getImageData(pad, pad, size, size).data;
   let r = 0, g = 0, b = 0, a = 0;
   for (let i = 0; i < d.length; i += 4) { r += d[i] * d[i + 3]; g += d[i + 1] * d[i + 3]; b += d[i + 2] * d[i + 3]; a += d[i + 3]; }
   if (!a) return [0, 0, 0, 0];

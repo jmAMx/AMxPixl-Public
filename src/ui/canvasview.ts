@@ -4,6 +4,7 @@ import { intersect, invert, mapRect, roundOut, union, type Mat, type Pt, type Re
 import { dirtyPad, renderDoc, sampleDoc } from '../core/render';
 import { rgbToHex } from './color';
 import { isDepth } from '../core/types';
+import type { Doc } from '../core/document';
 import type { PInfo, Tool } from '../tools/tool';
 import { addGuide } from '../actions';
 import { h } from './dom';
@@ -21,6 +22,8 @@ class CanvasView {
   private qmTint = document.createElement('canvas');
   private onionCanvas = document.createElement('canvas');
   private partialCanvas = document.createElement('canvas');
+  /** The view plus a margin of the image around it, when zoomed in on part of the image (see withMargin). */
+  private marginCanvas = document.createElement('canvas');
   private onion: HTMLCanvasElement | null = null;
   private compRect = { x: 0, y: 0, w: 0, h: 0 };
   private compScale = 1;
@@ -191,6 +194,16 @@ class CanvasView {
 
   // ---------- painting ----------
 
+  /**
+   * The area to draw (composite pixels, `m` maps the document there) for `bounds` of the view: grown by how far
+   * effects, styles and feathers reach (`pad`, document pixels), but never past the image or by more than 512 pixels.
+   */
+  private withMargin(d: Doc, m: Mat, bounds: Rect, pad: number): Rect {
+    const r = Math.min(Number.isFinite(pad) ? Math.ceil(pad * m[0]) + 2 : 512, 512);
+    const img = roundOut(mapRect(m, { x: 0, y: 0, w: d.width, h: d.height }));
+    return union(intersect({ x: bounds.x - r, y: bounds.y - r, w: bounds.w + r * 2, h: bounds.h + r * 2 }, img), bounds);
+  }
+
   private paint() {
     const ctx = ctx2d(this.canvas);
     const dpr = this.dpr;
@@ -232,6 +245,8 @@ class CanvasView {
         else {
           const m: Mat = [z * k, 0, 0, z * k, (dx - vr.x) * k, (dy - vr.y) * k];
           const bounds = { x: 0, y: 0, w: this.composite.width, h: this.composite.height };
+          // The redraw may reach past the view's edge (into the image beyond it), so effects there come out right.
+          const ext = this.withMargin(d, m, bounds, pad);
           // A change spreads up to `pad` (shadows, glows, halftone cells), and those pixels need `pad` more around
           // them to be drawn right: copy back the spread area, render it with a margin.
           const pp = Math.ceil(pad * z * k) + 2;
@@ -241,9 +256,9 @@ class CanvasView {
             // Round the redraw area up to a few fixed sizes: the GPU reuses buffers of the same size, while a new
             // size every brush move would make it reallocate them each time (very slow on integrated graphics).
             const B = 128;
-            const ow = Math.min(bounds.w, Math.ceil((inner.w + pp * 2) / B) * B), oh = Math.min(bounds.h, Math.ceil((inner.h + pp * 2) / B) * B);
-            const ox = Math.max(0, Math.min(bounds.w - ow, Math.round(inner.x + inner.w / 2 - ow / 2)));
-            const oy = Math.max(0, Math.min(bounds.h - oh, Math.round(inner.y + inner.h / 2 - oh / 2)));
+            const ow = Math.min(ext.w, Math.ceil((inner.w + pp * 2) / B) * B), oh = Math.min(ext.h, Math.ceil((inner.h + pp * 2) / B) * B);
+            const ox = Math.max(ext.x, Math.min(ext.x + ext.w - ow, Math.round(inner.x + inner.w / 2 - ow / 2)));
+            const oy = Math.max(ext.y, Math.min(ext.y + ext.h - oh, Math.round(inner.y + inner.h / 2 - oh / 2)));
             const outer = { x: ox, y: oy, w: ow, h: oh };
             const tmp = this.partialCanvas;
             // Exactly the redraw size: effects process their whole canvas.
@@ -266,7 +281,20 @@ class CanvasView {
           this.composite.height = ch;
         }
         const t0 = performance.now();
-        renderDoc(d, this.composite, [z * k, 0, 0, z * k, (dx - vr.x) * k, (dy - vr.y) * k], { screen: true, depth });
+        const m: Mat = [z * k, 0, 0, z * k, (dx - vr.x) * k, (dy - vr.y) * k];
+        const ext = this.withMargin(d, m, { x: 0, y: 0, w: cw, h: ch }, dirtyPad(d));
+        if (ext.w === cw && ext.h === ch) renderDoc(d, this.composite, m, { screen: true, depth });
+        else {
+          // Zoomed in: draw past the view's edge too, so effects, styles and feathers there see the image beyond it.
+          const big = this.marginCanvas;
+          if (big.width !== ext.w || big.height !== ext.h) { big.width = ext.w; big.height = ext.h; }
+          renderDoc(d, big, [m[0], 0, 0, m[3], m[4] - ext.x, m[5] - ext.y], { screen: true, depth });
+          const cx = ctx2d(this.composite);
+          cx.save();
+          cx.globalCompositeOperation = 'copy';
+          cx.drawImage(big, ext.x, ext.y);
+          cx.restore();
+        }
         this.noteFrame(performance.now() - t0, k);
         // Onion skin: the frames either side, tinted (red before, green after), for lining up motion.
         const a = d.anim;

@@ -94,6 +94,7 @@ export async function decodePixl(blob: Blob, fallbackName: string): Promise<Doc>
   const dv = new DataView(buf);
   const magic = String.fromCharCode(dv.getUint8(0), dv.getUint8(1), dv.getUint8(2), dv.getUint8(3));
   if (magic !== MAGIC) throw new Error('Not a Pixl project file.');
+  if (dv.getUint32(4, true) > FORMAT_VERSION) throw new Error('it was saved by a newer version of Pixl. Update Pixl to open it.');
   const hlen = dv.getUint32(8, true);
   const head = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 12, hlen))) as { name?: string; meta: Meta; blobs: Record<string, [number, number]> };
   const base = 12 + hlen;

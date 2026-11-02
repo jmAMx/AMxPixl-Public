@@ -109,7 +109,11 @@ function drawMaskThumb(l: Layer, c: HTMLCanvasElement) {
 }
 
 export function layersPanel() {
-  const blend = h('select', { class: 'blend', title: 'Blend mode', onchange: () => { const id = app.doc?.activeId; if (id) setLayerProp(id, { blend: blend.value as BlendMode }, 'Blend mode'); } });
+  const blend = h('select', { class: 'blend', title: 'Blend mode', onchange: () => {
+    const id = app.doc?.activeId; if (id) setLayerProp(id, { blend: blend.value as BlendMode }, 'Blend mode');
+    // Give the keyboard back: a focused dropdown swallows shortcuts and type-to-pick turns D or S into a blend mode.
+    blend.blur();
+  } });
   const opacity = slider({
     label: 'Opacity', min: 0, max: 1, display: 100, value: 1, unit: '%', compact: true,
     onInput: (v) => { const id = app.doc?.activeId; if (id) setLayerProp(id, { opacity: v }); },
