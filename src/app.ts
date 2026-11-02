@@ -25,6 +25,8 @@ export interface Prefs {
   toolCols: number; toolLabels: boolean;
   /** Tools that share one toolbox slot (tool ids), and where the tool options are shown. */
   toolGroups: string[][]; optionsDock: 'top' | 'side';
+  /** The order of the tools in the toolbox (tool ids), when it's been rearranged; tools added since go where they were. */
+  toolOrder?: string[];
   /** Readouts in the status bar (View › Status Bar); missing in settings saved before they existed. */
   meters?: Meter[];
   /** Drawing tablet settings (Edit › Pen Tablet), shared by every painting tool. */

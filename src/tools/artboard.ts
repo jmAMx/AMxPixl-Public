@@ -4,6 +4,7 @@ import type { Pt, Rect } from '../core/math';
 import type { Board, Layout } from '../core/project';
 import { view } from '../ui/canvasview';
 import { h } from '../ui/dom';
+import { icon } from '../ui/widgets';
 import type { PInfo, Tool } from './tool';
 
 type Edge = `${'n' | 's' | ''}${'w' | 'e' | ''}`;
@@ -14,6 +15,26 @@ type Drag =
 
 /** How close (CSS px) an artboard's edge snaps to another's while moving it. */
 const SNAP = 6;
+
+/**
+ * While an artboard is dragged, the tab bar shows where it can go to get a tab of its own: a dashed spot after the tabs
+ * ('near'), lit up with the pointer over the bar ('over'). 'off' takes it away.
+ */
+function tabDropSpot(state: 'off' | 'near' | 'over', name = '', copy = false) {
+  const bar = document.querySelector<HTMLElement>('.tabs');
+  if (!bar) return;
+  bar.classList.toggle('board-drag', state !== 'off');
+  bar.classList.toggle('board-drop', state === 'over');
+  let spot = bar.querySelector<HTMLElement>('.tab-drop-spot');
+  if (state === 'off') { spot?.remove(); return; }
+  if (!spot) {
+    spot = h('div', { class: 'tab-drop-spot' });
+    bar.insertBefore(spot, bar.querySelector('.tab-new'));
+  }
+  const text = state === 'over' ? `Let go: ${name} ${copy ? '(a copy) ' : ''}in its own tab` : `Drag up here: ${name} in its own tab`;
+  if (spot.textContent !== text) spot.replaceChildren(icon('artboard'), h('span', null, text));
+  spot.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+}
 
 /**
  * Artboard tool: moves artboards (by their name or anywhere on them), resizes the one worked on by its edges, and
@@ -96,6 +117,7 @@ class ArtboardTool implements Tool {
       const c = view.clientRect();
       d.toTab = proj.boards.length > 1 && !!document.elementFromPoint(c.left + p.sx, c.top + p.sy)?.closest('.tabs');
       d.at = { x: p.sx, y: p.sy };
+      if (proj.boards.length > 1) tabDropSpot(d.toTab ? 'over' : 'near', d.b.doc.name, p.alt);
       if (d.toTab) { proj.place(d.b, d.x0, d.y0); view.requestRender(); view.requestOverlay(); return; }
       if (p.shift) { if (Math.abs(dx) > Math.abs(dy)) dy = 0; else dx = 0; }
       const at = this.snap(d.b, Math.round(d.x0 + dx), Math.round(d.y0 + dy), proj.origin.zoom, p.ctrl);
@@ -141,6 +163,7 @@ class ArtboardTool implements Tool {
   up(p: PInfo) {
     const d = this.drag, proj = app.project;
     this.drag = null;
+    tabDropSpot('off');
     if (!d || !proj) return;
     if (d.kind === 'move') {
       if (d.toTab) artboardToTab(d.b.doc, p.alt);
@@ -156,6 +179,7 @@ class ArtboardTool implements Tool {
   cancel() {
     const d = this.drag;
     this.drag = null;
+    tabDropSpot('off');
     if (d?.kind === 'move') app.project?.place(d.b, d.x0, d.y0);
     this.syncOptions();
     view.requestRender();

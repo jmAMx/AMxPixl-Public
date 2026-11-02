@@ -18,6 +18,8 @@ Artboards: several canvases, each its own size, in one file.
 - **Export Artboards** (File menu): each artboard becomes its own image, named by its place and name ("01 - Artboard 1.png"), all in the folder you choose. File › Export Image lets you tick which artboards to export.
 - **Photoshop artboards** come in as artboards, with their layers.
 - **Next and previous artboard**: Ctrl+Alt+] and Ctrl+Alt+[.
+- While you drag an artboard, the tab bar shows a spot where it can go to get a tab of its own. The spot lights up when you're over the bar.
+- **Rearrange the toolbox**: the ⋯ at its top › Rearrange Tools turns the tools into outlined tiles. Drag them into the order you like: a lifted copy follows the pointer and a bar marks where it'll go. A group moves as one. Done, or Escape, finishes. Reset Tool Order puts them back.
 - Cropping or resizing the canvas of one artboard among others keeps its picture where it was.
 - Artboards you aren't working on are drawn from a kept copy, so scrolling past them costs little.
 - **Saving**: a file with several artboards is saved in a new .pixl version, which earlier versions of Pixl refuse with a message saying it's from a newer version. A file with one artboard is saved as before. Crash recovery keeps every artboard.
