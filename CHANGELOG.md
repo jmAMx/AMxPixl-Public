@@ -9,6 +9,12 @@ Artboards: several canvases, each its own size, in one file.
 - **Artboards.** A file can hold several artboards side by side, each a canvas of its own, with its own size, layers and selection. Everything that works on an image works on an artboard. Press in an artboard, or click its name, to work on it.
 - **New Image › Add artboard** starts a file with several artboards, each with a size of its own: type it, or pick a size or a shape (a ratio such as 4 : 5 or 16 : 9 keeps the width). **Image › Artboards** adds one (any size), duplicates, renames or deletes one, and switches between them.
 - **Select several artboards**: Shift or Ctrl+click them with the Artboard tool, or their rows in the Layers panel. Then move, duplicate or delete them together; Export Artboards starts with them ticked.
+- **Snapping**: moving artboards (one or several), or dragging an artboard's edges, snaps to the other artboards' edges and middles. Moving also snaps to the spacing they already have between them, so they come out evenly spaced. Pink guides show what it lined up with, and a bar marks a matched gap with its size. Hold Ctrl, or turn off View › Snap, to place freely.
+- **Lining up artboards**: in the Artboard tool's options, or Image › Artboards › Align:
+  - Align the selected artboards' edges, centres or middles.
+  - Distribute three or more evenly, across or down.
+  - Put them in a row or a column, a set gap apart. With one selected, this applies to all the artboards.
+  - Each is one undo step.
 - **Change an artboard's size** in the Artboard tool's options: type W and H, pick a size or a shape, or turn it (⇄). With several selected, each gets it, as one undo step. Each keeps its top-left corner, so its picture stays where it is.
 - **Artboard tool** (V, with Move): drag an artboard or its name to move it; it snaps to the others' edges, Shift keeps it in line, and Ctrl moves it freely. Drag its edges to resize it, and drag on the empty space to draw a new one. Double-click a name to rename it.
 - **Undo runs across artboards**, in the order you made the changes, and switches to the artboard each step was on. Adding, moving, resizing and deleting artboards are steps too.

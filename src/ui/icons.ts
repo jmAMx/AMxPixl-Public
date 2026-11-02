@@ -55,6 +55,9 @@ export const ICONS = {
   alignVCenter: svg(p('M3 10h14') + '<rect x="5" y="4" width="3.2" height="12" rx=".8"/><rect x="11.8" y="6.5" width="3.2" height="7" rx=".8"/>'),
   alignBottom: svg(p('M3 16.5h14') + '<rect x="5" y="4" width="3.2" height="10" rx=".8"/><rect x="11.8" y="7.5" width="3.2" height="6.5" rx=".8"/>'),
   distH: svg('<rect x="2.6" y="6" width="3.2" height="8" rx=".8"/><rect x="8.4" y="4" width="3.2" height="12" rx=".8"/><rect x="14.2" y="7" width="3.2" height="6" rx=".8"/>'),
+  // Artboards lined up: in a row, in a column.
+  lineRow: svg('<rect x="1.8" y="6" width="4.6" height="8" rx=".8"/><rect x="7.7" y="6" width="4.6" height="8" rx=".8"/><rect x="13.6" y="6" width="4.6" height="8" rx=".8"/>'),
+  lineCol: svg('<rect x="6" y="1.8" width="8" height="4.6" rx=".8"/><rect x="6" y="7.7" width="8" height="4.6" rx=".8"/><rect x="6" y="13.6" width="8" height="4.6" rx=".8"/>'),
   distV: svg('<rect x="6" y="2.6" width="8" height="3.2" rx=".8"/><rect x="4" y="8.4" width="12" height="3.2" rx=".8"/><rect x="7" y="14.2" width="6" height="3.2" rx=".8"/>'),
   more: svg('<circle cx="4.4" cy="10" r="1.4" fill="currentColor" stroke="none"/><circle cx="10" cy="10" r="1.4" fill="currentColor" stroke="none"/><circle cx="15.6" cy="10" r="1.4" fill="currentColor" stroke="none"/>'),
   chevronR:svg(p('M8 5.6 12.4 10 8 14.4')),

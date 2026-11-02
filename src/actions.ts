@@ -8,7 +8,7 @@ import { importXcf } from './core/import/xcfimport';
 import { addRecent, openRecent, removeRecent, type RecentEntry } from './core/recent';
 import { clearRecovery } from './core/recovery';
 import { isDesktop, readPath, writePath } from './core/platform';
-import { Project } from './core/project';
+import { Project, type Board } from './core/project';
 import { cloneCanvas, ctx2d, drawPlaced, follow, layerMatrix, localBounds, newCanvas } from './core/layers';
 import { savedLooks, storeLooks, type Look, type LookItem } from './core/looks';
 import { parseCube } from './core/lut';
@@ -424,6 +424,68 @@ function withoutBoard(p: Project, d: Doc): Doc {
   p.setActive(next);
   p.applyLayout({ boards: p.layout().boards.filter((e) => e.doc !== d) });
   return next;
+}
+
+/** The selected artboards' places, for lining them up, or null (with a hint) if fewer than `min` are selected. */
+function selectedBoards(min: number): { p: Project; bs: Board[] } | null {
+  const p = app.project;
+  const bs = p ? p.selection().map((d) => p.boardOf(d)!) : [];
+  if (!p || bs.length < min) { toast(`Select ${min === 2 ? 'two' : 'three'} or more artboards first: Shift+click them with the Artboard tool.`); return null; }
+  return { p, bs };
+}
+
+const boxOf = (b: Board): Rect => ({ x: b.x, y: b.y, w: b.doc.width, h: b.doc.height });
+
+/** Lines the selected artboards up by an edge or centre, within the box around them all. One undo step. */
+export function alignArtboards(edge: AlignEdge) {
+  const s = selectedBoards(2); if (!s) return;
+  const before = s.p.layout();
+  const r = s.bs.map(boxOf).reduce((a, b) => union(a, b));
+  for (const b of s.bs) {
+    const w = b.doc.width, hh = b.doc.height;
+    const x = edge === 'left' ? r.x : edge === 'right' ? r.x + r.w - w : edge === 'hcenter' ? Math.round(r.x + (r.w - w) / 2) : b.x;
+    const y = edge === 'top' ? r.y : edge === 'bottom' ? r.y + r.h - hh : edge === 'vcenter' ? Math.round(r.y + (r.h - hh) / 2) : b.y;
+    s.p.place(b, x, y);
+  }
+  s.p.commitLayout('Align artboards', before);
+  app.emit('docs');
+}
+
+/** Spaces the selected artboards evenly across (h) or down (v): the first and last stay, the gaps between come out equal. */
+export function distributeArtboards(axis: 'h' | 'v') {
+  const s = selectedBoards(3); if (!s) return;
+  const before = s.p.layout();
+  const pos = (b: Board) => (axis === 'h' ? b.x : b.y), size = (b: Board) => (axis === 'h' ? b.doc.width : b.doc.height);
+  const bs = [...s.bs].sort((a, b) => pos(a) - pos(b));
+  const first = bs[0], last = bs[bs.length - 1];
+  const gap = (pos(last) + size(last) - pos(first) - bs.reduce((n, b) => n + size(b), 0)) / (bs.length - 1);
+  let at = pos(first);
+  for (const b of bs) {
+    s.p.place(b, axis === 'h' ? Math.round(at) : b.x, axis === 'v' ? Math.round(at) : b.y);
+    at += size(b) + gap;
+  }
+  s.p.commitLayout('Distribute artboards', before);
+  app.emit('docs');
+}
+
+/**
+ * Puts the selected artboards (or, with one selected, all of them) side by side in a row, top edges in line, or one
+ * under another in a column, left edges in line, `gap` apart, in the order they're in now. One undo step.
+ */
+export function lineUpArtboards(dir: 'row' | 'column', gap: number) {
+  const p = app.project; if (!p) return;
+  const sel = p.selection();
+  const bs = (sel.length > 1 ? sel : p.docs).map((d) => p.boardOf(d)!).sort((a, b) => (dir === 'row' ? a.x - b.x || a.y - b.y : a.y - b.y || a.x - b.x));
+  if (bs.length < 2) return;
+  const before = p.layout();
+  const x0 = Math.min(...bs.map((b) => b.x)), y0 = Math.min(...bs.map((b) => b.y));
+  let at = dir === 'row' ? x0 : y0;
+  for (const b of bs) {
+    p.place(b, dir === 'row' ? at : x0, dir === 'row' ? y0 : at);
+    at += (dir === 'row' ? b.doc.width : b.doc.height) + gap;
+  }
+  p.commitLayout(dir === 'row' ? 'Artboards in a row' : 'Artboards in a column', before);
+  app.emit('docs');
 }
 
 /** Works on the next artboard of the file (or the previous one), in the order they were made; the view follows. */

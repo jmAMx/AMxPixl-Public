@@ -81,6 +81,8 @@ export const DEFAULT_OPTS = {
   shape: { kind: 'rect' as 'rect' | 'ellipse' | 'line' | 'polygon' | 'star', fill: true, stroke: false, strokeWidth: 4, radius: 0, antiAlias: true, sides: 6, inner: 0.45 },
   move: { autoSelect: false, mode: 'transform' as 'transform' | 'perspective' | 'warp' | 'rotate3d' | 'light3d', box: 'content' as 'content' | 'layer' | 'custom' },
   picker: { sample: 1 },
+  /** Artboard tool: the space left between artboards lined up in a row or a column. */
+  artboard: { gap: 100 },
 };
 export type ToolOpts = typeof DEFAULT_OPTS;
 
