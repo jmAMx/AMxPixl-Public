@@ -4,12 +4,12 @@ import { pickFiles } from '../core/fileio';
 import { clearRecent, recentList } from '../core/recent';
 import { FILTERS } from '../core/filters';
 import { glfx } from '../core/glfx';
-import { view } from './canvasview';
+import { TAB_DRAG, view } from './canvasview';
 import { colorPanel } from './colorpanel';
 import { aboutDialog, animExportDialog, canvasSizeDialog, colorRangeDialog, exportDialog, filterDialog, imageSizeDialog, modifySelectionDialog, newArtboardDialog, newDocDialog, newGuideDialog, renameArtboardDialog, shortcutsDialog, updateDialog } from './dialogs';
 import { h, isTyping } from './dom';
 import { historyPanel } from './historypanel';
-import { adjustmentMenuItems, effectMenuItems, layersPanel, looksMenuItems, maskMenuItems } from './layerspanel';
+import { adjustmentMenuItems, artboardMenuItems, effectMenuItems, layersPanel, looksMenuItems, maskMenuItems } from './layerspanel';
 import { FX_DEFS } from '../core/effects';
 import { tabletMenuItems } from '../tools/pressure';
 import { propertiesPanel } from './properties';
@@ -28,6 +28,7 @@ interface Cmd { label: string | (() => string); accel?: string; alt?: string; ru
 type MenuDef = { title: string; items: (Cmd | 'sep' | { label: string; sub: () => MenuItem[] })[] };
 
 const hasDoc = () => !!app.doc;
+const manyBoards = () => (app.project?.boards.length ?? 0) > 1;
 const hasLayer = () => !!app.doc?.active;
 const hasSel = () => !!app.doc?.selection;
 
@@ -55,7 +56,8 @@ const MENUS: MenuDef[] = [
       'sep',
       { label: 'Save', accel: 'Ctrl+S', run: () => A.saveDoc(), enabled: hasDoc },
       { label: 'Save As…', accel: 'Ctrl+Shift+S', run: () => A.saveDoc(app.doc, true), enabled: hasDoc },
-      { label: 'Export Image…', accel: 'Ctrl+Shift+E', run: exportDialog, enabled: hasDoc },
+      { label: 'Export Image…', accel: 'Ctrl+Shift+E', run: () => exportDialog(), enabled: hasDoc },
+      { label: 'Export Artboards…', run: () => exportDialog(true), enabled: () => (app.project?.boards.length ?? 0) > 1 },
       { label: 'Export Animation (GIF / Video)…', accel: 'Ctrl+Alt+Shift+E', run: animExportDialog, enabled: hasDoc },
       'sep',
       { label: 'Close', accel: 'Ctrl+W', run: () => A.closeDoc(), enabled: hasDoc },
@@ -104,9 +106,18 @@ const MENUS: MenuDef[] = [
           { label: 'Rename Artboard…', onClick: () => renameArtboardDialog(app.doc!), disabled: !p },
           { label: 'Delete Artboard', onClick: A.deleteArtboard, disabled: !many },
           { sep: true },
+          ...(app.doc?.source ? [{ label: `Also Save to ${app.doc.source.name}`, checked: !!app.doc.source.linked, onClick: () => A.toggleLink(app.doc!) }] : []),
+          { label: 'Open in Own Tab', onClick: () => A.artboardToTab(app.doc!), disabled: !many },
+          { label: 'Copy to New Tab', onClick: () => A.artboardToTab(app.doc!, true), disabled: !p },
+          { label: 'Add Open Image', sub: app.projects.filter((q) => q !== p).map((q) => ({
+            label: q.name, onClick: () => { const r = p!.bounds(); A.fileIntoFile(q, p!, { x: r.x + r.w + 100, y: r.y }); view.fit(); },
+          })), disabled: !p || app.projects.length < 2 },
+          { sep: true },
           ...(p?.boards ?? []).map((b) => ({ label: b.doc.name, checked: b.doc === app.doc, onClick: () => app.setDoc(b.doc) })),
         ];
       } },
+      { label: 'Next Artboard', accel: 'Ctrl+Alt+]', run: () => A.stepArtboard(1), enabled: manyBoards },
+      { label: 'Previous Artboard', accel: 'Ctrl+Alt+[', run: () => A.stepArtboard(-1), enabled: manyBoards },
       'sep',
       { label: 'Flatten Image', run: A.flattenImage, enabled: hasDoc },
     ],
@@ -119,6 +130,8 @@ const MENUS: MenuDef[] = [
       { label: 'New Effect Layer', sub: effectMenuItems },
       { label: 'Duplicate Layer', accel: 'Ctrl+J', run: A.duplicateLayer, enabled: hasLayer },
       { label: 'Delete Layer', run: () => A.deleteLayer(), enabled: hasLayer },
+      { label: 'Move to Artboard', sub: () => artboardMenuItems()[1]?.sub ?? [{ label: 'No other artboards', disabled: true }] },
+      { label: 'Copy to Artboard', sub: () => artboardMenuItems()[2]?.sub ?? [{ label: 'No other artboards', disabled: true }] },
       'sep',
       { label: 'Group Layer', accel: 'Ctrl+G', run: A.groupLayer, enabled: hasLayer },
       { label: 'Ungroup', accel: 'Ctrl+Shift+G', run: A.ungroup, enabled: hasLayer },
@@ -394,13 +407,15 @@ function tabs() {
     el.replaceChildren(...app.projects.map((p) => {
       const d = p.active;
       const size = p.boards.length > 1 ? `${p.boards.length} artboards` : `${d.width} × ${d.height}`;
-      const t = h('div', { class: 'tab' + (p === app.project ? ' on' : ''), role: 'tab', title: `${p.name} · ${size}` },
+      const t = h('div', { class: 'tab' + (p === app.project ? ' on' : ''), role: 'tab', draggable: true,
+        title: `${p.name} · ${size}` + (p === app.project ? '' : ' · drag onto another image to make it an artboard there (Alt copies)') },
         h('span', { class: 'tab-name' }, p.name), p.dirty ? h('span', { class: 'dirty', title: 'Unsaved changes' }, '●') : null,
         h('button', { class: 'tab-x', type: 'button', title: 'Close (Ctrl+W)', onclick: (e: MouseEvent) => { e.stopPropagation(); A.closeDoc(d); } }, icon('close')));
-      // (Not when pressing its close button: switching rebuilds the tabs, and the click would then miss the button.)
-      t.addEventListener('pointerdown', (e) => {
-        if (e.button === 1) { e.preventDefault(); A.closeDoc(d); } else if (p !== app.project && !(e.target as Element).closest('.tab-x')) app.setDoc(d);
-      });
+      // Switching waits for the click (a press may start dragging the tab onto the image shown). Not when pressing its
+      // close button: switching rebuilds the tabs, and the click would then miss the button.
+      t.addEventListener('pointerdown', (e) => { if (e.button === 1) { e.preventDefault(); A.closeDoc(d); } });
+      t.addEventListener('click', (e) => { if (p !== app.project && !(e.target as Element).closest('.tab-x')) app.setDoc(d); });
+      t.addEventListener('dragstart', (e) => { e.dataTransfer!.setData(TAB_DRAG, p.uid); e.dataTransfer!.effectAllowed = 'copyMove'; });
       return t;
     }), h('button', { class: 'tab-new', type: 'button', title: 'New image (Ctrl+N)', onclick: newDocDialog }, icon('plus')));
   };

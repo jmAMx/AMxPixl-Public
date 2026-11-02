@@ -8,7 +8,7 @@ import type { Doc } from '../core/document';
 import type { Board } from '../core/project';
 import { pixelVersion } from '../core/bounds';
 import type { PInfo, Tool } from '../tools/tool';
-import { addGuide } from '../actions';
+import { addGuide, fileIntoFile, toggleLink } from '../actions';
 import { renameArtboardDialog } from './dialogs';
 import { h } from './dom';
 import { clearSnapLines, snapLines, snapPoint } from './snap';
@@ -69,6 +69,17 @@ class CanvasView {
     this.canvas.addEventListener('pointerleave', () => { if (!this.down) { this.hover = null; this.onCursor(null); this.requestOverlay(); } });
     this.canvas.addEventListener('wheel', (e) => this.onWheel(e), { passive: false });
     this.canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+    // A tab dropped on the image: that file's artboards join this one, where it was dropped (Alt: copies of them).
+    const fromTab = (e: DragEvent) => [...(e.dataTransfer?.types ?? [])].includes(TAB_DRAG) && !!app.project;
+    this.el.addEventListener('dragover', (e) => { if (!fromTab(e)) return; e.preventDefault(); e.dataTransfer!.dropEffect = e.altKey ? 'copy' : 'move'; });
+    this.el.addEventListener('drop', (e) => {
+      if (!fromTab(e)) return;
+      e.preventDefault();
+      const p = app.project!, src = app.projects.find((q) => q.uid === e.dataTransfer!.getData(TAB_DRAG));
+      if (!src || src === p || app.busy) return;
+      const r = this.canvas.getBoundingClientRect(), o = p.origin;
+      fileIntoFile(src, p, { x: (e.clientX - r.left - o.x) / o.zoom, y: (e.clientY - r.top - o.y) / o.zoom }, e.altKey);
+    });
     // Double-clicking an artboard's name renames it.
     this.canvas.addEventListener('dblclick', (e) => {
       const r = this.canvas.getBoundingClientRect();
@@ -260,6 +271,13 @@ class CanvasView {
   private boardCache = new WeakMap<Doc, { c: HTMLCanvasElement; sig: string }>();
   /** Where the artboards' names were drawn (CSS px), for clicking them. */
   private labels: { b: Board; r: Rect }[] = [];
+  /** Where the link chips beside them were drawn (see paintLabels). */
+  private chips: { d: Doc; r: Rect }[] = [];
+
+  /** The artboard whose link chip is under a point (CSS px), if any. */
+  chipAt(sx: number, sy: number): Doc | null {
+    return this.chips.find((c) => sx >= c.r.x && sx <= c.r.x + c.r.w && sy >= c.r.y && sy <= c.r.y + c.r.h)?.d ?? null;
+  }
 
   /** Where an artboard is on screen (CSS px). */
   boardRect(b: Board): Rect {
@@ -331,6 +349,7 @@ class CanvasView {
     ctx.font = '600 12px "Segoe UI", sans-serif';
     ctx.textBaseline = 'alphabetic';
     this.labels = [];
+    this.chips = [];
     for (const b of p.boards) {
       const r = this.boardRect(b), on = b.doc === p.active;
       // As wide as the artboard (at least a little), shortened with an ellipsis when the name is longer.
@@ -344,6 +363,24 @@ class CanvasView {
       ctx.fillStyle = on ? accent : dim;
       ctx.fillText(text, Math.round(r.x), Math.round(r.y) - 6);
       this.labels.push({ b, r: { x: r.x, y: r.y - LABEL, w: w + 4, h: LABEL } });
+      // Came from a .pixl of its own: a chip saying whether saving also saves it there (click to switch).
+      const s = b.doc.source;
+      if (s) {
+        ctx.save();
+        ctx.font = '11px "Segoe UI", sans-serif';
+        const chip = s.linked ? `⛓ ${s.name}` : s.linked === false ? `${s.name} · not linked` : `from ${s.name}`;
+        const cw = ctx.measureText(chip).width + 12, cx = Math.round(r.x + w + 10), cy = Math.round(r.y) - LABEL + 2;
+        ctx.fillStyle = s.linked ? 'rgba(46,230,190,.16)' : 'rgba(128,128,128,.16)';
+        ctx.strokeStyle = s.linked ? accent : dim;
+        ctx.beginPath();
+        ctx.roundRect(cx + 0.5, cy + 0.5, cw, LABEL - 6, 7);
+        ctx.fill();
+        ctx.stroke();
+        ctx.fillStyle = s.linked ? accent : dim;
+        ctx.fillText(chip, cx + 6, cy + LABEL - 10);
+        ctx.restore();
+        this.chips.push({ d: b.doc, r: { x: cx, y: cy, w: cw, h: LABEL - 6 } });
+      }
       if (on) {
         ctx.strokeStyle = accent;
         ctx.lineWidth = 1;
@@ -521,7 +558,7 @@ class CanvasView {
     }
 
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    if (multi) this.paintLabels(ctx); else this.labels = [];
+    if (multi) this.paintLabels(ctx); else { this.labels = []; this.chips = []; }
     this.paintGuides(ctx);
     app.tool?.overlay?.(ctx);
     if (app.prefs.rulers) this.paintRulers(ctx);
@@ -773,6 +810,9 @@ class CanvasView {
       return;
     }
     if (p.button !== 0 || app.busy) { this.restoreTool(); return; }
+    // A link chip beside an artboard's name: switches whether saving saves it to its own file too.
+    const chip = this.chipAt(p.sx, p.sy);
+    if (chip) { toggleLink(chip); this.restoreTool(); return; }
     if (this.startGuide(p)) { this.updateCursor(); return; }
     // With several artboards, pressing in (or on the name of) another one works on that one. The Artboard tool picks
     // them itself (it moves them by their names).
@@ -888,7 +928,7 @@ class CanvasView {
     if (this.panning) c = 'grabbing';
     else if (g) c = g === 'x' ? 'col-resize' : 'row-resize';
     else if (this.spaceHeld || app.tool?.id === 'hand') c = 'grab';
-    else if (hv && app.tool?.id !== 'artboard' && this.boardAt(hv.sx, hv.sy)?.label) c = 'pointer';
+    else if (hv && (this.chipAt(hv.sx, hv.sy) || (app.tool?.id !== 'artboard' && this.boardAt(hv.sx, hv.sy)?.label))) c = 'pointer';
     else if (app.tool?.ownCursor && this.hover) c = 'none';
     else if (app.tool?.cursor) c = app.tool.cursor(this.hover);
     if (this.canvas.style.cursor !== c) this.canvas.style.cursor = c;
@@ -904,6 +944,8 @@ class CanvasView {
 const RULER = 18;
 /** Height of an artboard's name above it (CSS px). */
 const LABEL = 20;
+/** Drag-and-drop type of a tab being dragged (its file's uid). */
+export const TAB_DRAG = 'application/x-pixl-tab';
 
 const isField = (t: EventTarget | null) => {
   const el = t as HTMLElement | null;

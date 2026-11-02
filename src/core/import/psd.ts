@@ -1,4 +1,5 @@
-import { Doc, newId } from '../document';
+import { Doc, flatLayers, newId } from '../document';
+import type { Board } from '../project';
 import { ctx2d, newCanvas } from '../layers';
 import type { BlendMode, GroupLayer, Layer, Mask, RasterLayer } from '../types';
 import { inflate, Reader, sampleTo8 } from './reader';
@@ -20,6 +21,40 @@ interface Rec {
   top: number; left: number; bottom: number; right: number; chans: ChanInfo[]; blend: string; opacity: number;
   clipping: boolean; hidden: boolean; name: string; divider: number; mask: { top: number; left: number; bottom: number; right: number; def: number; disabled: boolean } | null;
   adjust: boolean;
+  /** A group that's an artboard: its rectangle on the document. */
+  artboard?: { x: number; y: number; w: number; h: number };
+}
+
+/**
+ * Reads a Photoshop "descriptor" (the key/value structure its newer features keep their settings in) into a plain
+ * object. Throws on a value type it doesn't know, as the rest can't be found past it.
+ */
+function readDescriptor(r: Reader): Record<string, unknown> {
+  const uni = () => { const n = r.u32(); let s = ''; for (let i = 0; i < n; i++) s += String.fromCharCode(r.u16()); return s.replace(/\0+$/, ''); };
+  const id = () => { const n = r.u32(); return r.str(n || 4); };
+  const value = (type: string): unknown => {
+    switch (type) {
+      case 'Objc': case 'GlbO': return readDescriptor(r);
+      case 'VlLs': { const n = r.u32(); const out = []; for (let i = 0; i < n; i++) out.push(value(r.str(4))); return out; }
+      case 'doub': return r.f64();
+      case 'UntF': r.skip(4); return r.f64();
+      case 'UnFl': { r.skip(4); const n = r.u32(); const out = []; for (let i = 0; i < n; i++) out.push(r.f64()); return out; }
+      case 'TEXT': return uni();
+      case 'enum': id(); return id();
+      case 'long': return r.i32();
+      case 'comp': r.skip(8); return 0;
+      case 'bool': return r.u8() !== 0;
+      case 'type': case 'GlbC': uni(); return id();
+      case 'alis': case 'tdta': case 'Pth ': r.skip(r.u32()); return null;
+      default: throw new Error(`descriptor value ${type}`);
+    }
+  };
+  uni();
+  id();
+  const out: Record<string, unknown> = {};
+  const n = r.u32();
+  for (let i = 0; i < n; i++) { const k = id(); out[k] = value(r.str(4)); }
+  return out;
 }
 
 /** Reads one channel's pixels (any compression) as `w*h*bytes` raw samples. */
@@ -102,7 +137,8 @@ function toCanvas(w: number, h: number, chans: Map<number, Uint8Array>, mode: nu
  * Opens a Photoshop .psd/.psb: layers with names, positions, opacity, visibility, blend modes, clipping, groups and
  * layer masks. Text and smart objects come in as their rendered pixels; adjustment and fill layers are skipped.
  */
-export async function importPsd(buf: ArrayBuffer, name: string): Promise<Doc> {
+/** A Photoshop file as an image, or with artboards, one image per artboard and where each sits. */
+export async function importPsd(buf: ArrayBuffer, name: string): Promise<Board[]> {
   const r = new Reader(buf);
   if (r.str(4) !== '8BPS') throw new Error('Not a Photoshop file.');
   const version = r.u16();
@@ -157,6 +193,17 @@ export async function importPsd(buf: ArrayBuffer, name: string): Promise<Doc> {
           const at = r.pos;
           if (key === 'luni') { const n = r.u32(); let s = ''; for (let k = 0; k < n; k++) s += String.fromCharCode(r.u16()); rec.name = s.replace(/\0+$/, ''); }
           else if (key === 'lsct' || key === 'lsdk') { rec.divider = r.u32(); if (len >= 12) { r.skip(4); rec.blend = r.str(4); } }
+          else if (key === 'artb' || key === 'abdd') {
+            // An artboard: version, then a descriptor with its rectangle.
+            try {
+              r.skip(4);
+              const rect = readDescriptor(r).artboardRect as Record<string, number> | undefined;
+              if (rect) {
+                const x = Math.round(rect.Left), y = Math.round(rect['Top ']), w = Math.round(rect.Rght - rect.Left), h = Math.round(rect.Btom - rect['Top ']);
+                if (w > 0 && h > 0) rec.artboard = { x, y, w, h };
+              }
+            } catch { notes.add('An artboard couldn\'t be read and came in as a group.'); }
+          }
           else if (ADJUST_KEYS.has(key)) rec.adjust = true;
           else if (key === 'TySh') notes.add('Text comes in as pixels.');
           else if (key === 'SoLd' || key === 'PlLd') notes.add('Smart objects come in as pixels.');
@@ -193,6 +240,7 @@ export async function importPsd(buf: ArrayBuffer, name: string): Promise<Doc> {
   // Build the layer tree: records run bottom to top; a "section divider" (3) opens a group that the
   // group's own record (1 = open, 2 = closed folder) closes further up.
   const stack: Layer[][] = [[]];
+  const artboards = new Map<string, NonNullable<Rec['artboard']>>();
   recs.forEach((rec, i) => {
     const base = { name: rec.name || 'Layer', visible: !rec.hidden, opacity: rec.opacity / 255, blend: BLEND[rec.blend] ?? 'normal', clip: rec.clipping };
     if (APPROX.has(rec.blend)) notes.add('Some blend modes were replaced with the closest match.');
@@ -216,6 +264,7 @@ export async function importPsd(buf: ArrayBuffer, name: string): Promise<Doc> {
     if (rec.divider === 1 || rec.divider === 2) {
       const children = stack.length > 1 ? stack.pop()! : [];
       const g: GroupLayer = { id: newId(), type: 'group', ...base, blend: BLEND[rec.blend] ?? 'pass-through', children, open: rec.divider === 1, mask };
+      if (rec.artboard) artboards.set(g.id, rec.artboard);
       stack[stack.length - 1].push(g);
       return;
     }
@@ -245,7 +294,31 @@ export async function importPsd(buf: ArrayBuffer, name: string): Promise<Doc> {
   }
   doc.activeId = doc.layers[doc.layers.length - 1]?.id ?? null;
   doc.counter = recs.length + 1;
-  doc.importNotes = [...notes];
-  doc.resetHistory('Import PSD');
-  return doc;
+  const boards = splitArtboards(doc, artboards, notes);
+  boards[0].doc.importNotes = [...notes];
+  boards[0].doc.resetHistory('Import PSD');
+  return boards;
+}
+
+/**
+ * Photoshop artboards (top-level groups marked as such) each become an artboard of their own, with that group's
+ * layers placed within it; without any, the document is one image.
+ */
+function splitArtboards(doc: Doc, rects: Map<string, { x: number; y: number; w: number; h: number }>, notes: Set<string>): Board[] {
+  const groups = doc.layers.filter((l): l is GroupLayer => l.type === 'group' && rects.has(l.id));
+  if (!groups.length) return [{ doc, x: 0, y: 0 }];
+  if (groups.length < doc.layers.length) notes.add('Layers outside the artboards were left out.');
+  return groups.map((g) => {
+    const a = rects.get(g.id)!;
+    const d = new Doc(g.name, a.w, a.h);
+    d.layers = g.children;
+    const shift = <T extends { x: number; y: number }>(t: T): T => ({ ...t, x: t.x - a.x, y: t.y - a.y });
+    for (const l of flatLayers(d.layers)) {
+      if (l.type === 'raster') { l.t = shift(l.t); d.pool.set(l.key, doc.pool.get(l.key)!); }
+      if (l.mask) { l.mask.t = shift(l.mask.t); d.pool.set(l.mask.key, doc.pool.get(l.mask.key)!); }
+    }
+    d.activeId = d.layers[d.layers.length - 1]?.id ?? null;
+    d.counter = doc.counter;
+    return { doc: d, x: a.x, y: a.y };
+  });
 }

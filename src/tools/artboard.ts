@@ -1,14 +1,14 @@
 import { app } from '../app';
-import { deleteArtboard, duplicateArtboard, newArtboard, renameArtboard, resizeArtboard } from '../actions';
+import { artboardToTab, deleteArtboard, duplicateArtboard, newArtboard, renameArtboard, resizeArtboard } from '../actions';
 import type { Pt, Rect } from '../core/math';
-import type { Board } from '../core/project';
+import type { Board, Layout } from '../core/project';
 import { view } from '../ui/canvasview';
 import { h } from '../ui/dom';
 import type { PInfo, Tool } from './tool';
 
 type Edge = `${'n' | 's' | ''}${'w' | 'e' | ''}`;
 type Drag =
-  | { kind: 'move'; b: Board; x0: number; y0: number; s0: Pt; before: ReturnType<NonNullable<typeof app.project>['layout']> }
+  | { kind: 'move'; b: Board; x0: number; y0: number; s0: Pt; before: Layout; toTab: boolean; at: Pt }
   | { kind: 'resize'; edge: Edge; r0: Rect; s0: Pt; r: Rect }
   | { kind: 'new'; s0: Pt; r: Rect };
 
@@ -22,7 +22,7 @@ const SNAP = 6;
  */
 class ArtboardTool implements Tool {
   id = 'artboard'; name = 'Artboard'; key = 'V'; icon = 'artboard' as const;
-  hint = 'Drag an artboard or its name to move it · drag its edges to resize · drag on empty space for a new one · Shift keeps it in line';
+  hint = 'Drag an artboard or its name to move it (up to the tabs: its own tab) · drag its edges to resize · drag on empty space for a new one · Shift keeps it in line';
   private drag: Drag | null = null;
   private nameField: HTMLInputElement | null = null;
   private sizeLabel: HTMLElement | null = null;
@@ -80,7 +80,7 @@ class ArtboardTool implements Tool {
       // (A file with one artboard has nothing to move it relative to.)
       if (proj.boards.length < 2) return;
       if (b.doc !== app.doc) app.setDoc(b.doc);
-      this.drag = { kind: 'move', b, x0: b.x, y0: b.y, s0: s, before: proj.layout() };
+      this.drag = { kind: 'move', b, x0: b.x, y0: b.y, s0: s, before: proj.layout(), toTab: false, at: { x: p.sx, y: p.sy } };
       return;
     }
     this.drag = { kind: 'new', s0: s, r: { x: s.x, y: s.y, w: 0, h: 0 } };
@@ -92,6 +92,11 @@ class ArtboardTool implements Tool {
     const s = this.spread(p);
     let dx = s.x - d.s0.x, dy = s.y - d.s0.y;
     if (d.kind === 'move') {
+      // Over the tabs: let go there and the artboard opens in a tab of its own (it waits where it was meanwhile).
+      const c = view.clientRect();
+      d.toTab = proj.boards.length > 1 && !!document.elementFromPoint(c.left + p.sx, c.top + p.sy)?.closest('.tabs');
+      d.at = { x: p.sx, y: p.sy };
+      if (d.toTab) { proj.place(d.b, d.x0, d.y0); view.requestRender(); view.requestOverlay(); return; }
       if (p.shift) { if (Math.abs(dx) > Math.abs(dy)) dy = 0; else dx = 0; }
       const at = this.snap(d.b, Math.round(d.x0 + dx), Math.round(d.y0 + dy), proj.origin.zoom, p.ctrl);
       proj.place(d.b, at.x, at.y);
@@ -133,12 +138,13 @@ class ArtboardTool implements Tool {
     return { x: bx, y: by };
   }
 
-  up() {
+  up(p: PInfo) {
     const d = this.drag, proj = app.project;
     this.drag = null;
     if (!d || !proj) return;
     if (d.kind === 'move') {
-      if (d.b.x !== d.x0 || d.b.y !== d.y0) proj.commitLayout('Move artboard', d.before, d.b.doc);
+      if (d.toTab) artboardToTab(d.b.doc, p.alt);
+      else if (d.b.x !== d.x0 || d.b.y !== d.y0) proj.commitLayout('Move artboard', d.before, d.b.doc);
     } else if (d.kind === 'resize') resizeArtboard(d.r);
     // (A press without much of a drag isn't a new artboard.)
     else if (d.r.w * proj.origin.zoom >= 4 && d.r.h * proj.origin.zoom >= 4) newArtboard(d.r.w, d.r.h, '#ffffff', d.r);
@@ -161,7 +167,15 @@ class ArtboardTool implements Tool {
     const d = this.drag, o = proj.origin;
     const toScreen = (r: Rect): Rect => ({ x: o.x + r.x * o.zoom, y: o.y + r.y * o.zoom, w: r.w * o.zoom, h: r.h * o.zoom });
     ctx.save();
-    if (d && d.kind !== 'move') {
+    if (d?.kind === 'move' && d.toTab) {
+      ctx.font = '12px "Segoe UI", sans-serif';
+      const text = `Let go to open ${d.b.doc.name} in its own tab (Alt: a copy)`;
+      const tw = ctx.measureText(text).width;
+      ctx.fillStyle = 'rgba(0,0,0,.75)';
+      ctx.fillRect(d.at.x + 14, Math.max(4, d.at.y + 8), tw + 12, 20);
+      ctx.fillStyle = '#fff';
+      ctx.fillText(text, d.at.x + 20, Math.max(4, d.at.y + 8) + 14);
+    } else if (d && d.kind !== 'move') {
       const r = toScreen(d.r);
       ctx.setLineDash([5, 4]);
       ctx.strokeStyle = '#fff';

@@ -5,8 +5,17 @@ import type { Rect } from './math';
 /** An artboard: an image, and where its top-left corner sits among the file's other artboards. */
 export interface Board { doc: Doc; x: number; y: number }
 
-/** The artboards as a step records them: which, where, and their names (so renaming is undone too). */
-type Layout = { doc: Doc; x: number; y: number; name: string }[];
+/**
+ * The artboards as a step records them: which, where, their names and where they came from (so renaming and linking
+ * are undone too). `tabs`: artboards that, in this state, are open in a tab of their own instead (one taken out to a
+ * tab, or a file put into this one), which the app opens again when undo or redo comes back to it.
+ */
+export interface Layout {
+  boards: { doc: Doc; x: number; y: number; name: string; source: Doc['source'] }[];
+  tabs?: TabState[];
+}
+/** A tab as it was: its file's artboards, name, where it's saved, and whether it had unsaved changes. */
+export interface TabState { boards: Board[]; name: string; file: FileRef | null; dirty: boolean }
 
 /**
  * A file, open in one tab: one or more artboards, each its own image (a Doc, with its own size, layers, selection and
@@ -26,7 +35,7 @@ export class Project {
   /** The artboard being worked on. */
   active: Doc;
   /** Called when undo or redo puts the artboards back as a step left them. */
-  onLayout: () => void = () => {};
+  onLayout: (l: Layout) => void = () => {};
 
   /** The first artboard's history (as it was opened or made) becomes the file's; the others start from now. */
   constructor(name: string, boards: Board[]) {
@@ -34,7 +43,7 @@ export class Project {
     this.boards = boards;
     this.active = boards[0].doc;
     for (const b of boards.slice(1)) b.doc.joinHistory(this.history);
-    this.history.setLayout = (l) => { this.applyLayout(l as Layout); this.onLayout(); };
+    this.history.setLayout = (l) => { this.applyLayout(l as Layout); this.onLayout(l as Layout); };
   }
 
   get history(): History { return this.boards[0].doc.hist; }
@@ -80,12 +89,14 @@ export class Project {
     b.y = y;
   }
 
-  layout(): Layout { return this.boards.map((b) => ({ doc: b.doc, x: b.x, y: b.y, name: b.doc.name })); }
+  layout(): Layout {
+    return { boards: this.boards.map((b) => ({ doc: b.doc, x: b.x, y: b.y, name: b.doc.name, source: b.doc.source && { ...b.doc.source } })) };
+  }
 
   /** Puts the artboards as `l` has them, keeping the view still (the active one, if it moved, moves on screen). */
   applyLayout(l: Layout) {
     const o = this.origin;
-    this.boards = l.map((e) => { e.doc.name = e.name; return { doc: e.doc, x: e.x, y: e.y }; });
+    this.boards = l.boards.map((e) => { e.doc.name = e.name; e.doc.source = e.source && { ...e.source }; return { doc: e.doc, x: e.x, y: e.y }; });
     if (!this.has(this.active)) this.active = this.boards[0].doc;
     const d = this.active, b = this.boardOf(d)!;
     d.zoom = o.zoom;
@@ -97,7 +108,7 @@ export class Project {
    * Records a change to the artboards (made since `before`, which layout() gave) as an undo step on `doc`, along with
    * whatever changed on that artboard itself (its canvas size, say).
    */
-  commitLayout(label: string, before: Layout, doc: Doc = this.active) {
-    doc.commit(label, [], undefined, { before, after: this.layout() });
+  commitLayout(label: string, before: Layout, doc: Doc = this.active, after: Layout = this.layout()) {
+    doc.commit(label, [], undefined, { before, after });
   }
 }

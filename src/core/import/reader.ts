@@ -11,6 +11,7 @@ export class Reader {
   u32() { const x = this.v.getUint32(this.pos); this.pos += 4; return x; }
   i32() { const x = this.v.getInt32(this.pos); this.pos += 4; return x; }
   f32() { const x = this.v.getFloat32(this.pos); this.pos += 4; return x; }
+  f64() { const x = this.v.getFloat64(this.pos); this.pos += 8; return x; }
   /** 64-bit unsigned as a JS number (fine for file offsets). */
   u64() { const hi = this.u32(), lo = this.u32(); return hi * 2 ** 32 + lo; }
   str(n: number) { let s = ''; for (let i = 0; i < n; i++) s += String.fromCharCode(this.u8()); return s; }

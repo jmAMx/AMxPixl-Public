@@ -1,4 +1,4 @@
-import { flatLayers } from './document';
+import { flatLayers, type Doc } from './document';
 import { canvasBlob, decodeImage, docFromMeta, fewAtOnce } from './fileio';
 import { Project } from './project';
 import { idbDel, idbGet, idbKeys, idbPut } from './idb';
@@ -20,7 +20,7 @@ interface Record {
   meta?: Meta; keys?: string[];
 }
 /** One artboard: its image's id, place, layers and settings, and pixel buffers (stored as `blobName`). */
-interface BoardRecord { uid: string; name: string; x: number; y: number; meta: Meta; keys: string[] }
+interface BoardRecord { uid: string; name: string; x: number; y: number; meta: Meta; keys: string[]; source?: Doc['source'] }
 
 /** A pixel buffer's name in its file's copy: artboards' buffers kept apart, as their keys needn't be unique across them. */
 const blobName = (doc: string, k: string) => `${doc}~${k}`;
@@ -119,7 +119,8 @@ export async function autosave(p: Project) {
       // Yield between layers so the editor stays responsive.
       await new Promise((r) => setTimeout(r, 0));
     }
-    boards.push({ uid: doc.uid, name: doc.name, x, y, meta, keys });
+    const s = doc.source;
+    boards.push({ uid: doc.uid, name: doc.name, x, y, meta, keys, source: s && { ...s, file: { name: s.file.name, path: s.file.path ?? null } } });
   }
   // The record goes last: until it's written, the previous one (and the buffers it names) still stands.
   const file = p.file ? { name: p.file.name, path: p.file.path ?? null, handle: p.file.handle ?? null } : null;
@@ -172,6 +173,7 @@ export async function restoreRecovery(uid: string): Promise<Project | null> {
     const m = b.meta;
     const doc = docFromMeta(b.name, m);
     if (!old) doc.uid = b.uid;
+    doc.source = b.source ?? null;
     const canvases = await fewAtOnce(b.keys, async (k) => {
       const blob = await s.getBlob(uid, old ? k : blobName(b.uid, k));
       if (!blob) throw new Error('part of the image data is missing.');

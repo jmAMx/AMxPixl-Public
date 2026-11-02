@@ -1,5 +1,6 @@
 import type { ChangeKind, Doc } from './core/document';
-import { Project } from './core/project';
+import { Project, type Layout, type TabState } from './core/project';
+import { clearRecovery } from './core/recovery';
 import type { Tool } from './tools/tool';
 import { setSetting } from './core/settings';
 
@@ -138,12 +139,34 @@ class App {
     return p;
   }
 
-  addProject(p: Project) {
+  addProject(p: Project, show = true) {
     for (const d of p.docs) this.watch(d);
-    // Undo or redo moved, added or removed artboards: show the result.
-    p.onLayout = () => { for (const d of p.docs) this.watch(d); this.emit('docs'); };
+    p.onLayout = (l) => this.layoutUndone(p, l);
     this.projects.push(p);
-    this.setDoc(p.active);
+    if (show) this.setDoc(p.active); else this.emit('docs');
+  }
+
+  /**
+   * Undo or redo moved, added or removed artboards of `p`. An artboard back in it from a tab of its own (it had been
+   * taken out, or its file put into this one) leaves that tab; ones the step has in a tab of their own open in one.
+   */
+  private layoutUndone(p: Project, l: Layout) {
+    for (const d of p.docs) {
+      this.watch(d);
+      const q = this.projects.find((x) => x !== p && x.has(d));
+      if (q) { this.projects.splice(this.projects.indexOf(q), 1); clearRecovery(q).catch(() => {}); d.joinHistory(p.history); }
+    }
+    for (const t of l.tabs ?? []) if (!this.projectOf(t.boards[0].doc)) this.openTab(t, false);
+    this.emit('docs');
+  }
+
+  /** Opens artboards in a tab of their own, as `t` describes it (with a history of its own from now). */
+  openTab(t: TabState, show: boolean) {
+    t.boards[0].doc.resetHistory('Open');
+    const q = new Project(t.name, t.boards.map((b) => ({ ...b })));
+    q.file = t.file;
+    if (t.dirty) q.history.savedIndex = -1;
+    this.addProject(q, show);
   }
 
   /** Changes to an image are reported as the app's 'change' event. */
@@ -159,8 +182,15 @@ class App {
   /** The file an image is an artboard of. */
   projectOf(d: Doc): Project | null { return this.projects.find((p) => p.has(d)) ?? null; }
 
-  /** The file's name for an image: what's shown in its tab, and what saving and exporting suggest. */
-  nameOf(d: Doc): string { return this.projectOf(d)?.name ?? d.name; }
+  /**
+   * The name to suggest when exporting an image: its file's name, or for one of several artboards the file's name and
+   * the artboard's ("poster - Banner").
+   */
+  nameOf(d: Doc): string {
+    const p = this.projectOf(d);
+    if (!p) return d.name;
+    return p.boards.length > 1 ? `${p.name.replace(/\.[^.]+$/, '')} - ${d.name}` : p.name;
+  }
 
   /** Shows an image: switches to its file's tab, and to it there. */
   setDoc(d: Doc | null) {

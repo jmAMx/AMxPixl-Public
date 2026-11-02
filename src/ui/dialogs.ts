@@ -1,5 +1,5 @@
 import { app } from '../app';
-import { addGuide, colorRangeSelection, createDoc, cropToContent, deleteLook, exportImage, lookSourceLayers, modifySelection, newArtboard, nextUntitled, renameArtboard, resizeCanvas, resizeImage, saveLook } from '../actions';
+import { addGuide, colorRangeSelection, createDoc, cropToContent, deleteLook, exportArtboards, lookSourceLayers, modifySelection, newArtboard, nextUntitled, renameArtboard, resizeCanvas, resizeImage, saveLook } from '../actions';
 import type { Doc } from '../core/document';
 import { savedLooks } from '../core/looks';
 import { colorRangeMask, sampleSource, type Modify, type SelMode } from '../core/selops';
@@ -170,26 +170,44 @@ export function canvasSizeDialog() {
   });
 }
 
-export function exportDialog() {
+/** File › Export; with several artboards, which to export (just the one worked on to start with, or `all`). */
+export function exportDialog(all = false) {
   const doc = app.doc; if (!doc) return;
+  const boards = app.project && app.project.boards.length > 1 ? app.project.docs : [doc];
+  const chosen = new Set(all ? boards : [doc]);
   let format: 'png' | 'jpeg' | 'webp' = 'png', quality = 0.92, scale = 1, resample = doc.resample;
   const info = h('p', { class: 'dialog-msg' });
   const q = slider({ label: 'Quality', min: 0.1, max: 1, step: 1, display: 100, value: quality, unit: '%', onInput: (v) => { quality = v; } });
   const upd = () => {
-    info.textContent = `${Math.round(doc.width * scale)} × ${Math.round(doc.height * scale)} px · ${format.toUpperCase()}${format === 'jpeg' ? ' (transparent areas become white)' : ''}`;
+    const list = boards.filter((d) => chosen.has(d));
+    const one = list.length === 1 ? list[0] : null;
+    info.textContent = (one ? `${Math.round(one.width * scale)} × ${Math.round(one.height * scale)} px` : `${list.length} artboards, each its own image`)
+      + ` · ${format.toUpperCase()}${format === 'jpeg' ? ' (transparent areas become white)' : ''}`;
     q.style.display = format === 'png' ? 'none' : '';
   };
   const sc = numField('Size', 100, (v) => { scale = v / 100; upd(); }, { unit: '%', min: 1, max: 800, decimals: 0 });
+  // Several artboards: a box each (and all / just this one).
+  const checks = boards.length > 1 ? boards.map((d) => checkbox(d.name, chosen.has(d), (v) => { if (v) chosen.add(d); else chosen.delete(d); upd(); })) : [];
+  const pick = boards.length > 1 ? h('div', { class: 'field wide' }, h('span', null, 'Artboards'),
+    h('div', { class: 'export-boards' }, ...checks)) : null;
   upd();
   dialog({
-    title: 'Export image', width: 440,
+    title: boards.length > 1 ? 'Export artboards' : 'Export image', width: 440,
     body: [
+      ...(pick ? [pick] : []),
       h('div', { class: 'field wide' }, h('span', null, 'Format'),
         seg([{ v: 'png', label: 'PNG' }, { v: 'jpeg', label: 'JPEG' }, { v: 'webp', label: 'WebP' }], format, (v) => { format = v; upd(); })),
       q, sc, resampleField(resample, (v) => { resample = v; }), info,
-      h('p', { class: 'dialog-note' }, 'Exports are resampled straight from each layer\'s originals for the sharpest result. Save as .pixl to keep layers.'),
+      h('p', { class: 'dialog-note' }, boards.length > 1
+        ? 'Each artboard becomes its own image, named by its place and name ("01 - Artboard 1"). Choose where the first goes; the others go in the same folder.'
+        : 'Exports are resampled straight from each layer\'s originals for the sharpest result. Save as .pixl to keep layers.'),
     ],
-    buttons: [{ label: 'Cancel' }, { label: 'Export', primary: true, onClick: () => { if (tooBig(doc.width * scale, doc.height * scale)) return false; exportImage(doc, { format, quality, scale, nearest: resample === 'nearest' }).catch((e) => toast(`Export failed: ${e.message}`, 'error')); } }],
+    buttons: [{ label: 'Cancel' }, { label: 'Export', primary: true, onClick: () => {
+      const list = boards.filter((d) => chosen.has(d));
+      if (!list.length) { toast('Choose at least one artboard.'); return false; }
+      if (list.some((d) => tooBig(d.width * scale, d.height * scale))) return false;
+      exportArtboards(list, { format, quality, scale, nearest: resample === 'nearest' }).catch((e) => toast(`Export failed: ${e.message}`, 'error'));
+    } }],
   });
 }
 

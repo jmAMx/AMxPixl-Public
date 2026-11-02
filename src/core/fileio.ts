@@ -91,15 +91,27 @@ export function layerKeys(meta: Meta): string[] {
   ]))].filter((k): k is string => !!k);
 }
 
-/** One artboard in a version 2 header: its name, place, layers and where its pixel buffers are. */
-interface BoardHead { name: string; x: number; y: number; meta: Meta; blobs: Record<string, [number, number]> }
+/**
+ * One artboard in a version 2 header: its name, place, layers and where its pixel buffers are; `source`, the .pixl of
+ * its own it came from (see Doc.source; desktop paths only).
+ */
+interface BoardHead {
+  name: string; x: number; y: number; meta: Meta; blobs: Record<string, [number, number]>;
+  source?: { name: string; path: string; linked?: boolean; hash?: string };
+}
+
+/** A file's contents as SHA-256 (hex), to tell whether it changed. */
+export async function hashOf(b: Blob): Promise<string> {
+  const d = new Uint8Array(await crypto.subtle.digest('SHA-256', await b.arrayBuffer()));
+  return [...d].map((x) => x.toString(16).padStart(2, '0')).join('');
+}
 
 /**
  * .pixl: "PIXL" + u32 version + u32 header length + JSON header + PNG blobs for each pixel buffer. Version 1 is one
  * image (`meta` and `blobs`); version 2 has `boards`, an artboard each. A file with one artboard is still written as
  * version 1, so earlier versions of Pixl can open it.
  */
-export async function encodePixl(p: Project): Promise<Blob> {
+export async function encodePixl(p: Pick<Project, 'name' | 'boards'>): Promise<Blob> {
   const boards = p.boards.map((b) => ({ b, meta: b.doc.snapshot() }));
   const jobs = boards.flatMap(({ b, meta }, i) => layerKeys(meta).map((key) => ({ i, key, canvas: b.doc.pool.get(key)! })));
   const encoded = await fewAtOnce(jobs, (j) => pngOf(j.canvas));
@@ -110,7 +122,10 @@ export async function encodePixl(p: Project): Promise<Blob> {
   const version = one ? 1 : 2;
   const head = one
     ? { app: 'AMxPixl', version, name: p.name, meta: boards[0].meta, blobs: index[0] }
-    : { app: 'AMxPixl', version, name: p.name, boards: boards.map(({ b, meta }, i): BoardHead => ({ name: b.doc.name, x: b.x, y: b.y, meta, blobs: index[i] })) };
+    : { app: 'AMxPixl', version, name: p.name, boards: boards.map(({ b, meta }, i): BoardHead => {
+      const s = b.doc.source;
+      return { name: b.doc.name, x: b.x, y: b.y, meta, blobs: index[i], source: s?.file.path ? { name: s.name, path: s.file.path, linked: s.linked, hash: s.hash } : undefined };
+    }) };
   const header = new TextEncoder().encode(JSON.stringify(head));
   const pre = new ArrayBuffer(12);
   const dv = new DataView(pre);
@@ -134,7 +149,11 @@ export async function decodePixl(blob: Blob, fallbackName: string): Promise<Proj
   const heads: BoardHead[] = head.boards ?? [{ name, x: 0, y: 0, meta: head.meta!, blobs: head.blobs! }];
   const jobs = heads.flatMap((b, i) => Object.entries(b.blobs).map(([key, [off, len]]) => ({ i, key, off, len })));
   const canvases = await fewAtOnce(jobs, (j) => decodeImage(new Blob([new Uint8Array(buf, base + j.off, j.len)], { type: 'image/png' })));
-  const docs = heads.map((b) => docFromMeta(b.name, b.meta));
+  const docs = heads.map((b) => {
+    const d = docFromMeta(b.name, b.meta);
+    if (b.source) d.source = { name: b.source.name, file: { name: b.source.name, path: b.source.path }, linked: b.source.linked, hash: b.source.hash };
+    return d;
+  });
   jobs.forEach((j, n) => docs[j.i].pool.set(j.key, canvases[n]));
   docs[0].resetHistory('Open');
   return new Project(name, heads.map((b, i) => ({ doc: docs[i], x: b.x, y: b.y })));

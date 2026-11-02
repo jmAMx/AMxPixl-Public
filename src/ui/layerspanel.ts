@@ -1,7 +1,7 @@
 import { app } from '../app';
 import {
   addMask, applyLook, applyMask, clearStyles, deleteLayer, deleteMask, duplicateLayer, groupLayer, invertMask, lookSourceLayers, mergeDown, setLayersVisible, trimLayers,
-  moveLayer, newAdjustment, newEffect, newGroup, newLayer, newLut, rasterizeLayer, renameArtboard, selectLayerShape, setLayerProp, setMaskProp, toggleClip, ungroup,
+  layersToArtboard, moveLayer, newAdjustment, newEffect, newGroup, newLayer, newLut, rasterizeLayer, renameArtboard, selectLayerShape, setLayerProp, setMaskProp, toggleClip, ungroup,
 } from '../actions';
 import type { Doc } from '../core/document';
 import { BUILTIN_LOOKS, savedLooks } from '../core/looks';
@@ -82,7 +82,17 @@ function layerContextMenu(l: Layer, x: number, y: number) {
     { label: 'Clear Layer Style', disabled: !l.styles, onClick: clearStyles },
     { sep: true },
     { label: 'Save Effects as Look…', disabled: !lookSourceLayers().length, onClick: saveLookDialog },
+    ...artboardMenuItems(),
   ], x, y);
+}
+
+/** Layer › Move to Artboard and Copy to Artboard: the file's other artboards (nothing with only one). */
+export function artboardMenuItems(): MenuItem[] {
+  const p = app.project, d = app.doc;
+  const others = p && d ? p.boards.filter((b) => b.doc !== d) : [];
+  if (!others.length) return [];
+  const to = (copy: boolean): MenuItem[] => others.map((b) => ({ label: b.doc.name, onClick: () => layersToArtboard(b.doc, copy) }));
+  return [{ sep: true }, { label: 'Move to Artboard', sub: to(false) }, { label: 'Copy to Artboard', sub: to(true) }];
 }
 
 /** The mask as a white-on-black thumbnail. */
@@ -321,11 +331,26 @@ export function layersPanel() {
       name.replaceWith(inp);
       inp.focus(); inp.select();
     });
-    return h('div', {
-      class: 'layer-row board-row' + (on ? ' on' : ''), role: 'treeitem', 'aria-expanded': String(on), title: `${d.width} × ${d.height} px`,
+    const r = h('div', {
+      class: 'layer-row board-row' + (on ? ' on' : ''), role: 'treeitem', 'aria-expanded': String(on),
+      title: `${d.width} × ${d.height} px` + (on ? '' : ' · drop layers here to move them to this artboard (Alt copies)'),
       onclick: () => { if (!on) app.setDoc(d); },
     }, h('span', { class: 'chev-space' }, icon(on ? 'chevron' : 'chevronR')), h('span', { class: 'board-icon' }, icon('artboard')), name,
     h('span', { class: 'layer-badge' }, `${d.width} × ${d.height}`));
+    // A layer dragged onto another artboard's row moves there (with Alt, a copy does).
+    if (!on) {
+      r.addEventListener('dragover', (e) => { if (!dragId) return; e.preventDefault(); e.dataTransfer!.dropEffect = e.altKey ? 'copy' : 'move'; r.classList.add('drop-into'); });
+      r.addEventListener('dragleave', () => r.classList.remove('drop-into'));
+      r.addEventListener('drop', (e) => {
+        if (!dragId) return;
+        e.preventDefault();
+        r.classList.remove('drop-into');
+        const doc = app.doc!;
+        if (!doc.selectedIds().includes(dragId)) doc.setActive(dragId, false);
+        layersToArtboard(d, e.altKey);
+      });
+    }
+    return r;
   };
 
   const build = () => {

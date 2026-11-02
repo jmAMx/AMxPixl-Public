@@ -12,6 +12,12 @@ Artboards: several canvases, each its own size, in one file.
 - **Undo runs across artboards**, in the order you made the changes, and switches to the artboard each step was on. Adding, moving, resizing and deleting artboards are steps too.
 - **Layers panel**: each artboard is a section, with the layers of the one you're working on under it.
 - **View › Fit on Screen** fits all the artboards, and **Fit Artboard** (Ctrl+Alt+0) fits the one you're working on. The scrollbars cover them all.
+- **Layers between artboards**: drag a layer onto another artboard's row in the Layers panel to move it there (Alt copies it), or use Layer › Move to Artboard and Copy to Artboard. Moving it is one undo step for both artboards.
+- **Tabs and artboards turn into each other.** Drag a tab onto another image to make it an artboard there, where you drop it (Alt puts in a copy and keeps the tab). With the Artboard tool, drag an artboard by its name up to the tabs to open it in a tab of its own. Image › Artboards does both too (Add Open Image, Open in Own Tab, Copy to New Tab). Undo takes either back.
+- **Linked artboards**: an image that came from its own .pixl remembers that file, shown beside its name. The first time you save, Pixl asks whether to save it only in this file or in its own file too, and the chip beside its name switches that later. Either way, this file keeps a full copy, so it opens without the other file. If the linked file was changed on its own, opening this file offers to update the artboard from it.
+- **Export Artboards** (File menu): each artboard becomes its own image, named by its place and name ("01 - Artboard 1.png"), all in the folder you choose. File › Export Image lets you tick which artboards to export.
+- **Photoshop artboards** come in as artboards, with their layers.
+- **Next and previous artboard**: Ctrl+Alt+] and Ctrl+Alt+[.
 - Cropping or resizing the canvas of one artboard among others keeps its picture where it was.
 - Artboards you aren't working on are drawn from a kept copy, so scrolling past them costs little.
 - **Saving**: a file with several artboards is saved in a new .pixl version, which earlier versions of Pixl refuse with a message saying it's from a newer version. A file with one artboard is saved as before. Crash recovery keeps every artboard.

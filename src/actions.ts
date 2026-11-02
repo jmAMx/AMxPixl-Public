@@ -2,11 +2,12 @@ import { app } from './app';
 import { defaultAdj, ADJ_LABELS } from './core/adjustments';
 import { Doc, flatLayers, newId } from './core/document';
 import { defaultFx, fxDef } from './core/effects';
-import { baseName, canvasBlob, decodeImage, decodePixl, docFromCanvas, docFromMeta, encodePixl, extOf, layerKeys, pickFiles, PIXL_ACCEPT, saveBlob, type Picked } from './core/fileio';
+import { baseName, canvasBlob, decodeImage, decodePixl, docFromCanvas, docFromMeta, encodePixl, extOf, hashOf, layerKeys, pickFiles, PIXL_ACCEPT, saveBlob, type Picked } from './core/fileio';
 import { importPsd } from './core/import/psd';
 import { importXcf } from './core/import/xcfimport';
 import { addRecent, openRecent, removeRecent, type RecentEntry } from './core/recent';
 import { clearRecovery } from './core/recovery';
+import { isDesktop, readPath, writePath } from './core/platform';
 import { Project } from './core/project';
 import { cloneCanvas, ctx2d, drawPlaced, follow, layerMatrix, localBounds, newCanvas } from './core/layers';
 import { savedLooks, storeLooks, type Look, type LookItem } from './core/looks';
@@ -88,9 +89,11 @@ export async function openFiles(files: Picked[]) {
         p = await decodePixl(file, baseName(file.name));
         p.name = file.name;
         p.file = ref.path || ref.handle ? ref : null;
+        p = await refreshLinked(p);
         app.addProject(p);
       } else if (ext === 'psd' || ext === 'psb') {
-        p = app.addDoc(await importPsd(await file.arrayBuffer(), file.name));
+        const boards = await importPsd(await file.arrayBuffer(), file.name);
+        if (boards.length > 1) { p = new Project(file.name, boards); app.addProject(p); } else p = app.addDoc(boards[0].doc);
       } else if (ext === 'xcf') {
         p = app.addDoc(await importXcf(await file.arrayBuffer(), file.name));
       } else {
@@ -105,6 +108,50 @@ export async function openFiles(files: Picked[]) {
     }
   }
   app.emit('recent');
+}
+
+/**
+ * A file just opened whose linked artboards' own .pixl files changed since it was saved (edited on their own): offers
+ * to bring those versions in, which leaves the file unsaved. Originals that moved or went keep the copy here.
+ */
+async function refreshLinked(p: Project): Promise<Project> {
+  if (!isDesktop) return p;
+  const changed: { i: number; file: File }[] = [];
+  for (const [i, b] of p.boards.entries()) {
+    const s = b.doc.source;
+    if (!s?.linked || !s.file.path || !s.hash) continue;
+    try { const f = await readPath(s.file.path); if (await hashOf(f) !== s.hash) changed.push({ i, file: f }); } catch { /* moved or gone */ }
+  }
+  if (!changed.length) return p;
+  const names = changed.map((c) => p.boards[c.i].doc.source!.name);
+  const one = changed.length === 1;
+  const r = await ask('Linked files changed', `${names.join(', ')} ${one ? 'was' : 'were'} changed since ${p.name} was saved. Update ${one ? 'its artboard' : 'their artboards'} here to match?`,
+    [{ id: 'keep', label: 'Keep these' }, { id: 'update', label: 'Update', primary: true }]);
+  if (r !== 'update') return p;
+  const boards = p.boards.map((b) => ({ ...b }));
+  for (const c of changed) {
+    const old = boards[c.i].doc;
+    const d = (await decodePixl(c.file, old.name)).boards[0].doc;
+    d.name = old.name;
+    d.source = { ...old.source!, hash: await hashOf(c.file) };
+    boards[c.i] = { ...boards[c.i], doc: d };
+  }
+  boards[0].doc.resetHistory('Open');
+  const q = new Project(p.name, boards);
+  q.file = p.file;
+  q.history.savedIndex = -1;
+  return q;
+}
+
+/** Turns an artboard's link to its own .pixl on or off (see Doc.source): one undo step. */
+export function toggleLink(d: Doc) {
+  const p = app.projectOf(d), s = d.source;
+  if (!p || !s) return;
+  const before = p.layout();
+  d.source = { ...s, linked: !s.linked };
+  p.commitLayout(d.source.linked ? `Link ${d.name} to ${s.name}` : `Unlink ${d.name} from ${s.name}`, before, d);
+  toast(d.source.linked ? `Saving ${p.name} now saves ${d.name} to ${s.name} too.` : `${d.name} is now saved only in ${p.name}; ${s.name} stays as it is.`);
+  app.emit('docs');
 }
 
 export async function openRecentEntry(e: RecentEntry) {
@@ -141,10 +188,23 @@ export function placeCanvas(c: HTMLCanvasElement, name: string, at: Pt | null, f
   if (s < 1) toast(`Placed at ${Math.round(s * 100)}% to fit. The full-size original is kept, so scaling it up later loses nothing.`);
 }
 
-/** Saves the file `doc` is an artboard of, with all its artboards. */
+/**
+ * Saves the file `doc` is an artboard of, with all its artboards. An artboard linked to a .pixl of its own (see
+ * Doc.source) is saved there too; one whose link was never chosen asks first.
+ */
 export async function saveDoc(doc: Doc | null = app.doc, saveAs = false) {
   const p = doc && app.projectOf(doc);
   if (!p) return false;
+  for (const b of p.boards) {
+    const s = b.doc.source;
+    if (!s?.file.path || s.linked !== undefined) continue;
+    const r = await ask(`Save ${b.doc.name} to ${s.name} too?`,
+      `"${b.doc.name}" came from ${s.name}. Save its changes only in ${p.name}, or in ${s.name} as well? (Click ${s.name} above the artboard to change this later.)`,
+      [{ id: 'cancel', label: 'Cancel' }, { id: 'only', label: `Only in ${p.name}` }, { id: 'both', label: `Also in ${s.name}`, primary: true }]);
+    if (r !== 'only' && r !== 'both') return false;
+    b.doc.source = { ...s, linked: r === 'both' };
+    app.emit('docs');
+  }
   const isPixl = p.name.toLowerCase().endsWith('.pixl');
   const existing = !saveAs && isPixl ? p.file : null;
   // The history step being saved. Edits made while the file is written aren't in it, so they stay unsaved: nothing is
@@ -153,16 +213,27 @@ export async function saveDoc(doc: Doc | null = app.doc, saveAs = false) {
   const saving = h.entries[h.index - 1];
   if (saving) saving.merge = undefined;
   try {
+    // Linked artboards as files of their own (each a one-artboard .pixl), made first: this file notes what they hold.
+    const originals: { path: string; blob: Blob; s: NonNullable<Doc['source']>; was?: string }[] = [];
+    for (const b of p.boards) {
+      const s = b.doc.source;
+      if (!s?.linked || !s.file.path) continue;
+      const blob = await encodePixl({ name: s.name, boards: [{ doc: b.doc, x: 0, y: 0 }] });
+      originals.push({ path: s.file.path, blob, s, was: s.hash });
+      s.hash = await hashOf(blob);
+    }
     const blob = await encodePixl(p);
     const ref = await saveBlob(blob, `${baseName(p.name)}.pixl`, existing, PIXL_ACCEPT);
-    if (ref === undefined) return false;
+    // (Cancelled: the originals aren't written, so they still hold what they did.)
+    if (ref === undefined) { for (const o of originals) o.s.hash = o.was; return false; }
+    for (const o of originals) await writePath(o.path, o.blob);
     const stored = ref.path || ref.handle;
     p.file = stored ? ref : null;
     p.name = stored ? ref.name : `${baseName(p.name)}.pixl`;
     // (0, never current, if that step has since been undone and replaced or dropped from history.)
     h.savedIndex = h.entries.indexOf(saving) + 1;
     app.emit('docs');
-    toast(`Saved ${p.name}`);
+    toast(`Saved ${p.name}` + (originals.length ? ` and ${originals.length === 1 ? 'its linked file' : `${originals.length} linked files`}` : ''));
     if (stored) { addRecent(ref, thumbOf(p.active)); app.emit('recent'); }
     if (!p.dirty) clearRecovery(p).catch(() => {});
     return true;
@@ -172,7 +243,10 @@ export async function saveDoc(doc: Doc | null = app.doc, saveAs = false) {
   }
 }
 
-export async function exportImage(doc: Doc, o: { format: 'png' | 'jpeg' | 'webp'; quality: number; scale: number; nearest?: boolean }) {
+export type ExportOpts = { format: 'png' | 'jpeg' | 'webp'; quality: number; scale: number; nearest?: boolean };
+
+/** An image flattened and encoded for export. */
+async function exported(doc: Doc, o: ExportOpts): Promise<{ blob: Blob; w: number; h: number }> {
   let c = flatten(doc, o.scale, { nearest: o.nearest });
   if (o.format === 'jpeg') {
     const bgc = newCanvas(c.width, c.height);
@@ -182,11 +256,52 @@ export async function exportImage(doc: Doc, o: { format: 'png' | 'jpeg' | 'webp'
     x.drawImage(c, 0, 0);
     c = bgc;
   }
-  const blob = await canvasBlob(c, `image/${o.format}`, o.format === 'png' ? undefined : o.quality);
-  const ext = o.format === 'jpeg' ? 'jpg' : o.format;
+  return { blob: await canvasBlob(c, `image/${o.format}`, o.format === 'png' ? undefined : o.quality), w: c.width, h: c.height };
+}
+
+const extOfFormat = (f: ExportOpts['format']) => (f === 'jpeg' ? 'jpg' : f);
+
+export async function exportImage(doc: Doc, o: ExportOpts) {
+  const { blob, w, h } = await exported(doc, o);
+  const ext = extOfFormat(o.format);
   const accept = { [`image/${o.format}`]: [`.${ext}`] };
   const ref = await saveBlob(blob, `${baseName(app.nameOf(doc))}.${ext}`, null, accept);
-  if (ref !== undefined) toast(`Exported ${c.width} × ${c.height} ${ext.toUpperCase()} (${(blob.size / 1024 / 1024).toFixed(2)} MB)`);
+  if (ref !== undefined) toast(`Exported ${w} × ${h} ${ext.toUpperCase()} (${(blob.size / 1024 / 1024).toFixed(2)} MB)`);
+}
+
+/**
+ * Exports several artboards of a file, each as its own image named "01 - Artboard 1.png" (its place in the file and
+ * its name). Asks where the first goes; the others go in the same folder (asking first before replacing files there).
+ * In a browser each is its own download. With `folder` (desktop), all go there without asking where.
+ */
+export async function exportArtboards(docs: Doc[], o: ExportOpts, folder?: string) {
+  const p = docs[0] && app.projectOf(docs[0]);
+  if (!p) return;
+  if (docs.length === 1 && !folder) return exportImage(docs[0], o);
+  const ext = extOfFormat(o.format), accept = { [`image/${o.format}`]: [`.${ext}`] };
+  const nameOf = (d: Doc) => `${String(p.boards.findIndex((b) => b.doc === d) + 1).padStart(2, '0')} - ${d.name.replace(/[\\/:*?"<>|]/g, '-')}.${ext}`;
+  let rest = docs;
+  let ref: Picked['ref'] | undefined = folder ? { name: '', path: folder.replace(/[\\/]?$/, '\\') } : undefined;
+  if (!ref) {
+    ref = await saveBlob((await exported(docs[0], o)).blob, nameOf(docs[0]), null, accept);
+    if (ref === undefined) return;
+    rest = docs.slice(1);
+  }
+  if (ref.path) {
+    const dir = ref.path.slice(0, Math.max(ref.path.lastIndexOf('\\'), ref.path.lastIndexOf('/')) + 1);
+    const taken: string[] = [];
+    for (const d of rest) { try { await readPath(dir + nameOf(d)); taken.push(nameOf(d)); } catch { /* not there: fine */ } }
+    if (taken.length) {
+      const r = await ask('Replace files?', `${taken.length === 1 ? `"${taken[0]}" is` : `${taken.length} files (${taken.join(', ')}) are`} already in that folder. Replace ${taken.length === 1 ? 'it' : 'them'}?`,
+        [{ id: 'cancel', label: 'Cancel' }, { id: 'replace', label: 'Replace', primary: true, danger: true }]);
+      if (r !== 'replace') { toast(folder ? 'Nothing exported.' : `Exported ${nameOf(docs[0])} only.`); return; }
+    }
+    for (const d of rest) await writePath(dir + nameOf(d), (await exported(d, o)).blob);
+    toast(`Exported ${docs.length} artboards to ${dir.replace(/[\\/]$/, '')}`);
+  } else {
+    for (const d of rest) if ((await saveBlob((await exported(d, o)).blob, nameOf(d), null, accept)) === undefined) return;
+    toast(`Exported ${docs.length} artboards.`);
+  }
 }
 
 /** Closes the file (the tab) `doc` is an artboard of. */
@@ -204,8 +319,11 @@ export async function closeDoc(doc: Doc | null = app.doc) {
   app.removeProject(p);
 }
 
-/** Shows the artboard an undo or redo step was on, if it isn't the one shown (and is still there: undoing a new artboard removes it). */
-const showStep = (d: Doc | null | undefined) => { if (d && d !== app.doc && app.projectOf(d)) app.setDoc(d); };
+/**
+ * Shows the artboard an undo or redo step was on, if it isn't the one shown and is still in this file (undoing a new
+ * artboard removes it; undoing putting a file into this one sends it back to its own tab, which isn't switched to).
+ */
+const showStep = (d: Doc | null | undefined) => { if (d && d !== app.doc && app.project?.has(d)) app.setDoc(d); };
 export const undo = () => showStep(app.doc?.undo());
 export const redo = () => showStep(app.doc?.redo());
 export const goToStep = (index: number) => showStep(app.doc?.goTo(index));
@@ -242,23 +360,51 @@ export function newArtboard(w: number, h: number, bg: string | null = '#ffffff',
   app.setDoc(doc);
 }
 
-/** A copy of the artboard worked on (its layers, settings and pixels), to the right of the others. */
-export function duplicateArtboard() {
-  const p = app.project, src = app.doc; if (!p || !src) return;
-  const before = p.layout();
-  const r = p.bounds(), b = p.boardOf(src)!;
+/**
+ * A copy of an image (its layers, settings and pixels), with no history. Its pixels get keys of their own: caches go
+ * by key, and painting on one copy mustn't show on the other.
+ */
+function copyDoc(src: Doc, name: string): Doc {
   const meta = src.snapshot();
-  const doc = docFromMeta(`${src.name} copy`, meta);
-  // The copy's pixels get keys of their own: caches go by key, and painting on one copy mustn't show on the other.
+  const doc = docFromMeta(name, meta);
   let layers = JSON.stringify(meta.layers);
   for (const k of layerKeys(meta)) {
     const c = src.pool.get(k);
     if (c) layers = layers.split(JSON.stringify(k)).join(JSON.stringify(doc.addCanvas(cloneCanvas(c))));
   }
   doc.layers = JSON.parse(layers);
+  return doc;
+}
+
+/** A copy of the artboard worked on (its layers, settings and pixels), to the right of the others. */
+export function duplicateArtboard() {
+  const p = app.project, src = app.doc; if (!p || !src) return;
+  const before = p.layout();
+  const r = p.bounds(), b = p.boardOf(src)!;
+  const doc = copyDoc(src, `${src.name} copy`);
   app.addArtboard(p, doc, r.x + r.w + ARTBOARD_GAP, b.y);
   p.commitLayout('Duplicate artboard', before, doc);
   app.setDoc(doc);
+}
+
+/** The file without artboard `d`, which the one beside it takes over from (not an undo step by itself). */
+function withoutBoard(p: Project, d: Doc): Doc {
+  const i = p.boards.findIndex((b) => b.doc === d);
+  const next = p.boards[i + 1]?.doc ?? p.boards[i - 1].doc;
+  p.setActive(next);
+  p.applyLayout({ boards: p.layout().boards.filter((e) => e.doc !== d) });
+  return next;
+}
+
+/** Works on the next artboard of the file (or the previous one), in the order they were made; the view follows. */
+export function stepArtboard(dir: 1 | -1) {
+  const p = app.project, d = app.doc; if (!p || !d || p.boards.length < 2) return;
+  const i = p.boards.findIndex((b) => b.doc === d);
+  const next = p.boards[(i + dir + p.boards.length) % p.boards.length].doc;
+  app.setDoc(next);
+  // Bring it into view if it's off screen (keeping the zoom).
+  const r = view.boardRect(p.boardOf(next)!), s = view.size;
+  if (r.x + r.w < 0 || r.y + r.h < 0 || r.x > s.w || r.y > s.h) view.panBy(Math.round(s.w / 2 - (r.x + r.w / 2)), Math.round(s.h / 2 - (r.y + r.h / 2)));
 }
 
 /** Removes the artboard worked on (undo brings it back); a file keeps at least one. */
@@ -266,12 +412,60 @@ export function deleteArtboard() {
   const p = app.project, d = app.doc; if (!p || !d) return;
   if (p.boards.length < 2) { toast('A file keeps at least one artboard. Close the file to remove it all.'); return; }
   const before = p.layout();
-  const i = p.boards.findIndex((b) => b.doc === d);
-  const next = p.boards[i + 1]?.doc ?? p.boards[i - 1].doc;
-  p.setActive(next);
-  p.applyLayout(before.filter((e) => e.doc !== d));
+  const next = withoutBoard(p, d);
   p.commitLayout('Delete artboard', before, next);
   app.setDoc(next);
+}
+
+/**
+ * Takes an artboard out of its file into a tab of its own; with `copy`, a copy goes to the new tab and the file keeps
+ * the artboard. Undo puts it back in the file (closing its tab). One linked to a .pixl of its own (see Doc.source)
+ * opens as that file, so saving it saves there.
+ */
+export function artboardToTab(d: Doc, copy = false) {
+  const p = app.projectOf(d); if (!p) return;
+  const linked = d.source?.linked ? d.source : null;
+  if (copy) {
+    const c = copyDoc(d, d.name);
+    c.resetHistory('New');
+    const q = new Project(d.name, [{ doc: c, x: 0, y: 0 }]);
+    // (Saved nowhere yet: closing it asks.)
+    q.history.savedIndex = -1;
+    app.addProject(q);
+    return;
+  }
+  if (p.boards.length < 2) { toast('This artboard is the only one in its file, so it already has a tab of its own.'); return; }
+  const before = p.layout();
+  const next = withoutBoard(p, d);
+  const tab = { boards: [{ doc: d, x: 0, y: 0 }], name: linked ? linked.name : d.name, file: linked ? linked.file : null, dirty: true };
+  p.commitLayout(`Open ${d.name} in its own tab`, before, next, { ...p.layout(), tabs: [tab] });
+  app.openTab(tab, true);
+}
+
+/**
+ * Puts an open file's artboards into another file, the first's top-left at `at` (the other file's pixels), and closes
+ * its tab; with `copy`, copies go in and it stays open. One undo step, which takes them back out to their own tab. A
+ * single-artboard file that's saved as .pixl is remembered as where that artboard came from (see Doc.source).
+ */
+export function fileIntoFile(src: Project, target: Project, at: Pt, copy = false) {
+  if (src === target) return;
+  const before = target.layout();
+  const sb = src.bounds();
+  const added: Doc[] = [];
+  for (const b of src.boards) {
+    const d = copy ? copyDoc(b.doc, b.doc.name) : b.doc;
+    if (src.boards.length === 1 && d.name === src.name) d.name = baseName(src.name);
+    if (!copy && src.boards.length === 1 && src.file?.path && src.name.toLowerCase().endsWith('.pixl')) d.source = { name: src.name, file: src.file };
+    app.addArtboard(target, d, Math.round(at.x + b.x - sb.x), Math.round(at.y + b.y - sb.y));
+    added.push(d);
+  }
+  if (!copy) before.tabs = [{ boards: src.boards.map((b) => ({ ...b })), name: src.name, file: src.file, dirty: src.dirty }];
+  target.commitLayout(copy ? `Copy ${src.name} in` : `Add ${src.name}`, before, added[0]);
+  if (!copy) {
+    app.removeProject(src);
+    clearRecovery(src).catch(() => {});
+  }
+  app.setDoc(added[0]);
 }
 
 export function renameArtboard(d: Doc, name: string) {
@@ -358,16 +552,44 @@ export function ungroup() {
 }
 
 /** Copies a layer (and a group's whole contents) with fresh ids and its own pixel buffers. */
-function cloneLayer(doc: Doc, l: Layer): Layer {
+/** A copy of a layer (and what's in it, for a group) with new ids and pixels of its own, in `doc` or another artboard. */
+function cloneLayer(doc: Doc, l: Layer, into: Doc = doc): Layer {
   const c = structuredClone(l) as Layer;
+  const copy = (k: string) => into.addCanvas(cloneCanvas(doc.pool.get(k)!));
   const fix = (x: Layer) => {
     x.id = newId();
-    if (x.type === 'raster') x.key = doc.addCanvas(cloneCanvas(doc.pool.get(x.key)!));
-    if (x.mask) x.mask.key = doc.addCanvas(cloneCanvas(doc.pool.get(x.mask.key)!));
+    if (x.type === 'raster') x.key = copy(x.key);
+    if (x.mask) x.mask.key = copy(x.mask.key);
+    // (Within one image a LUT or 3D texture can stay shared: nothing paints on them.)
+    if (into !== doc && x.type === 'adjust' && x.adj.kind === 'lut' && x.adj.key) x.adj = { ...x.adj, key: copy(x.adj.key) };
+    if (into !== doc && x.type === 'raster' && x.model?.texture) x.model = { ...x.model, texture: { ...x.model.texture, key: copy(x.model.texture.key) } };
     if (x.type === 'group') x.children.forEach(fix);
   };
   fix(c);
   return c;
+}
+
+/**
+ * Moves (or with `copy`, copies) the selected layers to another artboard of the file, on top of its layers and at the
+ * same place within it. One undo step for both artboards.
+ */
+export function layersToArtboard(target: Doc, copy = false) {
+  const doc = need(); if (!doc || target === doc || !app.projectOf(doc)?.has(target)) return;
+  const ids = selectedRoots(doc);
+  if (!ids.length) return;
+  const added: string[] = [];
+  for (const id of ids) {
+    const c = cloneLayer(doc, doc.layer(id)!, target);
+    target.layers.push(c);
+    added.push(c.id);
+  }
+  target.setActive(added[added.length - 1]);
+  target.alsoSelected = added.slice(0, -1);
+  const n = ids.length > 1 ? `${ids.length} layers` : 'layer';
+  if (copy) { target.commit(`Copy ${n} to ${target.name}`); app.setDoc(target); return; }
+  for (const id of ids) doc.removeLayer(id);
+  target.commit(`Move ${n} to ${target.name}`, [], undefined, undefined, [doc.takeChange()]);
+  app.setDoc(target);
 }
 
 /** Duplicates the selected layers, each copy just above its original; the copies end up selected. */

@@ -13,12 +13,16 @@ import { isPlaced } from './types';
 export interface PixelDiff { key: string; rect: Rect; before: HTMLCanvasElement; after: HTMLCanvasElement | null }
 /**
  * One undo step, made on the artboard `doc`. `layout` is set when the step also changed the file's artboards (added,
- * moved, renamed or removed one): what they were before and after, as the file records it (see project.ts).
+ * moved, renamed or removed one): what they were before and after, as the file records it (see project.ts). `others`
+ * are other artboards the same step changed (a layer moved from one artboard to another, say).
  */
 interface Entry {
   doc: Doc; label: string; before: Meta; after: Meta; pixels: PixelDiff[]; bytes: number; merge?: { key: string; time: number };
   layout?: { before: unknown; after: unknown };
+  others?: Change[];
 }
+/** What a step changed on another artboard than its own. */
+export interface Change { doc: Doc; before: Meta; after: Meta }
 
 /**
  * Undo history, shared by the artboards of one file (see project.ts): steps undo in the order they were made, whichever
@@ -102,6 +106,13 @@ export class Doc {
   get savedIndex() { return this.hist.savedIndex; }
   set savedIndex(v: number) { this.hist.savedIndex = v; }
   private last: Meta;
+  /**
+   * For an artboard that came from a .pixl of its own (a tab put into another file): that file, and whether saving
+   * this file saves the artboard there too (`linked`; unset until chosen). `hash` is the original's contents as last
+   * saved or opened from here, to notice it changed elsewhere.
+   */
+  source: { name: string; file: { name: string; path?: string | null; handle?: FileSystemFileHandle | null }; linked?: boolean; hash?: string } | null = null;
+
   /** Stable id: names this image's pixels in crash-recovery storage, and its entries in render caches. */
   uid =`D${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
   /** Pixel buffers changed since the last autosave, and those already autosaved. */
@@ -220,12 +231,12 @@ export class Doc {
    * Records everything changed since the last commit as one undoable step. With `mergeKey`, a step following one
    * with the same key within a second (and no pixels, nothing to redo, not just saved) is folded into it instead.
    */
-  commit(label: string, pixels: PixelDiff[] = [], mergeKey?: string, layout?: Entry['layout']) {
+  commit(label: string, pixels: PixelDiff[] = [], mergeKey?: string, layout?: Entry['layout'], others?: Change[]) {
     const after = this.snapshot();
-    if (!pixels.length && !layout && JSON.stringify(after) === JSON.stringify(this.last)) return;
+    if (!pixels.length && !layout && !others?.length && JSON.stringify(after) === JSON.stringify(this.last)) return;
     const now = Date.now();
     const top = this.entries[this.index - 1];
-    if (mergeKey && !pixels.length && !layout && this.index > 1 && this.index === this.entries.length && this.savedIndex !== this.index
+    if (mergeKey && !pixels.length && !layout && !others && this.index > 1 && this.index === this.entries.length && this.savedIndex !== this.index
       && top.doc === this && !top.layout && top.merge?.key === mergeKey && now - top.merge.time < MERGE_MS) {
       top.after = after;
       top.merge.time = now;
@@ -237,13 +248,13 @@ export class Doc {
     const bytes = pixels.reduce((n, p) => n + p.rect.w * p.rect.h * 8, 0) + 4096;
     if (this.savedIndex > this.index) this.savedIndex = -1;
     // Steps that could be redone go, on whichever artboard they were (and what only they kept is freed there).
-    const others = new Set(this.entries.slice(this.index).map((e) => e.doc).filter((d) => d !== this));
+    const redone = new Set(this.entries.slice(this.index).flatMap((e) => [e.doc, ...(e.others ?? []).map((o) => o.doc)]).filter((d) => d !== this));
     this.entries.length = this.index;
-    this.entries.push({ doc: this, label, before: this.last, after, pixels, bytes, merge: mergeKey ? { key: mergeKey, time: now } : undefined, layout });
+    this.entries.push({ doc: this, label, before: this.last, after, pixels, bytes, merge: mergeKey ? { key: mergeKey, time: now } : undefined, layout, others });
     this.index = this.entries.length;
     this.last = after;
     this.trim();
-    for (const d of others) d.gc();
+    for (const d of redone) d.gc();
     this.touch('history');
   }
 
@@ -270,7 +281,7 @@ export class Doc {
   undo(): Doc | null {
     if (!this.canUndo) return null;
     const e = this.entries[--this.index];
-    e.doc.apply(e, 'undo');
+    e.doc.apply(e, 'undo', this.hist);
     return e.doc;
   }
 
@@ -278,11 +289,15 @@ export class Doc {
   redo(): Doc | null {
     if (!this.canRedo) return null;
     const e = this.entries[this.index++];
-    e.doc.apply(e, 'redo');
+    e.doc.apply(e, 'redo', this.hist);
     return e.doc;
   }
 
-  private apply(e: Entry, dir: 'undo' | 'redo') {
+  /**
+   * Undoes or redoes step `e` of history `h` on this artboard. (The file's layout goes back through `h`, not this
+   * artboard's own history: an artboard back in a tab of its own has another one by then.)
+   */
+  private apply(e: Entry, dir: 'undo' | 'redo', h: History) {
     if (dir === 'undo') {
       for (const p of [...e.pixels].reverse()) {
         const c = this.pool.get(p.key);
@@ -294,8 +309,27 @@ export class Doc {
     this.restore(m);
     this.last = m;
     this.maskCache = null;
-    if (e.layout) this.hist.setLayout(dir === 'undo' ? e.layout.before : e.layout.after);
+    for (const o of e.others ?? []) o.doc.setState(dir === 'undo' ? o.before : o.after);
+    if (e.layout) h.setLayout(dir === 'undo' ? e.layout.before : e.layout.after);
     this.touch('history');
+  }
+
+  /** Puts this artboard as another artboard's step left it (see Entry.others). */
+  private setState(m: Meta) {
+    this.restore(m);
+    this.last = m;
+    this.maskCache = null;
+    this.touch('history');
+  }
+
+  /**
+   * What changed here since the last step, for recording as part of a step on another artboard (`others` in commit);
+   * from now on this artboard counts it as recorded.
+   */
+  takeChange(): Change {
+    const c = { doc: this, before: this.last, after: this.snapshot() };
+    this.last = c.after;
+    return c;
   }
 
   /** Undoes or redoes to `index` steps; returns the artboard of the last step undone or redone. */
@@ -338,6 +372,7 @@ export class Doc {
       this.index--;
       this.savedIndex--;
       touched.add(e.doc);
+      for (const o of e.others ?? []) touched.add(o.doc);
       // The oldest kept step now starts from where the dropped one began (when both are on the same artboard).
       if (this.entries[0].doc === e.doc) this.entries[0] = { ...this.entries[0], after: e.after };
     }
@@ -358,7 +393,10 @@ export class Doc {
       if (m.quickMask) live.add(m.quickMask);
     };
     scan(this);
-    for (const e of this.entries) if (e.doc === this) { scan(e.before); scan(e.after); e.pixels.forEach((p) => live.add(p.key)); }
+    for (const e of this.entries) {
+      if (e.doc === this) { scan(e.before); scan(e.after); e.pixels.forEach((p) => live.add(p.key)); }
+      for (const o of e.others ?? []) if (o.doc === this) { scan(o.before); scan(o.after); }
+    }
     for (const k of [...this.pool.keys()]) if (!live.has(k)) this.pool.delete(k);
   }
 
