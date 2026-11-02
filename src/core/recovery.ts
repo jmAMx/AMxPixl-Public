@@ -1,6 +1,7 @@
 import { flatLayers, type Doc } from './document';
 import { canvasBlob, decodeImage, docFromMeta, fewAtOnce } from './fileio';
 import { Project } from './project';
+import { textureKeys } from './model3d';
 import { idbDel, idbGet, idbKeys, idbPut } from './idb';
 import { isDesktop } from './platform';
 import type { Meta } from './types';
@@ -94,7 +95,7 @@ function keysOf(m: Meta): string[] {
   const keys = new Set<string>();
   for (const l of flatLayers(m.layers)) {
     if (l.type === 'raster') keys.add(l.key);
-    if (l.type === 'raster' && l.model?.texture) keys.add(l.model.texture.key);
+    if (l.type === 'raster') for (const k of textureKeys(l.model)) keys.add(k);
     if (l.mask) keys.add(l.mask.key);
     if (l.type === 'adjust' && l.adj.kind === 'lut' && l.adj.key) keys.add(l.adj.key);
   }

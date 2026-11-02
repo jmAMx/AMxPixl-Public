@@ -40,6 +40,11 @@ export interface Model3D {
   color: string | null;
   /** An image laid over the surface (wood, stone, a label), on top of the picture or colour. */
   texture?: ModelTexture | null;
+  /**
+   * Extrude, with `texture` on only the front and back or only the sides: a texture of its own for the other part (its
+   * own `where` isn't used).
+   */
+  texture2?: ModelTexture | null;
 }
 
 /**
@@ -67,7 +72,22 @@ export interface ModelTexture {
   bump: number;
   /** Extrude: on every surface, only the front and back, or only the sides. */
   where: 'all' | 'faces' | 'sides';
+  /**
+   * Extrude's sides: the texture carries straight on from the front and back over the edge, so it meets them with no
+   * seam ('front'), or runs along the outline around the shape ('around'; files from before 0.9 have no setting).
+   */
+  wrap?: 'front' | 'around';
 }
+
+/** The textures on an Extrude's front and back, and on its sides (the same one, or one each); others' all are faces. */
+export function texturesOf(m: Model3D): { faces: ModelTexture | null; sides: ModelTexture | null } {
+  const t = m.texture ?? null;
+  if (!t || m.kind !== 'extrude' || t.where === 'all') return { faces: t, sides: m.kind === 'extrude' ? t : null };
+  return t.where === 'faces' ? { faces: t, sides: m.texture2 ?? null } : { faces: m.texture2 ?? null, sides: t };
+}
+
+/** The pixel buffers a 3D model's textures use (for saving, recovery and copying). */
+export const textureKeys = (m: Model3D | undefined | null): string[] => [m?.texture?.key, m?.texture2?.key].filter((k): k is string => !!k);
 
 /**
  * A 3D layer's shadows. Behind the object is a wall facing the viewer, `gap` behind its back (% of its size), where
@@ -79,7 +99,7 @@ export interface ModelShadow { on: boolean; opacity: number; soft: number; gap: 
 export const defaultShadow = (): ModelShadow => ({ on: true, opacity: 60, soft: 35, gap: 15 });
 
 export const defaultTexture = (key: string, name: string): ModelTexture => ({
-  key, name, scale: 100, x: 0, y: 0, rotate: 0, tile: false, blend: 'replace', amount: 100, bump: 0, where: 'all',
+  key, name, scale: 100, x: 0, y: 0, rotate: 0, tile: false, blend: 'replace', amount: 100, bump: 0, where: 'all', wrap: 'front',
 });
 
 export const defaultModel = (kind: Model3D['kind'] = 'inflate'): Model3D => ({
@@ -1463,6 +1483,9 @@ const VS = `#version 300 es
 in vec3 aPos; in vec3 aNrm; in vec2 aUV; in float aSolid; in vec2 aT; in vec4 aEdge; in float aReach;
 uniform mat3 uR; uniform vec2 uC; uniform float uF; uniform vec4 uBox; uniform float uZr;
 out vec3 vN; out vec2 vUV; out float vSolid; out float vZ; out vec2 vT; out vec3 vP; out vec4 vEdge; out float vReach;
+// For a texture carried on from the front over Extrude's sides: the point on the outline, how thick it is there (front
+// to back), and the outward direction there.
+out vec3 vO; out vec2 vON;
 void main() {
   vec3 p = uR * vec3(aPos.xy - uC, aPos.z);
   float k = uF / (uF - p.z);
@@ -1471,6 +1494,8 @@ void main() {
   vZ = p.z;
   vP = p;
   vT = aT;
+  vO = vec3(aPos.xy, 2.0 * abs(aPos.z));
+  vON = aNrm.xy;
   vUV = aUV;
   vSolid = aSolid;
   vEdge = aEdge;
@@ -1479,17 +1504,19 @@ void main() {
 }`;
 const FS = `#version 300 es
 precision highp float;
-in vec3 vN; in vec2 vUV; in float vSolid; in float vZ; in vec2 vT; in vec3 vP; in vec4 vEdge; in float vReach; out vec4 o;
+in vec3 vN; in vec2 vUV; in float vSolid; in float vZ; in vec2 vT; in vec3 vP; in vec4 vEdge; in float vReach; in vec3 vO; in vec2 vON; out vec4 o;
 // Inflate's rounded profile (height and how far in it reaches, pixels; a narrower part of the shape is rounded by its
 // own reach, vReach); y = 0 for other shapes.
 uniform vec2 uProf;
 uniform int uOut; uniform vec2 uZ;
 uniform sampler2D uTex; uniform sampler2D uBled; uniform int uPass; uniform mat3 uR;
 uniform vec3 uL; uniform vec4 uCol; uniform vec4 uMat; uniform float uAmb; uniform float uStr;
-// The texture: on/off, where it sits (centre and size in surface pixels), its turn, and
-// uTxOpt: x multiply (else replace), y amount, z tile, w where (0 all, 1 front and back, 2 sides). uKind 1 = Extrude.
-uniform sampler2D uTx; uniform int uTxOn; uniform vec4 uTxFit; uniform float uTxRot; uniform vec4 uTxOpt;
-uniform float uBump; uniform int uKind;
+// Textures: one on the faces (uF*: all of Inflate and Revolve, Extrude's front and back) and one on Extrude's sides
+// (uS*: the same image, or one of its own). Each: on/off, where it sits (centre and size in surface pixels), its turn,
+// bump height, and opt: x multiply (else replace), y amount, z tile, w (sides) carried on from the front, not around.
+uniform sampler2D uFTx; uniform int uFOn; uniform vec4 uFFit; uniform float uFRot; uniform vec4 uFOpt; uniform float uFBump;
+uniform sampler2D uSTx; uniform int uSOn; uniform vec4 uSFit; uniform float uSRot; uniform vec4 uSOpt; uniform float uSBump;
+uniform int uKind;
 // A lamp (uLampOn 1) at uLamp instead of light from direction uL; the light's colour.
 uniform int uLampOn; uniform vec3 uLamp; uniform vec3 uLCol;
 // Shadows: the light's view (see lightView) and its depths, and uSh: x on, y how dark, z how soft (in the depth map's
@@ -1498,6 +1525,28 @@ uniform highp sampler2DShadow uSM; uniform mat4 uLM; uniform vec4 uSh;
 const vec2 DISC[8] = vec2[](vec2(-0.613, 0.617), vec2(0.170, -0.040), vec2(-0.299, -0.792), vec2(0.645, 0.493),
   vec2(-0.651, -0.172), vec2(0.421, -0.703), vec2(-0.002, 0.989), vec2(0.952, -0.104));
 float lum(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
+// A texture laid over the surface at T (surface pixels): its colour mixed into base, and its bump (light parts raised)
+// tilting N. The surface's slope comes from how the height changes across the screen (no stored tangents needed).
+// rep: repeat it past its edges; held: past its edges, its edge colours carry on (else nothing is drawn there).
+void applyTex(sampler2D tx, vec4 fit, float rot, vec4 opt, float bump, vec2 T, bool rep, bool held, inout vec3 base, inout vec3 N) {
+  float cr = cos(rot), sr = sin(rot);
+  vec2 d = T - fit.xy;
+  vec2 q = vec2(cr * d.x + sr * d.y, -sr * d.x + cr * d.y) / fit.zw + 0.5;
+  if (held && !rep) q = clamp(q, vec2(0.0005), vec2(0.9995));
+  float inside = rep || held ? 1.0 : step(0.0, q.x) * step(q.x, 1.0) * step(0.0, q.y) * step(q.y, 1.0);
+  vec4 tc = texture(tx, q);
+  vec3 tcol = tc.rgb / max(tc.a, 1e-4);
+  float w = tc.a * opt.y * inside;
+  base = mix(base, opt.x > 0.5 ? base * tcol : tcol, w);
+  if (bump > 0.0) {
+    float hh = lum(tcol) * w * bump;
+    vec3 dpx = dFdx(vP), dpy = dFdy(vP);
+    vec3 r1 = cross(dpy, N), r2 = cross(N, dpx);
+    float det = dot(dpx, r1);
+    vec3 g = sign(det) * (dFdx(hh) * r1 + dFdy(hh) * r2);
+    N = normalize(abs(det) * N - g);
+  }
+}
 // How much light reaches this point (0-1): whether the light's view sees something nearer to it here, over a few
 // spots around it (softer the wider they're spread). g: the surface's facing as built (for stepping off it: smooth
 // facings may not match its triangles).
@@ -1547,28 +1596,19 @@ void main() {
   // Two-sided: a surface seen from behind is lit from its other side.
   if (!gl_FrontFacing && solid && dot(N, vec3(0.0, 0.0, 1.0)) < 0.0) N = -N;
   bool side = solid && uKind == 1;
-  float w = 0.0;
-  if (uTxOn == 1 && (uTxOpt.w < 0.5 || (uTxOpt.w < 1.5 ? !side : side))) {
-    float cr = cos(uTxRot), sr = sin(uTxRot);
-    vec2 d = vT - uTxFit.xy;
-    vec2 q = vec2(cr * d.x + sr * d.y, -sr * d.x + cr * d.y) / uTxFit.zw + 0.5;
-    bool rep = uTxOpt.z > 0.5 || side;
-    float inside = rep ? 1.0 : step(0.0, q.x) * step(q.x, 1.0) * step(0.0, q.y) * step(q.y, 1.0);
-    vec4 tc = texture(uTx, q);
-    vec3 tcol = tc.rgb / max(tc.a, 1e-4);
-    w = tc.a * uTxOpt.y * inside;
-    base = mix(base, uTxOpt.x > 0.5 ? base * tcol : tcol, w);
-    // Bump: its light areas stand out. The surface's slope comes from how the height changes across the screen
-    // (no stored tangents needed).
-    if (uBump > 0.0) {
-      float hh = lum(tcol) * w * uBump;
-      vec3 dpx = dFdx(vP), dpy = dFdy(vP);
-      vec3 r1 = cross(dpy, N), r2 = cross(N, dpx);
-      float det = dot(dpx, r1);
-      vec3 g = sign(det) * (dFdx(hh) * r1 + dFdy(hh) * r2);
-      N = normalize(abs(det) * N - g);
+  if (side && uSOn == 1) {
+    // Carried on from the front: the point on the outline, pushed outward as far as it is from the nearer face (front
+    // or back), so at both edges it's exactly where the face has it. Otherwise along the outline and back from the
+    // front (repeating around the shape).
+    bool fromFront = uSOpt.w > 0.5;
+    vec2 T = vT;
+    if (fromFront) {
+      float dd = clamp(min(vT.y, vO.z - vT.y), 0.0, vO.z);
+      T = vO.xy + normalize(vON + vec2(1e-6, 0.0)) * dd;
     }
-  }
+    // (Carried outward past the texture's own edge, near the picture's edge: its edge colours go on, not a bare patch.)
+    applyTex(uSTx, uSFit, uSRot, uSOpt, uSBump, T, uSOpt.z > 0.5 || !fromFront, fromFront, base, N);
+  } else if (!side && uFOn == 1) applyTex(uFTx, uFFit, uFRot, uFOpt, uFBump, vT, uFOpt.z > 0.5, false, base, N);
   // Toward the light: a lamp's direction changes from point to point, and it's brighter nearer (by the square of how
   // much nearer than the object's middle, up to three times).
   vec3 Ld = uL;
@@ -1671,9 +1711,11 @@ class ModelGL {
   private tex: WebGLTexture | null = null;
   private bled: WebGLTexture | null = null;
   private texKey = '';
-  /** The 3D layer's texture image, and which one is loaded. */
+  /** The 3D layer's texture images (the faces', and the sides' when it's another one), and which ones are loaded. */
   private tx: WebGLTexture | null = null;
   private txKey = '';
+  private tx2: WebGLTexture | null = null;
+  private tx2Key = '';
   private buf: WebGLBuffer | null = null;
   /** The mesh's triangles (vertex numbers). */
   private ibuf: WebGLBuffer | null = null;
@@ -1708,7 +1750,7 @@ class ModelGL {
     this.canvas.addEventListener('webglcontextlost', (e) => {
       e.preventDefault();
       this.gl = null;
-      this.texKey = this.txKey = this.shSize = this.smKey = '';
+      this.texKey = this.txKey = this.tx2Key = this.shSize = this.smKey = '';
       this.bufMesh = this.smMesh = null;
       this.liteVao = null; this.liteData = null;
       this.shTex = []; this.shFbo = [];
@@ -1775,7 +1817,7 @@ class ModelGL {
     gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
     gl.bindVertexArray(null);
     for (const n of ['uR', 'uC', 'uF', 'uBox', 'uZr', 'uTex', 'uBled', 'uPass', 'uOut', 'uZ', 'uL', 'uCol', 'uMat', 'uAmb', 'uStr',
-      'uTx', 'uTxOn', 'uTxFit', 'uTxRot', 'uTxOpt', 'uBump', 'uKind', 'uProf', 'uLampOn', 'uLamp', 'uLCol', 'uSM', 'uLM', 'uSh']) this.u[n] = gl.getUniformLocation(p, n);
+      'uFTx', 'uFOn', 'uFFit', 'uFRot', 'uFOpt', 'uFBump', 'uSTx', 'uSOn', 'uSFit', 'uSRot', 'uSOpt', 'uSBump', 'uKind', 'uProf', 'uLampOn', 'uLamp', 'uLCol', 'uSM', 'uLM', 'uSh']) this.u[n] = gl.getUniformLocation(p, n);
     for (const n of ['uR', 'uC', 'uF', 'uBox', 'uLM', 'uMode', 'uL', 'uLampOn', 'uLamp', 'uWall', 'uTex', 'uKind']) this.fu[n] = gl.getUniformLocation(fp, n);
     this.flat = fp;
     // The shadow map: depths only, compared when read (each look gives how much of the spot is lit, smoothly).
@@ -1806,6 +1848,7 @@ class ModelGL {
     this.tex = mk(gl.CLAMP_TO_EDGE);
     this.bled = mk(gl.CLAMP_TO_EDGE);
     this.tx = mk(gl.REPEAT);
+    this.tx2 = mk(gl.REPEAT);
     this.buf = gl.createBuffer();
     this.ibuf = gl.createBuffer();
     this.gl = gl;
@@ -1950,9 +1993,9 @@ class ModelGL {
 
   /**
    * The 3D layer (or its depth map) drawn into its box (layer pixels) at `scale` output pixels per layer pixel.
-   * `tex` is its texture's image, if it has one.
+   * `tex` and `tex2` are its textures' images (m.texture, m.texture2), if it has them.
    */
-  render(src: HTMLCanvasElement, m: Model3D, key: string, scale: number, depth = false, tex?: HTMLCanvasElement | null): { canvas: HTMLCanvasElement; box: Rect } | null {
+  render(src: HTMLCanvasElement, m: Model3D, key: string, scale: number, depth = false, tex?: HTMLCanvasElement | null, tex2?: HTMLCanvasElement | null): { canvas: HTMLCanvasElement; box: Rect } | null {
     const r = this.prepare(src, m, key, scale);
     if (!r) return null;
     const { gl, mesh, box, cw, ch, scene: sc } = r;
@@ -2014,27 +2057,41 @@ class ModelGL {
     gl.uniform1f(this.u.uAmb, m.light.ambient / 100);
     gl.uniform1f(this.u.uStr, m.light.strength / 100);
     gl.uniform1i(this.u.uKind, r.kind);
-    const t = m.texture;
-    gl.uniform1i(this.u.uTxOn, t && tex && !depth ? 1 : 0);
-    gl.uniform1i(this.u.uTx, 2);
-    if (t && tex && !depth) {
-      gl.activeTexture(gl.TEXTURE2);
-      gl.bindTexture(gl.TEXTURE_2D, this.tx);
-      if (this.txKey !== t.key) {
+    // The faces' texture and the sides' (Extrude), each loaded into a texture unit of its own (2 and 5) unless they're
+    // the same image.
+    const { faces, sides } = texturesOf(m);
+    const imageOf = (t: ModelTexture | null) => (!t || depth ? null : t === m.texture ? tex : t === m.texture2 ? tex2 : null) ?? null;
+    const load = (t: ModelTexture, img: HTMLCanvasElement, unit: number, which: 'tx' | 'tx2') => {
+      gl.activeTexture(gl.TEXTURE0 + unit);
+      gl.bindTexture(gl.TEXTURE_2D, this[which]);
+      const k = which === 'tx' ? 'txKey' : 'tx2Key';
+      if (this[k] !== t.key) {
         gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
-        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, tex);
-        this.txKey = t.key;
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, img);
+        this[k] = t.key;
       }
+    };
+    const set = (t: ModelTexture | null, p: 'F' | 'S', unit: number, which: 'tx' | 'tx2') => {
+      const img = imageOf(t);
+      gl.uniform1i(this.u[`u${p}On`], t && img ? 1 : 0);
+      gl.uniform1i(this.u[`u${p}Tx`], unit);
+      if (!t || !img) return;
+      load(t, img, unit, which);
       // Fitted keeping its proportions (covering the front, or once round a revolved shape like a label), then the
       // user's size, place and turn.
       const [ax, ay, aw, ah] = mesh.area;
-      const k = (m.kind === 'revolve' ? aw / tex.width : Math.max(aw / tex.width, ah / tex.height)) * (t.scale / 100);
-      gl.uniform4f(this.u.uTxFit, ax + (t.x / 100) * aw, ay + (t.y / 100) * ah, tex.width * k, tex.height * k);
-      gl.uniform1f(this.u.uTxRot, t.rotate * D2R);
-      gl.uniform4f(this.u.uTxOpt, t.blend === 'multiply' ? 1 : 0, t.amount / 100, t.tile ? 1 : 0, m.kind !== 'extrude' ? 0 : t.where === 'faces' ? 1 : t.where === 'sides' ? 2 : 0);
+      const k = (m.kind === 'revolve' ? aw / img.width : Math.max(aw / img.width, ah / img.height)) * (t.scale / 100);
+      gl.uniform4f(this.u[`u${p}Fit`], ax + (t.x / 100) * aw, ay + (t.y / 100) * ah, img.width * k, img.height * k);
+      gl.uniform1f(this.u[`u${p}Rot`], t.rotate * D2R);
+      gl.uniform4f(this.u[`u${p}Opt`], t.blend === 'multiply' ? 1 : 0, t.amount / 100, t.tile ? 1 : 0, t.wrap === 'front' ? 1 : 0);
       // Bump height: up to 30 layer pixels between black and white (textures rarely use the whole range).
-      gl.uniform1f(this.u.uBump, (t.bump / 100) * 30);
-    }
+      gl.uniform1f(this.u[`u${p}Bump`], (t.bump / 100) * 30);
+    };
+    set(faces, 'F', 2, 'tx');
+    // (The same image on the sides is the one already loaded for the faces.)
+    if (sides && faces && sides.key === faces.key) {
+      set(sides, 'S', 2, 'tx');
+    } else set(sides, 'S', 5, 'tx2');
     gl.uniform2f(this.u.uProf, mesh.profile?.[0] ?? 0, mesh.profile?.[1] ?? 0);
     gl.uniform1i(this.u.uPass, 0);
     gl.drawElements(gl.TRIANGLES, mesh.count, gl.UNSIGNED_INT, 0);
@@ -2068,11 +2125,12 @@ const wallCache = new Map<string, NonNullable<ModelRender['shadow']>>();
  * The rendered 3D layer (copies that stay valid); cached by its settings and the output resolution (a power of two, so
  * zooming reuses it). Its shadow is a separate, smaller image (it's soft, and mostly empty space), to be drawn
  * stretched to its box under the object. `depth`: its depth map instead (nearest white, farthest dark grey), no
- * shadow. `texture` is the image of its texture (m.texture.key), if it has one. Null if WebGL2 isn't available.
+ * shadow. `texture` and `texture2` are the images of its textures (m.texture.key, m.texture2.key), if it has them.
+ * Null if WebGL2 isn't available.
  */
-export function renderModel(src: HTMLCanvasElement, m: Model3D, key: string, scale: number, depth = false, texture?: HTMLCanvasElement | null): ModelRender | null {
+export function renderModel(src: HTMLCanvasElement, m: Model3D, key: string, scale: number, depth = false, texture?: HTMLCanvasElement | null, texture2?: HTMLCanvasElement | null): ModelRender | null {
   const s = 2 ** Math.ceil(Math.log2(Math.max(0.125, Math.min(4, scale))));
-  const ck = `${key}|${src.width}x${src.height}|${JSON.stringify(m)}|${s}|${depth}|${!!texture}`;
+  const ck = `${key}|${src.width}x${src.height}|${JSON.stringify(m)}|${s}|${depth}|${!!texture}|${!!texture2}`;
   const hit = outCache.get(ck);
   // (Moved to the back, so the ones in use are the last to go.)
   if (hit) { outCache.delete(ck); outCache.set(ck, hit); return hit; }
@@ -2093,7 +2151,7 @@ export function renderModel(src: HTMLCanvasElement, m: Model3D, key: string, sca
       wallCache.set(wk, shadow);
     }
   }
-  const r = engine.render(src, m, key, s, depth, texture);
+  const r = engine.render(src, m, key, s, depth, texture, texture2);
   if (!r) return null;
   // Full: the oldest goes (rather than all of them, which made every 3D layer render again at once).
   if (outCache.size > 24) outCache.delete(outCache.keys().next().value!);

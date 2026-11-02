@@ -691,6 +691,7 @@ function cloneLayer(doc: Doc, l: Layer, into: Doc = doc): Layer {
     // (Within one image a LUT or 3D texture can stay shared: nothing paints on them.)
     if (into !== doc && x.type === 'adjust' && x.adj.kind === 'lut' && x.adj.key) x.adj = { ...x.adj, key: copy(x.adj.key) };
     if (into !== doc && x.type === 'raster' && x.model?.texture) x.model = { ...x.model, texture: { ...x.model.texture, key: copy(x.model.texture.key) } };
+    if (into !== doc && x.type === 'raster' && x.model?.texture2) x.model = { ...x.model, texture2: { ...x.model.texture2, key: copy(x.model.texture2.key) } };
     if (x.type === 'group') x.children.forEach(fix);
   };
   fix(c);
@@ -1030,7 +1031,7 @@ export function setModel(patch: Partial<Model3D>, label?: string) {
 export function rasterize3D() {
   const doc = need(); const l = doc?.activeRaster;
   if (!doc || !l?.model) return;
-  const rm = renderModel(doc.canvasOf(l), l.model, l.key, 1, false, l.model.texture ? doc.pool.get(l.model.texture.key) : null);
+  const rm = renderModel(doc.canvasOf(l), l.model, l.key, 1, false, l.model.texture ? doc.pool.get(l.model.texture.key) : null, l.model.texture2 ? doc.pool.get(l.model.texture2.key) : null);
   if (!rm) { toast('3D needs WebGL2, which isn\'t available here.', 'error'); return; }
   // (Its shadow, if it has one, baked in under it.)
   const r = flattenRender(rm);
@@ -1054,17 +1055,21 @@ function textureImage(c: HTMLCanvasElement): HTMLCanvasElement {
   return out;
 }
 
-function applyTexture(doc: Doc, l: RasterLayer, img: HTMLCanvasElement, name: string) {
+/**
+ * Puts an image on a 3D layer as its texture (`slot` 1), or as the second one, for the part of an Extrude the first
+ * doesn't cover (`slot` 2). A new image keeps the fit and look already set up.
+ */
+function applyTexture(doc: Doc, l: RasterLayer, img: HTMLCanvasElement, name: string, slot: 1 | 2 = 1) {
   if (!l.model) return;
-  const old = l.model.texture;
+  const field = slot === 1 ? 'texture' : 'texture2';
+  const old = l.model[field];
   const key = doc.addCanvas(textureImage(img));
-  // A new image keeps the fit and look already set up.
-  l.model = { ...l.model, texture: old ? { ...old, key, name } : defaultTexture(key, name) };
+  l.model = { ...l.model, [field]: old ? { ...old, key, name } : defaultTexture(key, name) };
   doc.commit(old ? 'Change 3D texture' : 'Add 3D texture');
 }
 
-/** Properties › 3D › Texture: an image file laid over the active 3D layer's surface. */
-export async function textureFromFile() {
+/** Properties › 3D › Texture: an image file laid over the active 3D layer's surface (or the other part's, `slot` 2). */
+export async function textureFromFile(slot: 1 | 2 = 1) {
   const doc = need(); const l = doc?.activeRaster;
   if (!doc || !l?.model) return;
   const [p] = await pickFiles('image', false);
@@ -1072,15 +1077,30 @@ export async function textureFromFile() {
   try {
     const img = await decodeImage(p.file);
     if (!app.docs.includes(doc) || !l.model) return;
-    applyTexture(doc, l, img, baseName(p.file.name));
+    applyTexture(doc, l, img, baseName(p.file.name), slot);
   } catch (err) { toast(`Couldn't open ${p.file.name}: ${(err as Error).message}`, 'error'); }
 }
 
 /**
- * Properties › 3D › Texture › From layer: a copy of another layer, as it looks without layer styles, laid over the
- * active 3D layer's surface. The source layer is hidden (a copy is kept, so it can be changed or deleted).
+ * Removes a 3D layer's texture (`slot` 1 or 2). With the first gone, the second (on the other part of an Extrude)
+ * takes its place, still on that part.
  */
-export function textureFromLayer(id: string) {
+export function removeTexture(slot: 1 | 2 = 1) {
+  const doc = need(); const l = doc?.activeRaster;
+  if (!doc || !l?.model) return;
+  const m = l.model;
+  if (slot === 2) l.model = { ...m, texture2: null };
+  else if (m.texture2 && m.texture && m.texture.where !== 'all') l.model = { ...m, texture: { ...m.texture2, where: m.texture.where === 'faces' ? 'sides' : 'faces' }, texture2: null };
+  else l.model = { ...m, texture: null, texture2: null };
+  doc.commit('Remove 3D texture');
+}
+
+/**
+ * Properties › 3D › Texture › From layer: a copy of another layer, as it looks without layer styles, laid over the
+ * active 3D layer's surface (or the other part's, `slot` 2). The source layer is hidden (a copy is kept, so it can
+ * be changed or deleted).
+ */
+export function textureFromLayer(id: string, slot: 1 | 2 = 1) {
   const doc = need(); const l = doc?.activeRaster;
   const at = doc?.locate(id), src = at ? at.list[at.index] : null;
   if (!doc || !l?.model || !isPlaced(src)) return;
@@ -1093,7 +1113,7 @@ export function textureFromLayer(id: string) {
   const pic = newCanvas(r.w, r.h);
   ctx2d(pic).drawImage(c, -r.x, -r.y);
   setLayerProp(src.id, { visible: false });
-  applyTexture(doc, l, pic, src.name);
+  applyTexture(doc, l, pic, src.name, slot);
 }
 
 /** Changes the active 3D layer's texture settings; `label` records it as a step (otherwise a live preview). */

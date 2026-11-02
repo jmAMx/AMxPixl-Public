@@ -27,6 +27,8 @@ Artboards: several canvases, each its own size, in one file.
 - **Photoshop artboards** come in as artboards, with their layers. Any layers outside them go on one more artboard, "Other layers".
 - **Next and previous artboard**: Ctrl+Alt+] and Ctrl+Alt+[.
 - While you drag an artboard, the tab bar shows a spot where it can go to get a tab of its own. The spot lights up when you're over the bar.
+- **3D textures over the edge**: on an Extrude, the texture now carries straight on from the front and back over the edge onto the sides, with no seam where they meet ("Over the edge"). "Around" runs it along the edge as before, and files from earlier versions keep that.
+- **A second 3D texture**: with an Extrude's texture on only the front and back, or only the sides, the other part can have a texture of its own, with its own size, place, turn, amount and bump.
 - **Resize the side panels**: drag the edge between two open panels (Colour, Properties, Layers, Paths, History) to make one taller and the other shorter. The edge lights up when you point at it, and Pixl remembers the heights. Double-click the edge to let them size themselves again.
 - **Rearrange the toolbox**: the ⋯ at its top › Rearrange Tools turns the tools into outlined tiles. Drag them into the order you like: a lifted copy follows the pointer and a bar marks where it'll go. A group moves as one. Done, or Escape, finishes. Reset Tool Order puts them back.
 - Cropping or resizing the canvas of one artboard among others keeps its picture where it was.

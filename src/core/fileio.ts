@@ -3,6 +3,7 @@ import { ctx2d, newCanvas } from './layers';
 import { fileName, isDesktop, openDialog, readPath, saveDialog, writePath, type Filters } from './platform';
 import type { Layer, Meta } from './types';
 import { Project } from './project';
+import { textureKeys } from './model3d';
 import { WorkerPool } from './workers/pool';
 
 const MAGIC = 'PIXL';
@@ -87,7 +88,7 @@ async function pngOf(c: HTMLCanvasElement): Promise<Blob> {
 export function layerKeys(meta: Meta): string[] {
   return [...new Set(flatLayers(meta.layers).flatMap((l) => [
     l.type === 'raster' ? l.key : null, l.mask?.key ?? null, l.type === 'adjust' && l.adj.kind === 'lut' ? l.adj.key : null,
-    l.type === 'raster' ? l.model?.texture?.key ?? null : null,
+    ...(l.type === 'raster' ? textureKeys(l.model) : []),
   ]))].filter((k): k is string => !!k);
 }
 
