@@ -79,9 +79,15 @@ function sources(l: Level): { ok: Uint8Array; list: Int32Array } {
   return { ok, list: Int32Array.from(list) };
 }
 
+/**
+ * How much the hole's own (guessed) pixels count in comparing patches, against 1 for the picture's real ones: little
+ * while the guess is rough (the first rounds), so matches follow what's really there, then fully.
+ */
+let guessWeight = 1;
+
 /** Sum of squared differences between the patches at a and b (both centres), giving up once over `cap`. */
 function dist(l: Level, a: number, b: number, cap: number): number {
-  const { w, h, img } = l;
+  const { w, h, img, hole } = l;
   const ax = a % w, ay = (a / w) | 0, bx = b % w, by = (b / w) | 0;
   let d = 0, n = 0;
   for (let dy = -R; dy <= R; dy++) {
@@ -90,14 +96,15 @@ function dist(l: Level, a: number, b: number, cap: number): number {
     for (let dx = -R; dx <= R; dx++) {
       const x1 = ax + dx, x2 = bx + dx;
       if (x1 < 0 || x1 >= w || x2 < 0 || x2 >= w) continue;
-      const i = (y1 * w + x1) * CH, j = (y2 * w + x2) * CH;
+      const p = y1 * w + x1, i = p * CH, j = (y2 * w + x2) * CH;
+      const k = hole[p] ? guessWeight : 1;
       const e0 = img[i] - img[j], e1 = img[i + 1] - img[j + 1], e2 = img[i + 2] - img[j + 2], e3 = img[i + 3] - img[j + 3];
-      d += e0 * e0 + e1 * e1 + e2 * e2 + e3 * e3;
-      n++;
+      d += (e0 * e0 + e1 * e1 + e2 * e2 + e3 * e3) * k;
+      n += k;
     }
-    if (d > cap * n / 49) break;
+    if (n > 0 && d > (cap * n) / 49) break;
   }
-  return n ? (d * 49) / n : Infinity;
+  return n > 0 ? (d * 49) / n : Infinity;
 }
 
 let seed = 1;
@@ -179,7 +186,7 @@ export function inpaint(job: InpaintJob): Uint8ClampedArray {
   for (let i = 0; i < job.w * job.h; i++) if (job.hole[i]) { const x = i % job.w, y = (i / job.w) | 0; hx0 = Math.min(hx0, x); hx1 = Math.max(hx1, x); hy0 = Math.min(hy0, y); hy1 = Math.max(hy1, y); }
   if (hx1 < hx0) return job.rgba;
   const levels: Level[] = [base];
-  while (Math.max(hx1 - hx0, hy1 - hy0) / 2 ** levels.length > 12 && Math.min(levels.at(-1)!.w, levels.at(-1)!.h) > 4 * (2 * R + 1)) levels.push(downsample(levels.at(-1)!));
+  while (Math.max(hx1 - hx0, hy1 - hy0) / 2 ** levels.length > 6 && Math.min(levels.at(-1)!.w, levels.at(-1)!.h) > 4 * (2 * R + 1)) levels.push(downsample(levels.at(-1)!));
   let prev: { nnf: Int32Array; tg: Int32Array; w: number; h: number } | null = null;
   for (let li = levels.length - 1; li >= 0; li--) {
     const l = levels[li];
@@ -208,10 +215,13 @@ export function inpaint(job: InpaintJob): Uint8ClampedArray {
       }
       vote(l, tg, nnf, cost.fill(0));
     }
-    for (let k = 0; k < tg.length; k++) cost[k] = dist(l, tg[k], nnf[k], Infinity);
-    // More rounds where it's cheap (coarse), fewer at full size.
-    const rounds = li === 0 ? 2 : li === 1 ? 3 : 5;
+    // More rounds where it's cheap (coarse), fewer at full size; the coarsest level (all there is, for a small hole)
+    // starts from a guess, so it gets the most, the first of them going by the real pixels around the hole.
+    const coarsest = !prev;
+    const rounds = coarsest ? 6 : li === 0 ? 2 : 3;
     for (let it = 0; it < rounds; it++) {
+      guessWeight = coarsest && it < 2 ? 0.05 : 1;
+      for (let k = 0; k < tg.length; k++) cost[k] = dist(l, tg[k], nnf[k], Infinity);
       patchMatch(l, tg, nnf, cost, src, 2);
       vote(l, tg, nnf, cost);
       for (let k = 0; k < tg.length; k++) cost[k] = dist(l, tg[k], nnf[k], Infinity);

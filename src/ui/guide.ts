@@ -23,7 +23,7 @@ const TOPICS: [string, string[]][] = [
   ]],
   ['Selections and painting', [
     'Select with the **marquee**, **lasso** or **magic wand**, by **Colour Range**, or Ctrl+click a layer\'s thumbnail to select its shape. Shift adds, Alt subtracts. **Quick Mask** (Q) lets you paint a selection.',
-    'To remove something, select it loosely and use **Edit › Content-Aware Fill** (Shift+F5): Pixl fills the selection from what\'s around it, carrying on textures and lines (bricks, grass, sky).',
+    'To remove something, select it loosely and use **Edit › Content-Aware Fill** (Shift+F5): Pixl fills the selection from what\'s around it, carrying on textures and lines (bricks, grass, sky). For specks, spots and scratches, the **Spot Removal** brush (J, with the Healing Brush) does the same for whatever you paint over.',
     'The **Brush**, **Eraser**, **Clone Stamp** and **Healing Brush** paint on the selected layer; [ and ] change the size, and a pen tablet\'s pressure works (Edit › Pen Tablet). Alt+click picks a colour.',
     '**Liquify** (with Blur, Sharpen and Smudge) pushes the picture around with a brush, or pinches, bloats, twirls, smooths or restores it. Like every warp it\'s lossless: the layer\'s pixels only change when you apply it (Properties › Apply, or Layer › Transform › Apply Warp).',
   ]],

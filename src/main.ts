@@ -9,6 +9,7 @@ import { brushTool, eraserTool, fillTool, gradientTool, pickerTool } from './too
 import { penTool } from './tools/pen';
 import { blurTool, burnTool, dodgeTool, sharpenTool, smudgeTool } from './tools/retouch';
 import { liquifyTool } from './tools/liquify';
+import { spotTool } from './tools/spot';
 import { ellipseSelectTool, lassoTool, rectSelectTool, wandTool } from './tools/select';
 import { handTool, shapeTool, zoomTool } from './tools/shape';
 import { textTool } from './tools/text';
@@ -24,7 +25,7 @@ import { flatten } from './core/render';
 import { mountShell } from './ui/shell';
 import { ask, toast } from './ui/widgets';
 
-app.tools = [moveTool, artboardTool, rectSelectTool, ellipseSelectTool, lassoTool, wandTool, cropTool, pickerTool, brushTool, eraserTool, cloneTool, healTool, dodgeTool, burnTool, blurTool, sharpenTool, smudgeTool, liquifyTool, gradientTool, fillTool, penTool, textTool, shapeTool, handTool, zoomTool];
+app.tools = [moveTool, artboardTool, rectSelectTool, ellipseSelectTool, lassoTool, wandTool, cropTool, pickerTool, brushTool, eraserTool, cloneTool, healTool, spotTool, dodgeTool, burnTool, blurTool, sharpenTool, smudgeTool, liquifyTool, gradientTool, fillTool, penTool, textTool, shapeTool, handTool, zoomTool];
 app.tool = brushTool;
 app.applyPrefs();
 document.title = `AMxPixl ${__APP_VERSION__}`;

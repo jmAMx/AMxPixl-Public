@@ -83,6 +83,7 @@ export const DEFAULT_OPTS = {
   blur: { size: 40, hardness: 0.5, strength: 0.7, range: 1, pressure: false, pressureTo: 'size' as PressureTo },
   sharpen: { size: 40, hardness: 0.5, strength: 0.4, range: 1, pressure: false, pressureTo: 'size' as PressureTo },
   smudge: { size: 30, hardness: 0.5, strength: 0.6, range: 1, pressure: false, pressureTo: 'size' as PressureTo },
+  spot: { size: 40 },
   liquify: { mode: 'push' as 'push' | 'pinch' | 'bloat' | 'twirl' | 'restore' | 'smooth', size: 120, strength: 0.5, pin: true },
   clone: { size: 40, hardness: 0.6, opacity: 1, flow: 1, pressure: false, pressureTo: 'size' as PressureTo, aligned: true, sampleAll: false },
   heal: { size: 40, hardness: 0.5, opacity: 1, flow: 1, pressure: false, pressureTo: 'size' as PressureTo, aligned: true, sampleAll: false },

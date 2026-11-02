@@ -37,6 +37,7 @@ Artboards (several canvases, each its own size, in one file), filters that stay 
 - **Content-Aware Fill** (Edit menu, Shift+F5): select something to remove, loosely, and Pixl fills it from what's around it, carrying on textures and lines like brickwork, grass or sky.
   - It runs in the background, taking about half a second for a typical object, and blends through soft selection edges.
   - It works on a layer or a mask, and is one undo step.
+- **Spot Removal brush** (J, with the Healing Brush): paint over a speck, spot, scratch or small object, and when you let go it's filled from around it. There's no source to pick.
 - **Liquify tool** (R, with Blur, Sharpen and Smudge): push the picture around with a brush, or pinch, bloat, twirl, smooth or restore it.
   - Hold still to keep pinching, bloating or twirling; Alt reverses them. Each stroke is one undo step.
   - It's lossless like every warp: the layer keeps its pixels until you apply it. Restore all takes it back, and Pin edges keeps the layer's edges in place.
