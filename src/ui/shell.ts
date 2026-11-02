@@ -5,7 +5,7 @@ import { clearRecent, recentList } from '../core/recent';
 import { glfx } from '../core/glfx';
 import { TAB_DRAG, view } from './canvasview';
 import { colorPanel } from './colorpanel';
-import { aboutDialog, animExportDialog, canvasSizeDialog, colorRangeDialog, exportDialog, filterDialog, imageSizeDialog, lastFilterLabel, repeatFilter, modifySelectionDialog, newArtboardDialog, newDocDialog, newGuideDialog, renameArtboardDialog, shortcutsDialog, updateDialog } from './dialogs';
+import { aboutDialog, animExportDialog, canvasSizeDialog, colorRangeDialog, contentAwareFill, exportDialog, filterDialog, imageSizeDialog, lastFilterLabel, repeatFilter, modifySelectionDialog, newArtboardDialog, newDocDialog, newGuideDialog, renameArtboardDialog, shortcutsDialog, updateDialog } from './dialogs';
 import { h, isTyping } from './dom';
 import { historyPanel } from './historypanel';
 import { adjustmentMenuItems, artboardMenuItems, effectMenuItems, layersPanel, looksMenuItems, maskMenuItems } from './layerspanel';
@@ -83,6 +83,7 @@ const MENUS: MenuDef[] = [
       'sep',
       { label: 'Fill with Foreground', accel: 'Alt+Backspace', run: () => A.fillWith('fg'), enabled: hasLayer },
       { label: 'Fill with Background', accel: 'Ctrl+Backspace', run: () => A.fillWith('bg'), enabled: hasLayer },
+      { label: 'Content-Aware Fill', accel: 'Shift+F5', run: () => { void contentAwareFill(); }, enabled: hasSel },
       { label: 'Fill Path', run: A.fillPath, enabled: () => !!app.doc?.path },
       { label: 'Stroke Path…', run: strokePathDialog, enabled: () => !!app.doc?.path },
       'sep',

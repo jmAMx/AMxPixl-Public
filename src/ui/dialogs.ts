@@ -18,6 +18,8 @@ import { isFilter, type FxParams, type PixelTarget } from '../core/types';
 import { apply, invert, xformMatrix } from '../core/math';
 import { fxParamControl } from './fxcontrols';
 import { setSetting } from '../core/settings';
+import { WorkerPool } from '../core/workers/pool';
+import type { InpaintJob } from '../core/inpaint';
 import { h } from './dom';
 import { paintableTarget } from '../tools/paint';
 import { checkbox, dialog, icon, numField, seg, slider, toast } from './widgets';
@@ -284,6 +286,55 @@ export function repeatFilter(ask = false) {
   x.save(); x.globalCompositeOperation = 'copy'; x.drawImage(maskedMerge(before, r, doc.maskForLayer(pt.target)), 0, 0); x.restore();
   doc.markPixels(pt.target.key);
   doc.commit(def.label, [{ key: pt.target.key, rect: { x: 0, y: 0, w: src.width, h: src.height }, before, after: null }]);
+}
+
+/** Content-aware fill runs in a worker (core/inpaint.ts): one at a time, started the first time it's used. */
+let inpaintPool: WorkerPool<InpaintJob, { rgba: Uint8ClampedArray }> | null = null;
+
+/**
+ * Edit › Content-Aware Fill: fills the selection on the selected layer (or mask) with what's around it, carrying on
+ * its texture and lines. Works on the area around the selection (about the selection's size again on each side),
+ * blends through soft selection edges, and is one undo step.
+ */
+export async function contentAwareFill() {
+  const doc = app.doc; if (!doc) return;
+  if (!doc.selection) { toast('Select what to fill first (the lasso works well), then use Content-Aware Fill.'); return; }
+  const pt = paintableTarget(doc); if (!pt) return;
+  const src = doc.canvasOf(pt.target), sel = doc.maskForLayer(pt.target);
+  if (!sel) return;
+  const W = src.width, H = src.height;
+  const m = ctx2d(sel, true).getImageData(0, 0, W, H).data;
+  let x0 = W, y0 = H, x1 = -1, y1 = -1;
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (m[(y * W + x) * 4 + 3] > 8) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+  if (x1 < 0) { toast('The selection doesn\'t cover any of this layer.'); return; }
+  // The area to fill from: the selection with its own size again around it (at least 48 px), inside the layer.
+  const pad = Math.max(48, Math.max(x1 - x0, y1 - y0));
+  const r = { x: Math.max(0, x0 - pad), y: Math.max(0, y0 - pad), w: 0, h: 0 };
+  r.w = Math.min(W, x1 + pad + 1) - r.x; r.h = Math.min(H, y1 + pad + 1) - r.y;
+  if (r.w === x1 - x0 + 1 && r.h === y1 - y0 + 1) { toast('Content-Aware Fill needs some of the picture around the selection to fill it from.'); return; }
+  const img = ctx2d(src, true).getImageData(r.x, r.y, r.w, r.h);
+  const hole = new Uint8Array(r.w * r.h);
+  for (let y = 0; y < r.h; y++) for (let x = 0; x < r.w; x++) hole[y * r.w + x] = m[((r.y + y) * W + r.x + x) * 4 + 3] > 8 ? 1 : 0;
+  inpaintPool ??= new WorkerPool(() => new Worker(new URL('../core/workers/inpaintworker.ts', import.meta.url), { type: 'module' }), 1);
+  app.busy = true;
+  toast('Filling the selection…');
+  try {
+    const { rgba } = await inpaintPool.run({ w: r.w, h: r.h, rgba: img.data, hole }, [img.data.buffer, hole.buffer]);
+    // Through the selection's soft edges, the fill fades into what was there.
+    const before = cropCanvas(src, r);
+    const now = ctx2d(src, true).getImageData(r.x, r.y, r.w, r.h), d = now.data;
+    for (let y = 0; y < r.h; y++) for (let x = 0; x < r.w; x++) {
+      const a = m[((r.y + y) * W + r.x + x) * 4 + 3] / 255;
+      if (a <= 0) continue;
+      const i = (y * r.w + x) * 4;
+      for (let c = 0; c < 4; c++) d[i + c] = d[i + c] + (rgba[i + c] - d[i + c]) * a;
+    }
+    ctx2d(src).putImageData(now, r.x, r.y);
+    doc.markPixels(pt.target.key);
+    doc.commit('Content-Aware Fill', [{ key: pt.target.key, rect: r, before, after: null }]);
+  } catch (e) {
+    toast(`Content-Aware Fill failed: ${(e as Error).message}`, 'error');
+  } finally { app.busy = false; }
 }
 
 /** A layer's (or mask's) own pixels per canvas pixel: filters measure in canvas pixels, so a scaled layer gets the same look. */
