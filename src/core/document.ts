@@ -11,7 +11,18 @@ import { isPlaced } from './types';
  * `after` is captured lazily the first time the step is undone, which halves undo memory.
  */
 export interface PixelDiff { key: string; rect: Rect; before: HTMLCanvasElement; after: HTMLCanvasElement | null }
-interface Entry { label: string; before: Meta; after: Meta; pixels: PixelDiff[]; bytes: number; merge?: { key: string; time: number } }
+/** One undo step, made on the artboard `doc`. */
+interface Entry { doc: Doc; label: string; before: Meta; after: Meta; pixels: PixelDiff[]; bytes: number; merge?: { key: string; time: number } }
+
+/**
+ * Undo history, shared by the artboards of one file (see project.ts): steps undo in the order they were made, whichever
+ * artboard each was on. `index` steps are applied (the rest can be redone); `savedIndex` is where it was last saved.
+ */
+export class History {
+  entries: Entry[] = [];
+  index = 0;
+  savedIndex = 0;
+}
 
 /** Steps with the same merge key this close together become one (holding an arrow key to nudge, say). */
 const MERGE_MS = 1000;
@@ -73,14 +84,17 @@ export class Doc {
   maskEdit = false;
 
   readonly pool: Pool = new Map();
-  entries: Entry[] = [];
+  /** Undo history: this image's own, or the one its file's artboards share. */
+  hist = new History();
+  get entries() { return this.hist.entries; }
+  set entries(v: Entry[]) { this.hist.entries = v; }
   /** Number of entries currently applied (entries past it are redo-able). */
-  index = 0;
+  get index() { return this.hist.index; }
+  set index(v: number) { this.hist.index = v; }
+  get savedIndex() { return this.hist.savedIndex; }
+  set savedIndex(v: number) { this.hist.savedIndex = v; }
   private last: Meta;
-  savedIndex = 0;
-  /** Where this document was opened from / last saved to as .pixl (for Save and Recent Files). */
-  file: { name: string; path?: string | null; handle?: FileSystemFileHandle | null } | null = null;
-  /** Stable id for crash-recovery storage (a recovered document keeps the id of its copy). */
+  /** Stable id: names this image's pixels in crash-recovery storage, and its entries in render caches. */
   uid =`D${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
   /** Pixel buffers changed since the last autosave, and those already autosaved. */
   readonly dirtyKeys = new Set<string>();
@@ -204,7 +218,7 @@ export class Doc {
     const now = Date.now();
     const top = this.entries[this.index - 1];
     if (mergeKey && !pixels.length && this.index > 1 && this.index === this.entries.length && this.savedIndex !== this.index
-      && top.merge?.key === mergeKey && now - top.merge.time < MERGE_MS) {
+      && top.doc === this && top.merge?.key === mergeKey && now - top.merge.time < MERGE_MS) {
       top.after = after;
       top.merge.time = now;
       this.last = after;
@@ -214,53 +228,73 @@ export class Doc {
     for (const p of pixels) this.markPixels(p.key, false, p.rect);
     const bytes = pixels.reduce((n, p) => n + p.rect.w * p.rect.h * 8, 0) + 4096;
     if (this.savedIndex > this.index) this.savedIndex = -1;
+    // Steps that could be redone go, on whichever artboard they were (and what only they kept is freed there).
+    const others = new Set(this.entries.slice(this.index).map((e) => e.doc).filter((d) => d !== this));
     this.entries.length = this.index;
-    this.entries.push({ label, before: this.last, after, pixels, bytes, merge: mergeKey ? { key: mergeKey, time: now } : undefined });
+    this.entries.push({ doc: this, label, before: this.last, after, pixels, bytes, merge: mergeKey ? { key: mergeKey, time: now } : undefined });
     this.index = this.entries.length;
     this.last = after;
     this.trim();
+    for (const d of others) d.gc();
     this.touch('history');
   }
 
-  /** Starts history fresh (after New/Open). */
+  /** Starts history fresh (after New/Open), as this image's own. */
   resetHistory(label: string) {
-    this.entries = [];
+    this.hist = new History();
     this.last = this.snapshot();
-    this.entries.push({ label, before: this.last, after: this.last, pixels: [], bytes: 0 });
+    this.entries.push({ doc: this, label, before: this.last, after: this.last, pixels: [], bytes: 0 });
     this.index = this.savedIndex = 1;
+    this.gc();
+  }
+
+  /** Joins a file's shared history (see project.ts), from the image as it is now; its own steps are dropped. */
+  joinHistory(h: History) {
+    this.hist = h;
+    this.last = this.snapshot();
     this.gc();
   }
 
   get canUndo() { return this.index > 1; }
   get canRedo() { return this.index < this.entries.length; }
 
-  undo() {
-    if (!this.canUndo) return;
+  /** Undoes the last step, which may be on another artboard of the same file; returns the artboard it was on. */
+  undo(): Doc | null {
+    if (!this.canUndo) return null;
     const e = this.entries[--this.index];
-    for (const p of [...e.pixels].reverse()) {
-      const c = this.pool.get(p.key);
-      if (!p.after && c) p.after = cropCanvas(c, p.rect);
-      this.putPixels(p.key, p.rect, p.before);
-    }
-    this.restore(e.before);
-    this.last = e.before;
-    this.maskCache = null;
-    this.touch('history');
+    e.doc.apply(e, 'undo');
+    return e.doc;
   }
 
-  redo() {
-    if (!this.canRedo) return;
+  /** Redoes the next step (maybe on another artboard); returns the artboard it was on. */
+  redo(): Doc | null {
+    if (!this.canRedo) return null;
     const e = this.entries[this.index++];
-    for (const p of e.pixels) if (p.after) this.putPixels(p.key, p.rect, p.after);
-    this.restore(e.after);
-    this.last = e.after;
+    e.doc.apply(e, 'redo');
+    return e.doc;
+  }
+
+  private apply(e: Entry, dir: 'undo' | 'redo') {
+    if (dir === 'undo') {
+      for (const p of [...e.pixels].reverse()) {
+        const c = this.pool.get(p.key);
+        if (!p.after && c) p.after = cropCanvas(c, p.rect);
+        this.putPixels(p.key, p.rect, p.before);
+      }
+    } else for (const p of e.pixels) if (p.after) this.putPixels(p.key, p.rect, p.after);
+    const m = dir === 'undo' ? e.before : e.after;
+    this.restore(m);
+    this.last = m;
     this.maskCache = null;
     this.touch('history');
   }
 
-  goTo(index: number) {
-    while (this.index > index && this.canUndo) this.undo();
-    while (this.index < index && this.canRedo) this.redo();
+  /** Undoes or redoes to `index` steps; returns the artboard of the last step undone or redone. */
+  goTo(index: number): Doc | null {
+    let at: Doc | null = null;
+    while (this.index > index && this.canUndo) at = this.undo();
+    while (this.index < index && this.canRedo) at = this.redo();
+    return at;
   }
 
   /** Drops whatever was changed since the last commit (used when a dialog is cancelled). */
@@ -288,19 +322,17 @@ export class Doc {
 
   private trim() {
     let total = this.entries.reduce((n, e) => n + e.bytes, 0);
-    let dropped = false;
+    const touched = new Set<Doc>([this]);
     while (this.entries.length > 2 && (this.entries.length > MAX_ENTRIES || total > MAX_BYTES)) {
       const e = this.entries.splice(1, 1)[0];
       total -= e.bytes;
       this.index--;
       this.savedIndex--;
-      dropped = true;
+      touched.add(e.doc);
+      // The oldest kept step now starts from where the dropped one began (when both are on the same artboard).
+      if (this.entries[0].doc === e.doc) this.entries[0] = { ...this.entries[0], after: e.after };
     }
-    if (dropped) {
-      // The oldest kept step now starts from where the dropped one began.
-      this.entries[0] = { ...this.entries[0], after: this.entries[1].before };
-    }
-    this.gc();
+    for (const d of touched) d.gc();
   }
 
   /** Frees pixel buffers no longer reachable from the document or any history step. */
@@ -317,7 +349,7 @@ export class Doc {
       if (m.quickMask) live.add(m.quickMask);
     };
     scan(this);
-    for (const e of this.entries) { scan(e.before); scan(e.after); e.pixels.forEach((p) => live.add(p.key)); }
+    for (const e of this.entries) if (e.doc === this) { scan(e.before); scan(e.after); e.pixels.forEach((p) => live.add(p.key)); }
     for (const k of [...this.pool.keys()]) if (!live.has(k)) this.pool.delete(k);
   }
 

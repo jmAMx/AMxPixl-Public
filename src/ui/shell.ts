@@ -378,20 +378,22 @@ function menubar() {
 function tabs() {
   const el = h('div', { class: 'tabs', role: 'tablist' });
   const build = () => {
-    el.replaceChildren(...app.docs.map((d) => {
-      const t = h('div', { class: 'tab' + (d === app.doc ? ' on' : ''), role: 'tab', title: `${d.name} · ${d.width} × ${d.height}` },
-        h('span', { class: 'tab-name' }, d.name), d.dirty ? h('span', { class: 'dirty', title: 'Unsaved changes' }, '●') : null,
+    el.replaceChildren(...app.projects.map((p) => {
+      const d = p.active;
+      const size = p.boards.length > 1 ? `${p.boards.length} artboards` : `${d.width} × ${d.height}`;
+      const t = h('div', { class: 'tab' + (p === app.project ? ' on' : ''), role: 'tab', title: `${p.name} · ${size}` },
+        h('span', { class: 'tab-name' }, p.name), p.dirty ? h('span', { class: 'dirty', title: 'Unsaved changes' }, '●') : null,
         h('button', { class: 'tab-x', type: 'button', title: 'Close (Ctrl+W)', onclick: (e: MouseEvent) => { e.stopPropagation(); A.closeDoc(d); } }, icon('close')));
       // (Not when pressing its close button: switching rebuilds the tabs, and the click would then miss the button.)
       t.addEventListener('pointerdown', (e) => {
-        if (e.button === 1) { e.preventDefault(); A.closeDoc(d); } else if (d !== app.doc && !(e.target as Element).closest('.tab-x')) app.setDoc(d);
+        if (e.button === 1) { e.preventDefault(); A.closeDoc(d); } else if (p !== app.project && !(e.target as Element).closest('.tab-x')) app.setDoc(d);
       });
       return t;
     }), h('button', { class: 'tab-new', type: 'button', title: 'New image (Ctrl+N)', onclick: newDocDialog }, icon('plus')));
   };
   let lastDirty = '';
   app.on('docs', build);
-  app.on('change', () => { const s = app.docs.map((d) => d.dirty).join(); if (s !== lastDirty) { lastDirty = s; build(); } });
+  app.on('change', () => { const s = app.projects.map((p) => p.dirty).join(); if (s !== lastDirty) { lastDirty = s; build(); } });
   build();
   return el;
 }
@@ -412,7 +414,7 @@ function welcome() {
       h('img', { class: 'mono for-dark', src: 'brand/monogram-dark.png', alt: '' }),
       h('img', { class: 'mono for-light', src: 'brand/monogram-light.png', alt: '' }),
       h('span', null, 'An AMx app')));
-  const sync = () => { el.hidden = app.docs.length > 0; };
+  const sync = () => { el.hidden = app.projects.length > 0; };
   app.on('docs', sync);
   app.on('recent', drawRecentGrid);
   sync();

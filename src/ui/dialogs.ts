@@ -382,7 +382,7 @@ export function animExportDialog() {
           try {
             const blob = await exportAnimation(doc, { format, scale, nearest: resample === 'nearest', background, repeat, onProgress: (d, t) => { progress.value = d / t; } });
             const ext = ANIM_EXT[format];
-            const ref = await saveBlob(blob, `${doc.name.replace(/\.[^.]+$/, '')}.${ext}`, null, { [ANIM_MIME[format]]: [`.${ext}`] });
+            const ref = await saveBlob(blob, `${app.nameOf(doc).replace(/\.[^.]+$/, '')}.${ext}`, null, { [ANIM_MIME[format]]: [`.${ext}`] });
             if (ref !== undefined) toast(`Exported ${format.toUpperCase()} (${(blob.size / 1024 / 1024).toFixed(2)} MB)`);
           } catch (err) {
             toast(`Export failed: ${(err as Error).message}`, 'error');

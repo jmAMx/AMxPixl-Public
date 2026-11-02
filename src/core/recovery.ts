@@ -1,5 +1,6 @@
-import { Doc, flatLayers } from './document';
-import { canvasBlob, decodeImage, fewAtOnce } from './fileio';
+import { flatLayers } from './document';
+import { canvasBlob, decodeImage, docFromMeta, fewAtOnce } from './fileio';
+import { Project } from './project';
 import { idbDel, idbGet, idbKeys, idbPut } from './idb';
 import { isDesktop } from './platform';
 import type { Meta } from './types';
@@ -12,7 +13,17 @@ import type { Meta } from './types';
  * so a crash, a power cut or an ended task can't damage them. The web view's own storage (IndexedDB), which an
  * abrupt end can, is only used in a browser, and on the desktop only to recover copies made before 0.8.3.
  */
-interface Record { uid: string; name: string; savedAt: number; meta: Meta; keys: string[]; file: Doc['file'] }
+interface Record {
+  uid: string; name: string; savedAt: number; file: Project['file'];
+  /** The file's artboards. (Copies from before 0.9 are one image: `meta` and `keys`, buffers stored by key alone.) */
+  boards?: BoardRecord[];
+  meta?: Meta; keys?: string[];
+}
+/** One artboard: its image's id, place, layers and settings, and pixel buffers (stored as `blobName`). */
+interface BoardRecord { uid: string; name: string; x: number; y: number; meta: Meta; keys: string[] }
+
+/** A pixel buffer's name in its file's copy: artboards' buffers kept apart, as their keys needn't be unique across them. */
+const blobName = (doc: string, k: string) => `${doc}~${k}`;
 
 /** Where copies are kept: one image's record (its layers and settings) and pixel buffers (PNG), by key. */
 interface Store {
@@ -92,33 +103,40 @@ function keysOf(m: Meta): string[] {
   return [...keys];
 }
 
-export async function autosave(doc: Doc) {
-  const meta = doc.snapshot();
-  const keys = keysOf(meta);
-  for (const k of keys) {
-    if (doc.storedKeys.has(k) && !doc.dirtyKeys.has(k)) continue;
-    const c = doc.pool.get(k);
-    if (!c) continue;
-    doc.dirtyKeys.delete(k);
-    // If writing fails, the buffer is tried again next time rather than left as its older copy.
-    try { await store.putBlob(doc.uid, k, await canvasBlob(c)); } catch (e) { doc.dirtyKeys.add(k); throw e; }
-    doc.storedKeys.add(k);
-    // Yield between layers so the editor stays responsive.
-    await new Promise((r) => setTimeout(r, 0));
+export async function autosave(p: Project) {
+  const boards: BoardRecord[] = [];
+  for (const { doc, x, y } of p.boards) {
+    const meta = doc.snapshot();
+    const keys = keysOf(meta);
+    for (const k of keys) {
+      if (doc.storedKeys.has(k) && !doc.dirtyKeys.has(k)) continue;
+      const c = doc.pool.get(k);
+      if (!c) continue;
+      doc.dirtyKeys.delete(k);
+      // If writing fails, the buffer is tried again next time rather than left as its older copy.
+      try { await store.putBlob(p.uid, blobName(doc.uid, k), await canvasBlob(c)); } catch (e) { doc.dirtyKeys.add(k); throw e; }
+      doc.storedKeys.add(k);
+      // Yield between layers so the editor stays responsive.
+      await new Promise((r) => setTimeout(r, 0));
+    }
+    boards.push({ uid: doc.uid, name: doc.name, x, y, meta, keys });
   }
   // The record goes last: until it's written, the previous one (and the buffers it names) still stands.
-  const file = doc.file ? { name: doc.file.name, path: doc.file.path ?? null, handle: doc.file.handle ?? null } : null;
-  await store.putRecord({ uid: doc.uid, name: doc.name, savedAt: Date.now(), meta, keys, file });
-  // Drop buffers this document no longer uses.
-  await store.prune(doc.uid, keys);
-  for (const k of [...doc.storedKeys]) if (!keys.includes(k)) doc.storedKeys.delete(k);
+  const file = p.file ? { name: p.file.name, path: p.file.path ?? null, handle: p.file.handle ?? null } : null;
+  await store.putRecord({ uid: p.uid, name: p.name, savedAt: Date.now(), boards, file });
+  // Drop buffers this file no longer uses.
+  await store.prune(p.uid, boards.flatMap((b) => b.keys.map((k) => blobName(b.uid, k))));
+  for (const b of boards) {
+    const doc = p.boards.find((x) => x.doc.uid === b.uid)!.doc;
+    for (const k of [...doc.storedKeys]) if (!b.keys.includes(k)) doc.storedKeys.delete(k);
+  }
 }
 
-export async function clearRecovery(doc: Doc | string) {
-  const uid = typeof doc === 'string' ? doc : doc.uid;
+export async function clearRecovery(p: Project | string) {
+  const uid = typeof p === 'string' ? p : p.uid;
   await store.clear(uid);
   if (isDesktop) await browserStore.clear(uid).catch(() => {});
-  if (typeof doc !== 'string') doc.storedKeys.clear();
+  if (typeof p !== 'string') for (const d of p.docs) d.storedKeys.clear();
 }
 
 /** Where an image's copy is: the files, or (desktop, from before 0.8.3) the web view's storage. */
@@ -141,35 +159,36 @@ export async function listRecovery(): Promise<{ uid: string; name: string; saved
 }
 
 /**
- * Rebuilds a recovered document (marked unsaved). Its copy is kept, under the same id, until the document is saved
- * or closed, so crashing again before the next autosave doesn't lose it.
+ * Rebuilds a recovered file (marked unsaved). Its copy is kept, under the same id, until the file is saved or closed,
+ * so crashing again before the next autosave doesn't lose it.
  */
-export async function restoreRecovery(uid: string): Promise<Doc | null> {
+export async function restoreRecovery(uid: string): Promise<Project | null> {
   const s = await storeOf(uid);
   const r = s && (await s.getRecord(uid));
   if (!s || !r) return null;
-  const doc = new Doc(r.name, r.meta.width, r.meta.height);
-  doc.uid = uid;
-  const canvases = await fewAtOnce(r.keys, async (k) => {
-    const b = await s.getBlob(uid, k);
-    if (!b) throw new Error('part of the image data is missing.');
-    return decodeImage(b);
-  });
-  r.keys.forEach((k, i) => doc.pool.set(k, canvases[i]));
-  doc.layers = r.meta.layers;
-  doc.activeId = r.meta.activeId;
-  doc.counter = r.meta.counter;
-  doc.guides = r.meta.guides ?? [];
-  doc.resample = r.meta.resample ?? 'smooth';
-  doc.anim = r.meta.anim ?? null;
-  doc.paths = r.meta.paths ?? [];
-  doc.activePath = r.meta.activePath ?? null;
-  doc.setSelection(r.meta.selection ?? null);
-  doc.quickMask = r.meta.quickMask ?? null;
-  doc.file = r.file;
-  doc.resetHistory('Recovered');
-  doc.savedIndex = -1;
-  // Buffers already in the files needn't be written again (a copy from before 0.8.3 is moved to the files).
-  if (s === store) for (const k of r.keys) doc.storedKeys.add(k);
-  return doc;
+  const old = !r.boards;
+  const boards = r.boards ?? [{ uid: '', name: r.name, x: 0, y: 0, meta: r.meta!, keys: r.keys! }];
+  const docs = await Promise.all(boards.map(async (b) => {
+    const m = b.meta;
+    const doc = docFromMeta(b.name, m);
+    if (!old) doc.uid = b.uid;
+    const canvases = await fewAtOnce(b.keys, async (k) => {
+      const blob = await s.getBlob(uid, old ? k : blobName(b.uid, k));
+      if (!blob) throw new Error('part of the image data is missing.');
+      return decodeImage(blob);
+    });
+    b.keys.forEach((k, i) => doc.pool.set(k, canvases[i]));
+    doc.setSelection(m.selection ?? null);
+    doc.quickMask = m.quickMask ?? null;
+    // Buffers already in the files needn't be written again. (A copy from before 0.8.3 is moved to the files, and
+    // one from before 0.9 is written again under the artboard's name for each buffer.)
+    if (s === store && !old) for (const k of b.keys) doc.storedKeys.add(k);
+    return doc;
+  }));
+  docs[0].resetHistory('Recovered');
+  const p = new Project(r.name, boards.map((b, i) => ({ doc: docs[i], x: b.x, y: b.y })));
+  p.uid = uid;
+  p.file = r.file;
+  p.history.savedIndex = -1;
+  return p;
 }

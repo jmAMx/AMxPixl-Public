@@ -7,6 +7,7 @@ import { importPsd } from './core/import/psd';
 import { importXcf } from './core/import/xcfimport';
 import { addRecent, openRecent, removeRecent, type RecentEntry } from './core/recent';
 import { clearRecovery } from './core/recovery';
+import type { Project } from './core/project';
 import { cloneCanvas, ctx2d, drawPlaced, follow, layerMatrix, localBounds, newCanvas } from './core/layers';
 import { savedLooks, storeLooks, type Look, type LookItem } from './core/looks';
 import { parseCube } from './core/lut';
@@ -55,15 +56,15 @@ export function thumbOf(doc: Doc): string | undefined {
   } catch { return undefined; }
 }
 
-/** The open document saved at the same place as `ref` (same path, or the same browser file), if there is one. */
-async function openAlready(ref: Picked['ref']): Promise<Doc | null> {
+/** The open file saved at the same place as `ref` (same path, or the same browser file), if there is one. */
+async function openAlready(ref: Picked['ref']): Promise<Project | null> {
   const norm = (p: string) => p.replace(/\//g, '\\').toLowerCase();
-  for (const d of app.docs) {
-    const f = d.file;
+  for (const p of app.projects) {
+    const f = p.file;
     if (!f) continue;
-    if (ref.path && f.path && norm(ref.path) === norm(f.path)) return d;
+    if (ref.path && f.path && norm(ref.path) === norm(f.path)) return p;
     if (ref.handle && f.handle) {
-      try { if (await f.handle.isSameEntry(ref.handle)) return d; } catch { /* a handle that's gone */ }
+      try { if (await f.handle.isSameEntry(ref.handle)) return p; } catch { /* a handle that's gone */ }
     }
   }
   return null;
@@ -73,23 +74,24 @@ export async function openFiles(files: Picked[]) {
   for (const { file, ref } of files) {
     try {
       const ext = extOf(file.name);
-      let doc: Doc;
+      let p: Project;
       if (ext === 'pixl') {
         const open = await openAlready(ref);
-        if (open) { app.setDoc(open); toast(`${open.name} is already open.`); continue; }
-        doc = await decodePixl(file, baseName(file.name));
-        doc.name = file.name;
-        doc.file = ref.path || ref.handle ? ref : null;
+        if (open) { app.setDoc(open.active); toast(`${open.name} is already open.`); continue; }
+        p = await decodePixl(file, baseName(file.name));
+        p.name = file.name;
+        p.file = ref.path || ref.handle ? ref : null;
+        app.addProject(p);
       } else if (ext === 'psd' || ext === 'psb') {
-        doc = await importPsd(await file.arrayBuffer(), file.name);
+        p = app.addDoc(await importPsd(await file.arrayBuffer(), file.name));
       } else if (ext === 'xcf') {
-        doc = await importXcf(await file.arrayBuffer(), file.name);
+        p = app.addDoc(await importXcf(await file.arrayBuffer(), file.name));
       } else {
-        doc = docFromCanvas(file.name, await decodeImage(file));
+        p = app.addDoc(docFromCanvas(file.name, await decodeImage(file)));
       }
-      app.addDoc(doc);
-      if (doc.importNotes.length) toast(`Imported ${file.name}. ${doc.importNotes.join(' ')}`);
-      addRecent(ref, thumbOf(doc));
+      const notes = p.docs.flatMap((d) => d.importNotes);
+      if (notes.length) toast(`Imported ${file.name}. ${notes.join(' ')}`);
+      addRecent(ref, thumbOf(p.active));
     } catch (e) {
       console.error(e);
       toast(`Couldn't open ${file.name}: ${(e as Error).message || 'unsupported file'}`, 'error');
@@ -132,27 +134,30 @@ export function placeCanvas(c: HTMLCanvasElement, name: string, at: Pt | null, f
   if (s < 1) toast(`Placed at ${Math.round(s * 100)}% to fit. The full-size original is kept, so scaling it up later loses nothing.`);
 }
 
+/** Saves the file `doc` is an artboard of, with all its artboards. */
 export async function saveDoc(doc: Doc | null = app.doc, saveAs = false) {
-  if (!doc) return false;
-  const isPixl = doc.name.toLowerCase().endsWith('.pixl');
-  const existing = !saveAs && isPixl ? doc.file : null;
+  const p = doc && app.projectOf(doc);
+  if (!p) return false;
+  const isPixl = p.name.toLowerCase().endsWith('.pixl');
+  const existing = !saveAs && isPixl ? p.file : null;
   // The history step being saved. Edits made while the file is written aren't in it, so they stay unsaved: nothing is
   // folded into it any more (a nudge a moment later would otherwise count as saved).
-  const saving = doc.entries[doc.index - 1];
+  const h = p.history;
+  const saving = h.entries[h.index - 1];
   if (saving) saving.merge = undefined;
   try {
-    const blob = await encodePixl(doc);
-    const ref = await saveBlob(blob, `${baseName(doc.name)}.pixl`, existing, PIXL_ACCEPT);
+    const blob = await encodePixl(p);
+    const ref = await saveBlob(blob, `${baseName(p.name)}.pixl`, existing, PIXL_ACCEPT);
     if (ref === undefined) return false;
     const stored = ref.path || ref.handle;
-    doc.file = stored ? ref : null;
-    doc.name = stored ? ref.name : `${baseName(doc.name)}.pixl`;
+    p.file = stored ? ref : null;
+    p.name = stored ? ref.name : `${baseName(p.name)}.pixl`;
     // (0, never current, if that step has since been undone and replaced or dropped from history.)
-    doc.savedIndex = doc.entries.indexOf(saving) + 1;
+    h.savedIndex = h.entries.indexOf(saving) + 1;
     app.emit('docs');
-    toast(`Saved ${doc.name}`);
-    if (stored) { addRecent(ref, thumbOf(doc)); app.emit('recent'); }
-    if (!doc.dirty) clearRecovery(doc).catch(() => {});
+    toast(`Saved ${p.name}`);
+    if (stored) { addRecent(ref, thumbOf(p.active)); app.emit('recent'); }
+    if (!p.dirty) clearRecovery(p).catch(() => {});
     return true;
   } catch (e) {
     toast(`Save failed: ${(e as Error).message}`, 'error');
@@ -173,25 +178,30 @@ export async function exportImage(doc: Doc, o: { format: 'png' | 'jpeg' | 'webp'
   const blob = await canvasBlob(c, `image/${o.format}`, o.format === 'png' ? undefined : o.quality);
   const ext = o.format === 'jpeg' ? 'jpg' : o.format;
   const accept = { [`image/${o.format}`]: [`.${ext}`] };
-  const ref = await saveBlob(blob, `${baseName(doc.name)}.${ext}`, null, accept);
+  const ref = await saveBlob(blob, `${baseName(app.nameOf(doc))}.${ext}`, null, accept);
   if (ref !== undefined) toast(`Exported ${c.width} × ${c.height} ${ext.toUpperCase()} (${(blob.size / 1024 / 1024).toFixed(2)} MB)`);
 }
 
+/** Closes the file (the tab) `doc` is an artboard of. */
 export async function closeDoc(doc: Doc | null = app.doc) {
-  if (!doc) return;
-  if (doc.dirty) {
-    const r = await ask('Unsaved changes', `Save changes to "${doc.name}" before closing?`, [
+  const p = doc && app.projectOf(doc);
+  if (!p) return;
+  if (p.dirty) {
+    const r = await ask('Unsaved changes', `Save changes to "${p.name}" before closing?`, [
       { id: 'cancel', label: 'Cancel' }, { id: 'discard', label: "Don't save", danger: true }, { id: 'save', label: 'Save', primary: true },
     ]);
     if (r === 'cancel') return;
     if (r === 'save' && !(await saveDoc(doc))) return;
   }
-  clearRecovery(doc).catch(() => {});
-  app.removeDoc(doc);
+  clearRecovery(p).catch(() => {});
+  app.removeProject(p);
 }
 
-export const undo = () => app.doc?.undo();
-export const redo = () => app.doc?.redo();
+/** Shows the artboard an undo or redo step was on, if it isn't the one shown. */
+const showStep = (d: Doc | null | undefined) => { if (d && d !== app.doc) app.setDoc(d); };
+export const undo = () => showStep(app.doc?.undo());
+export const redo = () => showStep(app.doc?.redo());
+export const goToStep = (index: number) => showStep(app.doc?.goTo(index));
 
 // ---------- layers ----------
 

@@ -1,4 +1,5 @@
 import type { ChangeKind, Doc } from './core/document';
+import { Project } from './core/project';
 import type { Tool } from './tools/tool';
 import { setSetting } from './core/settings';
 
@@ -81,8 +82,13 @@ export const DEFAULT_OPTS = {
 export type ToolOpts = typeof DEFAULT_OPTS;
 
 class App {
-  docs: Doc[] = [];
-  doc: Doc | null = null;
+  /** Open files, one per tab, and the one shown. */
+  projects: Project[] = [];
+  project: Project | null = null;
+  /** The image being worked on: the shown file's active artboard. */
+  get doc(): Doc | null { return this.project?.active ?? null; }
+  /** Every open image (every artboard of every file). */
+  get docs(): Doc[] { return this.projects.flatMap((p) => p.docs); }
   fg = '#000000';
   bg = '#ffffff';
   recent: string[] = [];
@@ -125,26 +131,50 @@ class App {
 
   // ---------- documents ----------
 
-  addDoc(d: Doc) {
-    d.onChange = (doc, kind) => this.emit('change', { doc, kind });
-    this.docs.push(d);
-    this.setDoc(d);
+  /** Opens an image in a new tab, as a file with one artboard. */
+  addDoc(d: Doc): Project {
+    const p = new Project(d.name, [{ doc: d, x: 0, y: 0 }]);
+    this.addProject(p);
+    return p;
   }
 
+  addProject(p: Project) {
+    for (const d of p.docs) d.onChange = (doc, kind) => this.emit('change', { doc, kind });
+    this.projects.push(p);
+    this.setDoc(p.active);
+  }
+
+  /** Adds an image to a file as another artboard, at (x, y) among the others. */
+  addArtboard(p: Project, d: Doc, x: number, y: number) {
+    d.onChange = (doc, kind) => this.emit('change', { doc, kind });
+    p.add(d, x, y);
+    this.emit('docs');
+  }
+
+  /** The file an image is an artboard of. */
+  projectOf(d: Doc): Project | null { return this.projects.find((p) => p.has(d)) ?? null; }
+
+  /** The file's name for an image: what's shown in its tab, and what saving and exporting suggest. */
+  nameOf(d: Doc): string { return this.projectOf(d)?.name ?? d.name; }
+
+  /** Shows an image: switches to its file's tab, and to it there. */
   setDoc(d: Doc | null) {
     // A field still being typed in (say a text layer's text in Properties) commits to the document it belongs to.
     (document.activeElement as HTMLElement | null)?.blur?.();
     this.tool?.deactivate?.();
-    this.doc = d;
+    const p = d ? this.projectOf(d) : null;
+    if (p && d) p.active = d;
+    this.project = p;
     this.emit('docs');
     this.tool?.activate?.();
   }
 
-  removeDoc(d: Doc) {
-    const i = this.docs.indexOf(d);
+  /** Closes a file's tab. */
+  removeProject(p: Project) {
+    const i = this.projects.indexOf(p);
     if (i < 0) return;
-    this.docs.splice(i, 1);
-    if (this.doc === d) this.setDoc(this.docs[Math.min(i, this.docs.length - 1)] ?? null);
+    this.projects.splice(i, 1);
+    if (this.project === p) this.setDoc(this.projects[Math.min(i, this.projects.length - 1)]?.active ?? null);
     else this.emit('docs');
   }
 

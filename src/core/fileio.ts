@@ -2,10 +2,12 @@ import { Doc, flatLayers, newId } from './document';
 import { ctx2d, newCanvas } from './layers';
 import { fileName, isDesktop, openDialog, readPath, saveDialog, writePath, type Filters } from './platform';
 import type { Layer, Meta } from './types';
+import { Project } from './project';
 import { WorkerPool } from './workers/pool';
 
 const MAGIC = 'PIXL';
-const FORMAT_VERSION = 1;
+/** The newest .pixl version this Pixl reads (see encodePixl). */
+const FORMAT_VERSION = 2;
 
 export const IMAGE_EXT = ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'avif', 'ico', 'svg'];
 const IMAGE_TYPES = { 'image/*': IMAGE_EXT.map((e) => '.' + e) } as Record<string, string[]>;
@@ -81,47 +83,66 @@ async function pngOf(c: HTMLCanvasElement): Promise<Blob> {
   return canvasBlob(c);
 }
 
-/** .pixl: "PIXL" + u32 version + u32 header length + JSON header + PNG blobs for each raster layer. */
-export async function encodePixl(doc: Doc): Promise<Blob> {
-  const meta = doc.snapshot();
-  const blobs: Blob[] = [];
-  const index: Record<string, [number, number]> = {};
-  let offset = 0;
-  // Every pixel buffer in use: raster layers anywhere in the tree, plus layer masks.
-  const keys = [...new Set(flatLayers(meta.layers).flatMap((l) => [
+/** Every pixel buffer a snapshot's layers use: raster layers anywhere in the tree, masks, LUTs and 3D textures. */
+function layerKeys(meta: Meta): string[] {
+  return [...new Set(flatLayers(meta.layers).flatMap((l) => [
     l.type === 'raster' ? l.key : null, l.mask?.key ?? null, l.type === 'adjust' && l.adj.kind === 'lut' ? l.adj.key : null,
     l.type === 'raster' ? l.model?.texture?.key ?? null : null,
   ]))].filter((k): k is string => !!k);
-  const encoded = await fewAtOnce(keys, (k) => pngOf(doc.pool.get(k)!));
-  for (const [i, key] of keys.entries()) {
-    const b = encoded[i];
-    index[key] = [offset, b.size];
-    offset += b.size;
-    blobs.push(b);
-  }
-  const header = new TextEncoder().encode(JSON.stringify({ app: 'AMxPixl', version: FORMAT_VERSION, name: doc.name, meta, blobs: index }));
+}
+
+/** One artboard in a version 2 header: its name, place, layers and where its pixel buffers are. */
+interface BoardHead { name: string; x: number; y: number; meta: Meta; blobs: Record<string, [number, number]> }
+
+/**
+ * .pixl: "PIXL" + u32 version + u32 header length + JSON header + PNG blobs for each pixel buffer. Version 1 is one
+ * image (`meta` and `blobs`); version 2 has `boards`, an artboard each. A file with one artboard is still written as
+ * version 1, so earlier versions of Pixl can open it.
+ */
+export async function encodePixl(p: Project): Promise<Blob> {
+  const boards = p.boards.map((b) => ({ b, meta: b.doc.snapshot() }));
+  const jobs = boards.flatMap(({ b, meta }, i) => layerKeys(meta).map((key) => ({ i, key, canvas: b.doc.pool.get(key)! })));
+  const encoded = await fewAtOnce(jobs, (j) => pngOf(j.canvas));
+  const index: Record<string, [number, number]>[] = boards.map(() => ({}));
+  let offset = 0;
+  jobs.forEach((j, n) => { index[j.i][j.key] = [offset, encoded[n].size]; offset += encoded[n].size; });
+  const one = boards.length === 1;
+  const version = one ? 1 : 2;
+  const head = one
+    ? { app: 'AMxPixl', version, name: p.name, meta: boards[0].meta, blobs: index[0] }
+    : { app: 'AMxPixl', version, name: p.name, boards: boards.map(({ b, meta }, i): BoardHead => ({ name: b.doc.name, x: b.x, y: b.y, meta, blobs: index[i] })) };
+  const header = new TextEncoder().encode(JSON.stringify(head));
   const pre = new ArrayBuffer(12);
   const dv = new DataView(pre);
   for (let i = 0; i < 4; i++) dv.setUint8(i, MAGIC.charCodeAt(i));
-  dv.setUint32(4, FORMAT_VERSION, true);
+  dv.setUint32(4, version, true);
   dv.setUint32(8, header.length, true);
-  return new Blob([pre, header, ...blobs], { type: 'application/x-amxpixl' });
+  return new Blob([pre, header, ...encoded], { type: 'application/x-amxpixl' });
 }
 
-export async function decodePixl(blob: Blob, fallbackName: string): Promise<Doc> {
+export async function decodePixl(blob: Blob, fallbackName: string): Promise<Project> {
   const buf = await blob.arrayBuffer();
   const dv = new DataView(buf);
   const magic = String.fromCharCode(dv.getUint8(0), dv.getUint8(1), dv.getUint8(2), dv.getUint8(3));
   if (magic !== MAGIC) throw new Error('Not a Pixl project file.');
   if (dv.getUint32(4, true) > FORMAT_VERSION) throw new Error('it was saved by a newer version of Pixl. Update Pixl to open it.');
   const hlen = dv.getUint32(8, true);
-  const head = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 12, hlen))) as { name?: string; meta: Meta; blobs: Record<string, [number, number]> };
+  const head = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 12, hlen))) as
+    { name?: string; meta?: Meta; blobs?: Record<string, [number, number]>; boards?: BoardHead[] };
   const base = 12 + hlen;
-  const m = head.meta;
-  const doc = new Doc(head.name || fallbackName, m.width, m.height);
-  const entries = Object.entries(head.blobs);
-  const canvases = await fewAtOnce(entries, ([, [off, len]]) => decodeImage(new Blob([new Uint8Array(buf, base + off, len)], { type: 'image/png' })));
-  entries.forEach(([key], i) => doc.pool.set(key, canvases[i]));
+  const name = head.name || fallbackName;
+  const heads: BoardHead[] = head.boards ?? [{ name, x: 0, y: 0, meta: head.meta!, blobs: head.blobs! }];
+  const jobs = heads.flatMap((b, i) => Object.entries(b.blobs).map(([key, [off, len]]) => ({ i, key, off, len })));
+  const canvases = await fewAtOnce(jobs, (j) => decodeImage(new Blob([new Uint8Array(buf, base + j.off, j.len)], { type: 'image/png' })));
+  const docs = heads.map((b) => docFromMeta(b.name, b.meta));
+  jobs.forEach((j, n) => docs[j.i].pool.set(j.key, canvases[n]));
+  docs[0].resetHistory('Open');
+  return new Project(name, heads.map((b, i) => ({ doc: docs[i], x: b.x, y: b.y })));
+}
+
+/** An image with a saved snapshot's layers and settings (its pixel buffers are added after). */
+export function docFromMeta(name: string, m: Meta): Doc {
+  const doc = new Doc(name, m.width, m.height);
   doc.layers = m.layers as Layer[];
   doc.activeId = m.activeId;
   doc.selection = null;
@@ -131,7 +152,6 @@ export async function decodePixl(blob: Blob, fallbackName: string): Promise<Doc>
   doc.anim = m.anim ?? null;
   doc.paths = m.paths ?? [];
   doc.activePath = m.activePath ?? null;
-  doc.resetHistory('Open');
   return doc;
 }
 

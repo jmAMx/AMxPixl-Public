@@ -10,7 +10,7 @@ import { blurTool, burnTool, dodgeTool, sharpenTool, smudgeTool } from './tools/
 import { ellipseSelectTool, lassoTool, rectSelectTool, wandTool } from './tools/select';
 import { handTool, shapeTool, zoomTool } from './tools/shape';
 import { textTool } from './tools/text';
-import type { Doc } from './core/document';
+import type { Project } from './core/project';
 import { onGpuRestored } from './core/gpu';
 import { fileName, isDesktop, onOpenFiles, readPath, takeLaunchFiles } from './core/platform';
 import { autosave, clearRecovery, listRecovery, restoreRecovery } from './core/recovery';
@@ -78,7 +78,7 @@ async function offerRecovery() {
   ]);
   for (const it of list) {
     if (r === 'recover') {
-      try { const doc = await restoreRecovery(it.uid); if (doc) { app.addDoc(doc); changed.add(doc); } } catch (err) { toast(`Couldn't recover ${it.name}: ${(err as Error).message}`, 'error'); }
+      try { const p = await restoreRecovery(it.uid); if (p) { app.addProject(p); changed.add(p); } } catch (err) { toast(`Couldn't recover ${it.name}: ${(err as Error).message}`, 'error'); }
     } else if (r === 'discard') await clearRecovery(it.uid);
   }
 }
@@ -101,20 +101,20 @@ const reportFailure = (err: unknown) => {
 window.addEventListener('unhandledrejection', (e) => reportFailure(e.reason));
 window.addEventListener('error', (e) => { if (e.error) reportFailure(e.error); });
 
-// Every minute, copy documents that changed since the last pass (and still have unsaved work) to the recovery store.
-const changed = new Set<Doc>();
-app.on('change', ({ doc }) => changed.add(doc));
+// Every minute, copy files that changed since the last pass (and still have unsaved work) to the recovery store.
+const changed = new Set<Project>();
+app.on('change', ({ doc }) => { const p = app.projectOf(doc); if (p) changed.add(p); });
 let autosaving = false;
 setInterval(async () => {
   if (autosaving || app.busy || view.busy) return;
   autosaving = true;
   try {
-    for (const doc of [...changed]) {
-      changed.delete(doc);
-      if (!app.docs.includes(doc)) continue;
-      if (doc.dirty) await autosave(doc);
+    for (const p of [...changed]) {
+      changed.delete(p);
+      if (!app.projects.includes(p)) continue;
+      if (p.dirty) await autosave(p);
       // Also catches a save that landed while the autosave above was writing.
-      if (!doc.dirty) await clearRecovery(doc);
+      if (!p.dirty) await clearRecovery(p);
     }
   } catch { /* storage full or blocked: recovery is best-effort */ } finally { autosaving = false; }
 }, 60_000);
@@ -145,7 +145,7 @@ if (isDesktop) {
       if (app.busy) { toast('Apply or cancel the filter first.'); return; }
       // A field still being typed in commits first, so its edit counts as unsaved work.
       (document.activeElement as HTMLElement | null)?.blur?.();
-      const dirty = app.docs.filter((d) => d.dirty);
+      const dirty = app.projects.filter((p) => p.dirty);
       if (dirty.length) {
         const what = dirty.length === 1 ? `"${dirty[0].name}" has` : `${dirty.length} images have`;
         const r = await ask('Unsaved changes', `${what} unsaved changes. Save before closing AMxPixl?`, [
@@ -154,10 +154,10 @@ if (isDesktop) {
         ]);
         if (r === 'save') {
           // One at a time, each shown while it's saved (a new image asks where to go); cancelling one keeps the app open.
-          for (const d of dirty) {
-            if (!app.docs.includes(d) || !d.dirty) continue;
-            app.setDoc(d);
-            if (!(await A.saveDoc(d))) return;
+          for (const p of dirty) {
+            if (!app.projects.includes(p) || !p.dirty) continue;
+            app.setDoc(p.active);
+            if (!(await A.saveDoc(p.active))) return;
           }
         } else if (r === 'close') {
           // Choosing not to save is deliberate, so don't offer that work back next time.
@@ -181,9 +181,9 @@ if (isDesktop) {
   });
 } else {
   window.addEventListener('beforeunload', (e) => {
-    if (app.docs.some((d) => d.dirty)) { e.preventDefault(); e.returnValue = ''; }
+    if (app.projects.some((p) => p.dirty)) { e.preventDefault(); e.returnValue = ''; }
   });
 }
 
 // Dev/test hook (harmless in production): lets automated checks drive the editor.
-(window as unknown as Record<string, unknown>).__pixl = { app, actions: A, view };
+(window as unknown as Record<string, unknown>).__pixl = { app, actions: A, view, recovery: { autosave, restoreRecovery, clearRecovery } };
