@@ -4,7 +4,7 @@ Each version's section becomes its release notes (`scripts/release.ps1` copies i
 
 ## 0.9.0
 
-Artboards: several canvases, each its own size, in one file.
+Artboards (several canvases, each its own size, in one file), filters that stay editable, Photoshop export with layers, and opening GIFs and video frame by frame.
 
 - **Artboards.** A file can hold several artboards side by side, each a canvas of its own, with its own size, layers and selection. Everything that works on an image works on an artboard. Press in an artboard, or click its name, to work on it.
 - **New Image › Add artboard** starts a file with several artboards, each with a size of its own: type it, or pick a size or a shape (a ratio such as 4 : 5 or 16 : 9 keeps the width). **Image › Artboards** adds one (any size), duplicates, renames or deletes one, and switches between them.
