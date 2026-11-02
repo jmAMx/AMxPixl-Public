@@ -16,8 +16,10 @@ export function colorPanel() {
   const r = numField('R', 0, () => fromRgb(), { min: 0, max: 255 });
   const g = numField('G', 0, () => fromRgb(), { min: 0, max: 255 });
   const b = numField('B', 0, () => fromRgb(), { min: 0, max: 255 });
-  const fgBtn = h('button', { class: 'tgt', type: 'button', onclick: () => setTarget('fg') }, h('span', { class: 'sw' }), 'Foreground');
-  const bgBtn = h('button', { class: 'tgt', type: 'button', onclick: () => setTarget('bg') }, h('span', { class: 'sw' }), 'Background');
+  const fgBtn = h('button', { class: 'tgt', type: 'button', title: 'Foreground', onclick: () => setTarget('fg') }, h('span', { class: 'sw' }), h('span', { class: 'tgt-name' }, 'Foreground'));
+  const bgBtn = h('button', { class: 'tgt', type: 'button', title: 'Background', onclick: () => setTarget('bg') }, h('span', { class: 'sw' }), h('span', { class: 'tgt-name' }, 'Background'));
+  // In the compact form (a short panel) the hue strip stands upright beside the square.
+  let upright = false;
   const recent = h('div', { class: 'swatches' });
 
   const current = () => app[target];
@@ -41,13 +43,15 @@ export function colorPanel() {
 
   const paintHue = () => {
     const x = ctx2d(hueBar);
-    const gr = x.createLinearGradient(0, 0, hueBar.width, 0);
+    const len = upright ? hueBar.height : hueBar.width;
+    const gr = upright ? x.createLinearGradient(0, 0, 0, len) : x.createLinearGradient(0, 0, len, 0);
     for (let i = 0; i <= 6; i++) { const [cr, cg, cb] = hsvToRgb(i * 60, 1, 1); gr.addColorStop(i / 6, `rgb(${cr},${cg},${cb})`); }
     x.fillStyle = gr;
     x.fillRect(0, 0, hueBar.width, hueBar.height);
-    const px = (hue / 360) * hueBar.width;
+    const p = (hue / 360) * len;
     x.fillStyle = '#fff'; x.strokeStyle = '#000'; x.lineWidth = 1;
-    x.fillRect(px - 2, 0, 4, hueBar.height); x.strokeRect(px - 2, 0.5, 4, hueBar.height - 1);
+    if (upright) { x.fillRect(0, p - 2, hueBar.width, 4); x.strokeRect(0.5, p - 2, hueBar.width - 1, 4); }
+    else { x.fillRect(p - 2, 0, 4, hueBar.height); x.strokeRect(p - 2, 0.5, 4, hueBar.height - 1); }
   };
 
   const syncFields = () => {
@@ -101,7 +105,7 @@ export function colorPanel() {
     });
   };
   drag(sv, (x, y) => { sat = x; val = 1 - y; });
-  drag(hueBar, (x) => { hue = x * 359.9; });
+  drag(hueBar, (x, y) => { hue = (upright ? y : x) * 359.9; });
 
   hex.addEventListener('change', () => { const v = normHex(hex.value); if (v) { app.setColor(target, v); } else hex.value = current(); });
   hex.addEventListener('keydown', (e) => { if (e.key === 'Enter') hex.blur(); });
@@ -109,10 +113,55 @@ export function colorPanel() {
   app.on('colors', () => { if (!selfSet) loadFromApp(); });
   loadFromApp();
 
-  return h('div', { class: 'color-panel' },
-    h('div', { class: 'tgt-row' }, fgBtn, bgBtn,
-      h('button', { class: 'icon-btn', type: 'button', title: 'Swap colours (X)', onclick: () => { const f = app.fg; app.setColor('fg', app.bg); app.setColor('bg', f); } }, icon('swap'))),
-    sv, hueBar,
-    h('div', { class: 'rgb-row' }, h('label', { class: 'field' }, h('span', null, '#'), hex), r, g, b),
-    recent);
+  const rgbRow = h('div', { class: 'rgb-row' }, h('label', { class: 'field' }, h('span', null, '#'), hex), r, g, b);
+  const tgtRow = h('div', { class: 'tgt-row' }, fgBtn, bgBtn,
+    h('button', { class: 'icon-btn', type: 'button', title: 'Swap colours (X)', onclick: () => { const f = app.fg; app.setColor('fg', app.bg); app.setColor('bg', f); } }, icon('swap')));
+  const root = h('div', { class: 'color-panel' }, tgtRow, sv, hueBar, rgbRow, recent);
+  new ResizeObserver(() => fit()).observe(root);
+
+  /**
+   * Fitting a panel sized by hand. Shorter than it'd be on its own, it gives up room bit by bit: the square shrinks,
+   * then the swatches and the RGB row slide away, then the square shrinks some more, and below that it turns into one
+   * row (the colours, the square and an upright hue strip) that keeps shrinking, to about a quarter of its own height.
+   * Taller, the square grows.
+   */
+  const SV = 128, SV_MID = 72, SV_MIN = 40, SV_MAX = 300, GAP = 8;
+  let shown = { svH: 0, upright: false }, tgtH = 28;
+  function fit() {
+    if (!root.clientWidth) return; // (its panel is closed)
+    const sized = !!root.closest('.panel.sized');
+    const collapse = (el: HTMLElement, room: number | null) => {
+      el.style.height = room === null ? '' : `${Math.max(0, room - GAP)}px`;
+      el.style.marginTop = room === null ? '' : `${Math.min(GAP, room)}px`;
+    };
+    let svH = SV, compact = false;
+    if (!sized) { collapse(recent, null); collapse(rgbRow, null); }
+    else {
+      const H = root.clientHeight, hueH = 12;
+      if (!root.classList.contains('compact')) tgtH = tgtRow.offsetHeight || tgtH;
+      // Room for the square, the RGB row and the swatches (those two with the gap above them).
+      const rest = H - 18 - tgtH - GAP - GAP - hueH;
+      if (rest < SV_MIN) compact = true;
+      else {
+        let sw = recent.scrollHeight + GAP, rgb = rgbRow.scrollHeight + GAP, over = SV + sw + rgb - rest;
+        const cut = (have: number, floor: number) => { const c = Math.max(0, Math.min(over, have - floor)); over -= c; return have - c; };
+        if (over <= 0) svH = Math.min(SV_MAX, SV - over);
+        else { svH = cut(SV, SV_MID); sw = cut(sw, 0); rgb = cut(rgb, 0); svH = cut(svH, SV_MIN); }
+        collapse(recent, sw); collapse(rgbRow, rgb);
+      }
+      if (compact) { svH = Math.max(16, H - 12); collapse(recent, null); collapse(rgbRow, null); }
+    }
+    root.classList.toggle('compact', compact);
+    sv.style.height = `${svH}px`;
+    hueBar.style.height = compact ? `${svH}px` : '';
+    // Draw at the size shown, so the ring stays round.
+    const w = Math.max(1, Math.round(sv.clientWidth)), hh = Math.round(svH);
+    if (shown.svH === hh && shown.upright === compact && sv.width === w) return;
+    shown = { svH: hh, upright: compact };
+    upright = compact;
+    sv.width = w; sv.height = hh;
+    hueBar.width = compact ? 12 : 240; hueBar.height = compact ? hh : 12;
+    paintSV(); paintHue();
+  }
+  return root;
 }

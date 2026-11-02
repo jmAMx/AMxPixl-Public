@@ -417,7 +417,21 @@ input[type="range"]:focus-visible::-webkit-slider-thumb { background: var(--acce
 .empty-note { color: var(--text-dim); padding: 14px 12px; text-align: center; }
 
 /* colour */
-.color-panel { padding: 8px 10px 10px; display: flex; flex-direction: column; gap: 8px; }
+.color-panel { padding: 8px 10px 10px; display: flex; flex-direction: column; }
+.color-panel > * + * { margin-top: 8px; }
+/* Sized by hand, it fills its panel and fits what it shows to it (colorpanel.ts fit). */
+.panel-color.open.sized .panel-body { display: flex; flex-direction: column; overflow: hidden; }
+.panel-color.open.sized .color-panel { flex: 1 1 0; min-height: 0; overflow: hidden; }
+.color-panel > [style*="height"]:not(canvas) { overflow: hidden; }
+/* The compact form: one row of the two colours, the square and an upright hue strip. */
+.color-panel.compact { flex-direction: row; gap: 8px; padding: 6px 10px; }
+.color-panel.compact > * { margin-top: 0; }
+.color-panel.compact .tgt-row { flex-direction: column; justify-content: center; gap: 2px; }
+.color-panel.compact .tgt { padding: 0; height: auto; border: none; background: none; }
+.color-panel.compact .tgt-name, .color-panel.compact .tgt-row .icon-btn, .color-panel.compact .rgb-row, .color-panel.compact .swatches { display: none; }
+.color-panel.compact .tgt.on .sw { outline: 2px solid var(--accent); outline-offset: 1px; }
+.color-panel.compact .sv { flex: 1; width: auto; min-width: 0; }
+.color-panel.compact .hue { flex: none; width: 12px; cursor: ns-resize; }
 .tgt-row { display: flex; gap: 6px; align-items: center; }
 .tgt { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 8px 0 4px; border-radius: 4px; border: 1px solid var(--border); background: none; cursor: pointer; color: var(--text-dim); }
 .tgt .sw { position: static; width: 16px; height: 16px; }
