@@ -14,7 +14,7 @@ import { brushDialog } from '../ui/brushpanel';
 import { listTips } from '../core/tips';
 import { pressureControl, strokePressure } from './pressure';
 import { drawSymmetryGuides, symmetryControl, symmetryCopies, symmetryDown, symmetryMove, symmetryUp } from './symmetry';
-import type { PInfo, Tool } from './tool';
+import { docKey, type PInfo, type Tool } from './tool';
 
 /** What painting should go to (the active layer's pixels or its mask), or null after explaining why not. */
 export function paintableTarget(doc: Doc): { target: PixelTarget; isMask: boolean } | null {
@@ -67,6 +67,8 @@ class PaintTool implements Tool {
   hint: string;
   private stroke: Stroke | null = null;
   private last: Pt | null = null;
+  /** The image (and size) the last stroke ended on: Shift+click only draws a line from it there. */
+  private lastFor = '';
   private onMask = false;
 
   constructor(public id: 'brush' | 'eraser', public name: string, public key: string, public icon: Tool['icon']) {
@@ -103,7 +105,7 @@ class PaintTool implements Tool {
     const erase = pt.isMask ? this.id === 'eraser' || maskHides() : this.id === 'eraser';
     this.stroke = new Stroke(doc, pt.target, { color: pt.isMask ? '#ffffff' : app.fg, size: o.size, hardness: o.hardness, opacity: o.opacity, flow: o.flow, erase, ...strokePressure(o), aliased: !o.antiAlias,
       tip: o.tip, spacing: o.spacing / 100, jitter: o.jitter, scatter: o.scatter, copies: symmetryCopies(doc) });
-    if (p.shift && this.last) this.stroke.add({ x: this.last.x, y: this.last.y, pressure: p.pressure });
+    if (p.shift && this.last && this.lastFor === docKey(doc)) this.stroke.add({ x: this.last.x, y: this.last.y, pressure: p.pressure });
     this.stroke.add({ x: p.x, y: p.y, pressure: p.pressure });
   }
 
@@ -119,6 +121,7 @@ class PaintTool implements Tool {
     this.stroke.end(this.onMask ? 'Paint mask' : this.id === 'brush' ? 'Brush' : 'Eraser');
     this.stroke = null;
     this.last = { x: p.x, y: p.y };
+    this.lastFor = docKey(app.doc);
     if (this.id === 'brush' && !this.onMask) app.useColor(app.fg);
   }
 

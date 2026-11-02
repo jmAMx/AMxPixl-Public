@@ -456,6 +456,24 @@ function overscan(doc: Doc, out: HTMLCanvasElement, view: Mat, opts: RenderOpts)
   return Math.max(0, Math.min(pad, room, 2048));
 }
 
+/**
+ * The largest side (pixels) the graphics card can apply `doc`'s adjustment and effect layers at, or null if it has
+ * none showing (in any frame). An export bigger than that would leave them out.
+ */
+export function filterSizeLimit(doc: Doc): number | null {
+  let limit: number | null = null;
+  const frames = doc.anim ? doc.anim.frames.length : 1;
+  for (const l of flatLayers(doc.layers)) {
+    if (!isFilter(l)) continue;
+    let shown = false;
+    for (let f = 0; f < frames && !shown; f++) shown = doc.shows(l, doc.anim ? f : doc.frame);
+    if (!shown) continue;
+    const max = l.type === 'adjust' ? glfx.maxSize : fxEngine.maxSize;
+    limit = limit === null ? max : Math.min(limit, max);
+  }
+  return limit;
+}
+
 /** Full-resolution flattened image of the document (optionally scaled). */
 export function flatten(doc: Doc, scaleBy = 1, opts: RenderOpts = {}): HTMLCanvasElement {
   const out = newCanvas(Math.round(doc.width * scaleBy), Math.round(doc.height * scaleBy));

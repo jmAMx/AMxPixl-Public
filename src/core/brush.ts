@@ -289,10 +289,16 @@ export class Stroke {
     const d = Math.max(2, Math.round((r * 2) / this.pxScale));
     const ox = Math.round(q.x - d / 2), oy = Math.round(q.y - d / 2);
     const k = this.o.retouch!.strength;
-    if (!this.smudgeBuf || this.smudgeBuf.width !== d) {
+    if (!this.smudgeBuf) {
       this.smudgeBuf = newCanvas(d, d);
       ctx2d(this.smudgeBuf).drawImage(this.src, -ox, -oy);
       return { x: ox, y: oy, w: d, h: d };
+    }
+    if (this.smudgeBuf.width !== d) {
+      // The size changed (pen pressure): carry the same colour on, scaled to the new dab, rather than starting over.
+      const old = this.smudgeBuf;
+      this.smudgeBuf = newCanvas(d, d);
+      ctx2d(this.smudgeBuf).drawImage(old, 0, 0, d, d);
     }
     const dab = cloneCanvas(this.smudgeBuf);
     const dx = ctx2d(dab);

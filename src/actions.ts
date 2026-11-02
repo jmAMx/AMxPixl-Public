@@ -1248,11 +1248,12 @@ export async function copy(merged = false, cut = false) {
   const mask = doc.selectionMask();
   if (mask) { const x = ctx2d(c); x.globalCompositeOperation = 'destination-in'; x.drawImage(mask, -r.x, -r.y); }
   clip = { canvas: c, at: { x: r.x, y: r.y } };
+  // Cleared now, while this image and its selection are still the current ones (not after the clipboard write).
+  if (cut) clearSelection();
   try {
     const blob = await canvasBlob(c);
     await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
   } catch { /* system clipboard unavailable; the in-app clipboard still works */ }
-  if (cut) clearSelection();
   toast(cut ? 'Cut to clipboard' : 'Copied to clipboard');
 }
 

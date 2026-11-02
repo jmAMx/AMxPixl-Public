@@ -6,7 +6,7 @@ import { view } from '../ui/canvasview';
 import { checkbox, slider, toast } from '../ui/widgets';
 import { paintableTarget } from './paint';
 import { pressureControl, strokePressure } from './pressure';
-import type { PInfo, Tool } from './tool';
+import { docKey, type PInfo, type Tool } from './tool';
 
 /**
  * Clone Stamp and Healing Brush. Alt+click picks where to copy from, then paint. "Aligned" keeps the same offset
@@ -20,6 +20,11 @@ class CloneTool implements Tool {
   private offset: { dx: number; dy: number } | null = null;
   private stroke: Stroke | null = null;
   private onMask = false;
+  /** The image (and size) the source point was picked on. */
+  private sourceFor = '';
+
+  /** Forgets the source once it belongs to another image or size. */
+  private check() { if (this.source && this.sourceFor !== docKey(app.doc)) { this.source = null; this.offset = null; } }
 
   constructor(public id: 'clone' | 'heal', public name: string, public key: string, public icon: Tool['icon']) {
     this.hint = id === 'clone'
@@ -46,10 +51,12 @@ class CloneTool implements Tool {
   down(p: PInfo) {
     if (p.alt) {
       this.source = { x: p.x, y: p.y };
+      this.sourceFor = docKey(app.doc);
       this.offset = null;
       view.requestOverlay();
       return;
     }
+    this.check();
     if (!this.source) { toast('Alt+click first to choose where to copy from.'); return; }
     const doc = app.doc!;
     const pt = paintableTarget(doc);
@@ -83,6 +90,7 @@ class CloneTool implements Tool {
   }
 
   overlay(ctx: CanvasRenderingContext2D) {
+    this.check();
     const hv = view.hover;
     const r = Math.max(1, (this.o.size / 2) * view.zoom);
     ctx.save();

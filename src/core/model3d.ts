@@ -1373,6 +1373,12 @@ function sceneOf(W: number, H: number, m: Model3D, mesh: Mesh): Scene {
   };
 }
 
+/**
+ * Whether the light reaches the front of the wall: not when the sun shines from behind (turned with the object, say),
+ * or the lamp is behind the wall. Then there's no shadow on it.
+ */
+const wallLit = (s: Scene): boolean => (s.lamp ? s.lamp[2] > s.wall : s.dir[2] > 0);
+
 /** Where a point of the turned object (relative to the pivot) throws its shadow on the wall behind. */
 function onWall(s: Scene, p: V3): V3 {
   if (s.lamp) {
@@ -1406,7 +1412,9 @@ function shadowBounds(s: Scene, mesh: Mesh): Rect {
 function frameOf(W: number, H: number, m: Model3D, mesh: Mesh, withShadow: boolean): Rect {
   const b = boundsOf(W, H, m, mesh);
   if (!withShadow || !m.shadow?.on) return b;
-  const s = shadowBounds(sceneOf(W, H, m, mesh), mesh);
+  const sc = sceneOf(W, H, m, mesh);
+  if (!wallLit(sc)) return b;
+  const s = shadowBounds(sc, mesh);
   const x0 = Math.min(b.x, s.x), y0 = Math.min(b.y, s.y);
   return { x: x0, y: y0, w: Math.max(b.x + b.w, s.x + s.w) - x0, h: Math.max(b.y + b.h, s.y + s.h) - y0 };
 }
@@ -1897,6 +1905,7 @@ class ModelGL {
     const r = this.prepare(src, m, key, scale);
     if (!r) return null;
     const { gl, mesh, s, cw, ch, scene } = r;
+    if (!wallLit(scene)) return null;
     const box = shadowBounds(scene, mesh), blur = scene.blur * s;
     let f = blur >= 4 ? 4 : 2;
     while (f < 64 && (box.w * s > cw * f || box.h * s > ch * f)) f *= 2;

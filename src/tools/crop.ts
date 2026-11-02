@@ -3,7 +3,7 @@ import type { Pt, Rect } from '../core/math';
 import { cropTo } from '../actions';
 import { view } from '../ui/canvasview';
 import { h } from '../ui/dom';
-import type { PInfo, Tool } from './tool';
+import { docKey, type PInfo, type Tool } from './tool';
 
 type Part = 'move' | 'new' | `${'n' | 's' | ''}${'w' | 'e' | ''}`;
 
@@ -14,13 +14,19 @@ class CropTool implements Tool {
   private drag: { part: Part; p0: Pt; r0: Rect } | null = null;
   private ratio: number | null = null;
   private sizeLabel: HTMLElement | null = null;
+  /** The image (and size) the box was made for. */
+  private rectFor = '';
 
   activate() { this.reset(); }
   deactivate() { this.rect = null; }
 
+  /** Starts over with the whole image if the box was made for another image or size. */
+  private check() { if (this.rect && this.rectFor !== docKey(app.doc)) this.reset(); }
+
   private reset() {
     const d = app.doc;
     this.rect = d ? { x: 0, y: 0, w: d.width, h: d.height } : null;
+    this.rectFor = docKey(d);
     this.updateLabel();
     view.requestOverlay();
   }
@@ -78,6 +84,7 @@ class CropTool implements Tool {
   }
 
   down(p: PInfo) {
+    this.check();
     const part = this.partAt(p);
     const r0 = part === 'new' ? { x: p.x, y: p.y, w: 0, h: 0 } : { ...this.rect! };
     this.drag = { part, p0: { x: p.x, y: p.y }, r0 };
@@ -123,6 +130,7 @@ class CropTool implements Tool {
   }
 
   private apply() {
+    this.check();
     const r = this.rect;
     if (!r || !app.doc) return;
     const x = Math.round(r.x), y = Math.round(r.y);
@@ -134,6 +142,7 @@ class CropTool implements Tool {
   }
 
   overlay(ctx: CanvasRenderingContext2D) {
+    this.check();
     const r = this.rect;
     if (!r) return;
     const a = view.toScreen(r.x, r.y), b = view.toScreen(r.x + r.w, r.y + r.h);

@@ -37,3 +37,9 @@ export interface Tool {
   /** Hide the system cursor (the tool draws its own). */
   ownCursor?: boolean;
 }
+
+/**
+ * Which image, at which size, a point a tool remembers belongs to (a crop box, a line's start, a clone source): when
+ * this changes, after switching images or resizing one, the point no longer means the same place and is dropped.
+ */
+export const docKey = (d: { uid: string; width: number; height: number } | null): string => (d ? `${d.uid}:${d.width}x${d.height}` : '');

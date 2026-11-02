@@ -8,9 +8,11 @@ import { saveBlob } from '../core/fileio';
 import { view } from './canvasview';
 import { cloneCanvas, ctx2d } from '../core/layers';
 import { FILTERS, maskedMerge, type FilterDef, type Params } from '../core/filters';
+import { filterSizeLimit } from '../core/render';
+import type { Doc } from '../core/document';
 import { h } from './dom';
 import { paintableTarget } from '../tools/paint';
-import { checkbox, dialog, numField, seg, slider, toast } from './widgets';
+import { ask, checkbox, dialog, numField, seg, slider, toast } from './widgets';
 
 const PRESETS: [string, number, number][] = [
   ['Full HD 1920 × 1080', 1920, 1080],
@@ -36,6 +38,20 @@ function tooBig(w: number, h: number): boolean {
     ? `${w} × ${h} px is too big: an image can be at most ${MAX_SIDE.toLocaleString()} px wide or tall.`
     : `${w} × ${h} px is ${Math.round((w * h) / 1e6)} megapixels, too big: the most an image can have is ${Math.round(MAX_AREA / 1e6)} (16,384 × 16,384).`, 'error');
   return true;
+}
+
+/**
+ * Whether to go ahead with an export of w × h: past what the graphics card can apply adjustment and effect layers at,
+ * they'd be left out, so it asks first.
+ */
+async function effectsFit(doc: Doc, w: number, h: number): Promise<boolean> {
+  const max = filterSizeLimit(doc);
+  w = Math.round(w); h = Math.round(h);
+  if (max === null || (w <= max && h <= max)) return true;
+  const r = await ask('Too big for effects',
+    `At ${w} × ${h} px, adjustment and effect layers can't be applied: this graphics card handles them up to ${max.toLocaleString()} px a side. They would be left out of the export.`,
+    [{ id: 'cancel', label: 'Cancel', primary: true }, { id: 'go', label: 'Export without them' }]);
+  return r === 'go';
 }
 
 export function newDocDialog() {
@@ -144,7 +160,7 @@ export function exportDialog() {
       q, sc, resampleField(resample, (v) => { resample = v; }), info,
       h('p', { class: 'dialog-note' }, 'Exports are resampled straight from each layer\'s originals for the sharpest result. Save as .pixl to keep layers.'),
     ],
-    buttons: [{ label: 'Cancel' }, { label: 'Export', primary: true, onClick: () => { if (tooBig(doc.width * scale, doc.height * scale)) return false; exportImage(doc, { format, quality, scale, nearest: resample === 'nearest' }).catch((e) => toast(`Export failed: ${e.message}`, 'error')); } }],
+    buttons: [{ label: 'Cancel' }, { label: 'Export', primary: true, onClick: async () => { if (tooBig(doc.width * scale, doc.height * scale) || !await effectsFit(doc, doc.width * scale, doc.height * scale)) return false; exportImage(doc, { format, quality, scale, nearest: resample === 'nearest' }).catch((e) => toast(`Export failed: ${e.message}`, 'error')); } }],
   });
 }
 
@@ -343,7 +359,7 @@ export function animExportDialog() {
     if (!app.prefs.dock.timeline) app.setPrefs({ dock: { ...app.prefs.dock, timeline: true } });
     return;
   }
-  let format: AnimFormat = 'gif', scale = 1, background: AnimExportOptions['background'] = 'transparent', repeat = 1, busy = false;
+  let format: AnimFormat = 'gif', scale = 1, resample = doc.resample, background: AnimExportOptions['background'] = 'transparent', repeat = 1, busy = false;
   const total = a.frames.reduce((t, f) => t + (f.ms ?? 1000 / a.fps), 0);
   const info = h('p', { class: 'dialog-msg' });
   const bgRow = h('div', { class: 'field wide' }, h('span', null, 'Background'),
@@ -368,7 +384,7 @@ export function animExportDialog() {
         seg([{ v: 'gif', label: 'GIF' }, { v: 'apng', label: 'Animated PNG' }, { v: 'mp4', label: 'MP4' }, { v: 'webm', label: 'WebM' }], format, (v) => { format = v; upd(); })),
       numField('Size', 100, (v) => { scale = v / 100; upd(); }, { unit: '%', min: 1, max: 400 }),
       bgRow, repeatF,
-      resampleField(doc.resample, (v) => { doc.resample = v; }),
+      resampleField(resample, (v) => { resample = v; }),
       info, progress,
       h('p', { class: 'dialog-note' }, 'Animated PNG keeps full colour and soft transparency (most browsers, Discord). MP4 plays everywhere; WebM is smaller for the web.'),
     ],
@@ -376,11 +392,11 @@ export function animExportDialog() {
       { label: 'Cancel' },
       {
         label: 'Export', primary: true, onClick: async () => {
-          if (busy) return false;
+          if (busy || tooBig(doc.width * scale, doc.height * scale) || !await effectsFit(doc, doc.width * scale, doc.height * scale)) return false;
           busy = true;
           progress.hidden = false;
           try {
-            const blob = await exportAnimation(doc, { format, scale, nearest: doc.resample === 'nearest', background, repeat, onProgress: (d, t) => { progress.value = d / t; } });
+            const blob = await exportAnimation(doc, { format, scale, nearest: resample === 'nearest', background, repeat, onProgress: (d, t) => { progress.value = d / t; } });
             const ext = ANIM_EXT[format];
             const ref = await saveBlob(blob, `${doc.name.replace(/\.[^.]+$/, '')}.${ext}`, null, { [ANIM_MIME[format]]: [`.${ext}`] });
             if (ref !== undefined) toast(`Exported ${format.toUpperCase()} (${(blob.size / 1024 / 1024).toFixed(2)} MB)`);
