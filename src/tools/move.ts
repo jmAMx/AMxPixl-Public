@@ -99,7 +99,7 @@ export function layerAt(x: number, y: number): PlacedLayer | null {
 class MoveTool implements Tool {
   id = 'move'; name = 'Move & Transform'; key = 'V'; icon = 'move' as const;
   private drag: Drag | null = null;
-  private wdrag: { layer: RasterLayer; i: number; moved: boolean } | null = null;
+  private wdrag: { layer: RasterLayer; i: number; moved: boolean; warp0: RasterLayer['warp'] } | null = null;
 
   get hint() {
     const m = app.opts.move.mode;
@@ -121,6 +121,8 @@ class MoveTool implements Tool {
 
   /** Moving the active 3D layer's light. */
   private lighting = false;
+  /** The light as it was when that started (for Escape). */
+  private light0: Model3D['light'] | null = null;
 
   /** The active 3D layer's light ring (see lightRing), with its layer and model; null without one. */
   private ring() {
@@ -312,6 +314,7 @@ class MoveTool implements Tool {
     if (this.mode === 'light3d') {
       if (!doc.activeRaster?.model) return;
       this.lighting = true;
+      this.light0 = doc.activeRaster.model.light;
       this.aimLight(p);
       return;
     }
@@ -319,7 +322,7 @@ class MoveTool implements Tool {
       const l = ensureWarp(this.mode === 'warp' ? 'mesh' : 'perspective');
       if (!l) return;
       const near = this.warpHandlesScreen(l).find((s) => Math.hypot(s.x - p.sx, s.y - p.sy) <= 8);
-      if (near) this.wdrag = { layer: l, i: near.i, moved: false };
+      if (near) this.wdrag = { layer: l, i: near.i, moved: false, warp0: l.warp };
       return;
     }
     let hit = this.hit(p);
@@ -474,6 +477,27 @@ class MoveTool implements Tool {
     if (!d || !d.moved) return;
     if (d.boxEdit) { app.doc!.commit('Adjust box'); return; }
     app.doc!.commit(d.kind === 'move' ? 'Move' : d.kind === 'scale' ? 'Scale' : 'Rotate');
+  }
+
+  /** Escape mid-drag: the layers (box, warp, 3D turn or light) go back to how they were when the drag started. */
+  cancel() {
+    clearSnapLines();
+    if (this.turn) setModel(this.turn.m);
+    if (this.lighting && this.light0) setModel({ light: this.light0 });
+    if (this.wdrag) this.wdrag.layer.warp = this.wdrag.warp0;
+    const d = this.drag;
+    if (d?.boxEdit) d.boxEdit.layer.box = d.boxEdit.box0;
+    else if (d) {
+      for (const t of d.targets) {
+        const l = t.layer;
+        l.t = t.t0;
+        if (l.mask && t.maskT0) l.mask.t = t.maskT0;
+        if (l.type === 'shape' && t.shape0) l.shape = t.shape0;
+        if (t.box0) l.box = t.box0;
+      }
+    }
+    this.turn = null; this.lighting = false; this.light0 = null; this.wdrag = null; this.drag = null;
+    app.doc?.touch('meta');
   }
 
   keydown(e: KeyboardEvent) {

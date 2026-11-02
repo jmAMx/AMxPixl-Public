@@ -87,6 +87,20 @@ async function offerRecovery() {
 // their thumbnails). Other open images redraw when they're switched to.
 onGpuRestored(() => app.doc?.touch('meta'));
 
+// Something that failed with nothing to catch it (opening, placing or pasting, say) says so instead of doing nothing.
+// A burst of the same failure shows once.
+let lastFailure = 0;
+const reportFailure = (err: unknown) => {
+  console.error(err);
+  const msg = err instanceof Error ? err.message : typeof err === 'string' ? err : '';
+  if (err instanceof DOMException && err.name === 'AbortError') return;
+  if (performance.now() - lastFailure < 3000) return;
+  lastFailure = performance.now();
+  toast(`Something went wrong${msg ? `: ${msg}` : '.'}`, 'error');
+};
+window.addEventListener('unhandledrejection', (e) => reportFailure(e.reason));
+window.addEventListener('error', (e) => { if (e.error) reportFailure(e.error); });
+
 // Every minute, copy documents that changed since the last pass (and still have unsaved work) to the recovery store.
 const changed = new Set<Doc>();
 app.on('change', ({ doc }) => changed.add(doc));
@@ -132,12 +146,21 @@ if (isDesktop) {
       const dirty = app.docs.filter((d) => d.dirty);
       if (dirty.length) {
         const what = dirty.length === 1 ? `"${dirty[0].name}" has` : `${dirty.length} images have`;
-        const r = await ask('Unsaved changes', `${what} unsaved changes. Close AMxPixl anyway?`, [
-          { id: 'cancel', label: 'Cancel', primary: true }, { id: 'close', label: 'Close without saving', danger: true },
+        const r = await ask('Unsaved changes', `${what} unsaved changes. Save before closing AMxPixl?`, [
+          { id: 'cancel', label: 'Cancel' }, { id: 'close', label: 'Close without saving', danger: true },
+          { id: 'save', label: dirty.length === 1 ? 'Save' : 'Save all', primary: true },
         ]);
-        if (r !== 'close') return;
-        // Choosing not to save is deliberate, so don't offer that work back next time.
-        await Promise.all(dirty.map((d) => clearRecovery(d).catch(() => {})));
+        if (r === 'save') {
+          // One at a time, each shown while it's saved (a new image asks where to go); cancelling one keeps the app open.
+          for (const d of dirty) {
+            if (!app.docs.includes(d) || !d.dirty) continue;
+            app.setDoc(d);
+            if (!(await A.saveDoc(d))) return;
+          }
+        } else if (r === 'close') {
+          // Choosing not to save is deliberate, so don't offer that work back next time.
+          await Promise.all(dirty.map((d) => clearRecovery(d).catch(() => {})));
+        } else return;
       }
       // A setting changed in the last moment (it's normally written 0.4 s later) is written before the window goes.
       await flushSettings().catch(() => {});

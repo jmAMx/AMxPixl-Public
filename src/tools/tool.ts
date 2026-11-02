@@ -32,6 +32,8 @@ export interface Tool {
   up?(p: PInfo): void;
   hover?(p: PInfo): void;
   keydown?(e: KeyboardEvent): boolean;
+  /** Escape while dragging on the canvas: put back whatever the drag changed (no undo step). */
+  cancel?(): void;
   /** Draws on-canvas guides in workspace CSS pixels. */
   overlay?(ctx: CanvasRenderingContext2D): void;
   /** Hide the system cursor (the tool draws its own). */

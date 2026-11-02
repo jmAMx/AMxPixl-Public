@@ -3,12 +3,21 @@ import type { BlendMode } from './types';
 
 /** Temporary full-size buffers for isolated groups, masks, clipping and styles, reused between frames. */
 const scratch: { c: HTMLCanvasElement; busy: boolean }[] = [];
+/** How many pixels of idle buffers of other sizes are kept (64 MB: a few full views' worth on a large screen). */
+const KEEP_PIXELS = 16e6;
 
 export function acquire(w: number, h: number): HTMLCanvasElement {
   let s = scratch.find((x) => !x.busy && x.c.width === w && x.c.height === h);
   if (!s) {
-    // Drop idle buffers of other sizes (the view was resized) before making a new one.
-    for (let i = scratch.length - 1; i >= 0; i--) if (!scratch[i].busy && (scratch[i].c.width !== w || scratch[i].c.height !== h)) scratch.splice(i, 1);
+    // Idle buffers of other sizes are kept for when that size comes back (the whole view and a painted part of it
+    // take turns), newest first, up to a budget, so memory doesn't pile up (an export's big ones go at once).
+    let kept = 0;
+    for (let i = scratch.length - 1; i >= 0; i--) {
+      const x = scratch[i];
+      if (x.busy || (x.c.width === w && x.c.height === h)) continue;
+      kept += x.c.width * x.c.height;
+      if (kept > KEEP_PIXELS) scratch.splice(i, 1);
+    }
     s = { c: newCanvas(w, h), busy: false };
     scratch.push(s);
   }

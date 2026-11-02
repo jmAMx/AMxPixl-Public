@@ -69,6 +69,12 @@ class RetouchTool implements Tool {
     this.stroke?.add({ x: p.x, y: p.y, pressure: p.pressure });
   }
 
+  cancel() {
+    if (symmetryUp()) return;
+    this.stroke?.cancel();
+    this.stroke = null;
+  }
+
   up() {
     if (symmetryUp()) return;
     if (!this.stroke) return;

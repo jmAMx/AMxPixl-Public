@@ -309,6 +309,7 @@ function onKey(e: KeyboardEvent) {
   if (isTyping(e.target)) return;
   const accel = accelOf(e);
   const mod = e.ctrlKey || e.metaKey;
+  if (e.key === 'Escape' && view.cancelDrag()) { e.preventDefault(); return; }
   if (!mod && app.doc && app.tool.keydown?.(e)) { e.preventDefault(); return; }
   // No commands mid-drag: undoing under a stroke, say, would mix the undone pixels back into it.
   if (view.dragging) { if (accelMap.has(accel)) e.preventDefault(); return; }

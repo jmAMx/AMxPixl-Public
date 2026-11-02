@@ -19,16 +19,29 @@ function store(list: RecentEntry[]) {
 /** Remembers a file that was opened or saved (moving it to the top). Browser handles go to IndexedDB. */
 export async function addRecent(ref: FileRef, thumb?: string) {
   let id: string;
+  const old = recentList();
   if (ref.path) id = `p:${ref.path.toLowerCase()}`;
   else if (ref.handle) {
-    id = `h:${ref.name}`;
+    // The same file keeps its entry; another file with the same name (in another folder) gets its own.
+    id = (await sameFileEntry(old, ref.handle)) ?? `h:${ref.name}:${Date.now().toString(36)}`;
     try { await idbPut('handles', id, ref.handle); } catch { return; }
   } else return;
-  const old = recentList();
   const prev = old.find((e) => e.id === id);
   const entry: RecentEntry = { id, name: ref.name, path: ref.path ?? undefined, time: Date.now(), thumb: thumb ?? prev?.thumb };
   store([entry, ...old.filter((e) => e.id !== id)]);
   for (const e of old.slice(MAX - 1)) if (e.id.startsWith('h:') && e.id !== id) idbDel('handles', e.id).catch(() => {});
+}
+
+/** The id of the browser entry already holding this very file, if any. */
+async function sameFileEntry(list: RecentEntry[], handle: FileSystemFileHandle): Promise<string | null> {
+  for (const e of list) {
+    if (!e.id.startsWith('h:')) continue;
+    try {
+      const h = await idbGet<FileSystemFileHandle>('handles', e.id);
+      if (h && (await h.isSameEntry(handle))) return e.id;
+    } catch { /* a handle that's gone */ }
+  }
+  return null;
 }
 
 export function removeRecent(id: string) {

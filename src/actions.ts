@@ -55,12 +55,28 @@ export function thumbOf(doc: Doc): string | undefined {
   } catch { return undefined; }
 }
 
+/** The open document saved at the same place as `ref` (same path, or the same browser file), if there is one. */
+async function openAlready(ref: Picked['ref']): Promise<Doc | null> {
+  const norm = (p: string) => p.replace(/\//g, '\\').toLowerCase();
+  for (const d of app.docs) {
+    const f = d.file;
+    if (!f) continue;
+    if (ref.path && f.path && norm(ref.path) === norm(f.path)) return d;
+    if (ref.handle && f.handle) {
+      try { if (await f.handle.isSameEntry(ref.handle)) return d; } catch { /* a handle that's gone */ }
+    }
+  }
+  return null;
+}
+
 export async function openFiles(files: Picked[]) {
   for (const { file, ref } of files) {
     try {
       const ext = extOf(file.name);
       let doc: Doc;
       if (ext === 'pixl') {
+        const open = await openAlready(ref);
+        if (open) { app.setDoc(open); toast(`${open.name} is already open.`); continue; }
         doc = await decodePixl(file, baseName(file.name));
         doc.name = file.name;
         doc.file = ref.path || ref.handle ? ref : null;
@@ -1328,9 +1344,19 @@ export async function loadLut(id = app.doc?.activeId) {
   }
 }
 
+/** A LUT layer from a .cube file: the file is picked first, so cancelling (or a file that won't read) adds nothing. */
 export async function newLut() {
-  newAdjustment('lut');
-  await loadLut();
+  const doc = need(); if (!doc) return;
+  const f = await pickText('.cube,.CUBE');
+  if (!f || !app.docs.includes(doc)) return;
+  try {
+    const p = parseCube(await f.text(), baseName(f.name));
+    doc.insertLayer({ id: newId(), type: 'adjust', name: `LUT: ${p.name}`, visible: true, opacity: 1, blend: 'normal',
+      adj: { ...defaultAdj('lut'), key: doc.addCanvas(p.canvas), name: p.name, size: p.size } as AdjParams });
+    doc.commit(`New ${ADJ_LABELS.lut} layer`);
+  } catch (e) {
+    toast(`Couldn't read ${f.name}: ${(e as Error).message}`, 'error');
+  }
 }
 
 // ---------- warp presets ----------

@@ -115,6 +115,12 @@ class PaintTool implements Tool {
     this.stroke?.add({ x: p.x, y: p.y, pressure: p.pressure });
   }
 
+  cancel() {
+    if (symmetryUp()) return;
+    this.stroke?.cancel();
+    this.stroke = null;
+  }
+
   up(p: PInfo) {
     if (symmetryUp()) return;
     if (!this.stroke) return;
@@ -248,6 +254,8 @@ class GradientTool implements Tool {
   }
 
   down(p: PInfo) { this.p0 = { x: p.x, y: p.y }; this.p1 = { ...this.p0 }; }
+
+  cancel() { this.p0 = this.p1 = null; view.requestOverlay(); }
 
   move(p: PInfo) {
     if (!this.p0) return;

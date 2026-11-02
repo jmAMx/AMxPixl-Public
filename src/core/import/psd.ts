@@ -70,6 +70,16 @@ function toCanvas(w: number, h: number, chans: Map<number, Uint8Array>, mode: nu
   if (w <= 0 || h <= 0) return c;
   const img = new ImageData(w, h);
   const d = img.data;
+  const n = w * h;
+  if (bytes === 1 && !float && (mode === 3 || mode === 1 || mode === 8)) {
+    // 8-bit RGB or greyscale, the usual case: channel bytes straight across, no per-pixel conversion.
+    const R = chans.get(0), G = mode === 3 ? chans.get(1) : R, B = mode === 3 ? chans.get(2) : R, A = chans.get(-1);
+    for (let i = 0, o = 0; i < n; i++, o += 4) {
+      d[o] = R ? R[i] : 0; d[o + 1] = G ? G[i] : 0; d[o + 2] = B ? B[i] : 0; d[o + 3] = A ? A[i] : 255;
+    }
+    ctx2d(c).putImageData(img, 0, 0);
+    return c;
+  }
   const lin = float; // 32-bit Photoshop files are linear light
   const g = (id: number, i: number, linear = lin) => { const ch = chans.get(id); return ch ? sampleTo8(ch, i * bytes, bytes, float, linear) : -1; };
   for (let i = 0; i < w * h; i++) {

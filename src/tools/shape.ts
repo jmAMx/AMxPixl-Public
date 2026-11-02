@@ -68,6 +68,13 @@ class ShapeTool implements Tool {
     app.doc!.touch('meta');
   }
 
+  /** Escape: the shape being drawn is dropped. */
+  cancel() {
+    if (!this.drawing) return;
+    this.drawing = null;
+    app.doc!.revert();
+  }
+
   up() {
     const d = this.drawing;
     this.drawing = null;

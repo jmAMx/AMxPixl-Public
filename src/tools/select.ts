@@ -62,6 +62,14 @@ abstract class SelectTool implements Tool {
     doc.commit(this.mode === 'replace' ? 'Select' : this.mode === 'add' ? 'Add to selection' : 'Subtract from selection');
   }
 
+  /** Escape: the selection being drawn is dropped and the one before stays. */
+  cancel() {
+    this.op = null;
+    this.moved = false;
+    clearSnapLines();
+    view.requestOverlay();
+  }
+
   overlay(ctx: CanvasRenderingContext2D) {
     if (!this.op) return;
     const d = app.doc!;

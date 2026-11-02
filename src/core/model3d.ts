@@ -2074,7 +2074,8 @@ export function renderModel(src: HTMLCanvasElement, m: Model3D, key: string, sca
   const s = 2 ** Math.ceil(Math.log2(Math.max(0.125, Math.min(4, scale))));
   const ck = `${key}|${src.width}x${src.height}|${JSON.stringify(m)}|${s}|${depth}|${!!texture}`;
   const hit = outCache.get(ck);
-  if (hit) return hit;
+  // (Moved to the back, so the ones in use are the last to go.)
+  if (hit) { outCache.delete(ck); outCache.set(ck, hit); return hit; }
   let shadow: ModelRender['shadow'];
   if (!depth && m.shadow?.on) {
     // (The shadow only depends on the shape, its turn, the light's place and the shadow settings: changing the
@@ -2088,13 +2089,14 @@ export function renderModel(src: HTMLCanvasElement, m: Model3D, key: string, sca
       c.width = wall.w; c.height = wall.h;
       c.getContext('2d')!.drawImage(engine.canvas, 0, 0, wall.w, wall.h, 0, 0, wall.w, wall.h);
       shadow = { canvas: c, box: wall.box };
-      if (wallCache.size > 24) wallCache.clear();
+      if (wallCache.size > 24) wallCache.delete(wallCache.keys().next().value!);
       wallCache.set(wk, shadow);
     }
   }
   const r = engine.render(src, m, key, s, depth, texture);
   if (!r) return null;
-  if (outCache.size > 24) outCache.clear();
+  // Full: the oldest goes (rather than all of them, which made every 3D layer render again at once).
+  if (outCache.size > 24) outCache.delete(outCache.keys().next().value!);
   const c = document.createElement('canvas');
   c.width = r.canvas.width; c.height = r.canvas.height;
   c.getContext('2d')!.drawImage(r.canvas, 0, 0);

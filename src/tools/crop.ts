@@ -118,6 +118,13 @@ class CropTool implements Tool {
     view.requestOverlay();
   }
 
+  /** Escape mid-drag: the box goes back to how it was (Escape otherwise resets it to the whole image). */
+  cancel() {
+    const d = this.drag;
+    this.drag = null;
+    if (d && d.part !== 'new') { this.rect = d.r0; this.updateLabel(); view.requestOverlay(); } else this.reset();
+  }
+
   up() {
     this.drag = null;
     if (this.rect && (this.rect.w < 1 || this.rect.h < 1)) this.reset();

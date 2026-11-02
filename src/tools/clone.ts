@@ -71,6 +71,11 @@ class CloneTool implements Tool {
     this.stroke.add({ x: p.x, y: p.y, pressure: p.pressure });
   }
 
+  cancel() {
+    this.stroke?.cancel();
+    this.stroke = null;
+  }
+
   move(p: PInfo) { this.stroke?.add({ x: p.x, y: p.y, pressure: p.pressure }); }
 
   up() {

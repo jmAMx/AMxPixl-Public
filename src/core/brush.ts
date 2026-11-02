@@ -105,13 +105,15 @@ function putBack(ctx: CanvasRenderingContext2D, res: HTMLCanvasElement, R: Rect,
  * Fills transparent holes in `c` smoothly from the pixels around them ("pull-push"): halve it repeatedly (canvas
  * averaging weights each pixel by its alpha), then from the smallest level up, lay each level over the enlarged
  * one beneath it. Known pixels stay as they are; a hole takes a smooth blend of its edges at every scale.
+ * The levels are kept and reused between calls (the healing brush runs this twice for every move, and making new
+ * canvases each time was most of its cost): the result stays valid until the next call with the same `slot`.
  */
-export function fillHoles(c: HTMLCanvasElement): HTMLCanvasElement {
+export function fillHoles(c: HTMLCanvasElement, slot = 0): HTMLCanvasElement {
   const levels = [c];
   while (levels.length < 14) {
     const p = levels[levels.length - 1];
     if (p.width <= 1 && p.height <= 1) break;
-    const n = newCanvas(Math.ceil(p.width / 2), Math.ceil(p.height / 2));
+    const n = pooled(`${slot}d${levels.length}`, Math.ceil(p.width / 2), Math.ceil(p.height / 2));
     const x = ctx2d(n);
     x.imageSmoothingEnabled = true;
     x.imageSmoothingQuality = 'medium';
@@ -120,15 +122,27 @@ export function fillHoles(c: HTMLCanvasElement): HTMLCanvasElement {
   }
   let cur = levels[levels.length - 1];
   for (let i = levels.length - 2; i >= 0; i--) {
-    const out = cloneCanvas(levels[i]);
+    const out = pooled(`${slot}u${i}`, levels[i].width, levels[i].height);
     const x = ctx2d(out);
+    x.drawImage(levels[i], 0, 0);
     x.globalCompositeOperation = 'destination-over';
     x.imageSmoothingEnabled = true;
     x.imageSmoothingQuality = 'high';
     x.drawImage(cur, 0, 0, out.width, out.height);
+    x.globalCompositeOperation = 'source-over';
     cur = out;
   }
   return cur;
+}
+
+const holeLevels = new Map<string, HTMLCanvasElement>();
+
+/** A kept canvas for fillHoles, sized w × h and cleared. */
+function pooled(key: string, w: number, h: number): HTMLCanvasElement {
+  let c = holeLevels.get(key);
+  if (!c) { c = newCanvas(w, h); holeLevels.set(key, c); return c; }
+  if (c.width !== w || c.height !== h) { c.width = w; c.height = h; } else ctx2d(c).clearRect(0, 0, w, h);
+  return c;
 }
 
 /**
@@ -226,14 +240,14 @@ export class Stroke {
     const ringGl = glops.ramp(spread, 0.004, 0.02, [1, 1, 1]);
     const ring = ringGl ? cropCanvas(ringGl, { x: 0, y: 0, w: R.w, h: R.h }) : spread;
     // Keep the ring, cut the painted area out, then fill the hole smoothly in from the ring.
-    const around = (c: HTMLCanvasElement) => {
+    const around = (c: HTMLCanvasElement, slot: number) => {
       const x = ctx2d(c);
       x.setTransform(1, 0, 0, 1, 0, 0);
       x.globalCompositeOperation = 'destination-in';
       x.drawImage(ring, 0, 0);
       x.globalCompositeOperation = 'destination-out';
       x.drawImage(cov, 0, 0);
-      return fillHoles(c);
+      return fillHoles(c, slot);
     };
     const { dx, dy } = this.o.clone!;
     const C = cropCanvas(this.src, R);
@@ -252,7 +266,7 @@ export class Stroke {
       S = newCanvas(R.w, R.h);
       ctx2d(S).drawImage(this.backup, -(R.x + b.x - a.x), -(R.y + b.y - a.y));
     }
-    const res = glops.heal(C, around(S), around(D), cov, this.o.opacity);
+    const res = glops.heal(C, around(S, 0), around(D, 1), cov, this.o.opacity);
     if (!res) return;
     putBack(ctx2d(this.src), res, R, rr);
   }
@@ -452,6 +466,21 @@ export class Stroke {
     if (this.o.heal) this.healRegion(rr);
     this.dirty = union(this.dirty, rr);
     this.doc.markPixels(this.layer.key, true, rr);
+  }
+
+  /** Escape: the layer goes back to how it was before the stroke, with no undo step. */
+  cancel() {
+    const r = this.dirty;
+    if (r) {
+      const s = ctx2d(this.src);
+      s.save();
+      s.clearRect(r.x, r.y, r.w, r.h);
+      blit(s, this.backup, r);
+      s.restore();
+      this.doc.markPixels(this.layer.key, true, r);
+    }
+    // (Also undoes the layer growing to fit the stroke, if it did.)
+    this.doc.revert();
   }
 
   /** Lifts the brush: the next point starts a new line in the same stroke (one undo step). */

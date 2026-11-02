@@ -5,6 +5,7 @@ import { dirtyPad, renderDoc, sampleDoc } from '../core/render';
 import { rgbToHex } from './color';
 import { isDepth } from '../core/types';
 import type { Doc } from '../core/document';
+import { pixelVersion } from '../core/bounds';
 import type { PInfo, Tool } from '../tools/tool';
 import { addGuide } from '../actions';
 import { h } from './dom';
@@ -20,6 +21,8 @@ class CanvasView {
   readonly canvas = h('canvas', { class: 'view' });
   private composite = document.createElement('canvas');
   private qmTint = document.createElement('canvas');
+  /** What qmTint was last drawn for (see paint). */
+  private qmSig = '';
   private onionCanvas = document.createElement('canvas');
   private partialCanvas = document.createElement('canvas');
   /** The view plus a margin of the image around it, when zoomed in on part of the image (see withMargin). */
@@ -241,7 +244,8 @@ class CanvasView {
         // Only part of the image changed: redraw that part (with a margin for effects that reach across pixels)
         // into a scratch canvas and copy just the changed area into place.
         const pad = dirtyPad(d);
-        if (!Number.isFinite(pad) || (d.anim && app.prefs.onion)) full = true;
+        // (The onion skin is kept: it shows only layers hidden in this frame, which painting can't touch.)
+        if (!Number.isFinite(pad)) full = true;
         else {
           const m: Mat = [z * k, 0, 0, z * k, (dx - vr.x) * k, (dy - vr.y) * k];
           const bounds = { x: 0, y: 0, w: this.composite.width, h: this.composite.height };
@@ -348,17 +352,22 @@ class CanvasView {
     // Quick Mask: everything not selected is tinted red, like Photoshop.
     const qm = d.quickMask ? d.pool.get(d.quickMask) : null;
     if (qm) {
-      if (this.qmTint.width !== this.canvas.width || this.qmTint.height !== this.canvas.height) { this.qmTint.width = this.canvas.width; this.qmTint.height = this.canvas.height; }
-      const t = ctx2d(this.qmTint);
-      t.setTransform(1, 0, 0, 1, 0, 0);
-      t.globalCompositeOperation = 'copy';
-      t.fillStyle = 'rgba(255, 30, 30, 0.5)';
-      t.fillRect(docR.x, docR.y, docR.w, docR.h);
-      t.globalCompositeOperation = 'destination-out';
-      t.setTransform(z, 0, 0, z, dx, dy);
-      t.drawImage(qm, 0, 0);
+      // Made again only when the mask, the zoom, the scroll or the view's size changes (not for every pointer move).
+      const sig = `${d.quickMask}:${pixelVersion(d.quickMask!)}:${z}:${dx}:${dy}:${this.canvas.width}x${this.canvas.height}`;
+      if (sig !== this.qmSig) {
+        this.qmSig = sig;
+        if (this.qmTint.width !== this.canvas.width || this.qmTint.height !== this.canvas.height) { this.qmTint.width = this.canvas.width; this.qmTint.height = this.canvas.height; }
+        const t = ctx2d(this.qmTint);
+        t.setTransform(1, 0, 0, 1, 0, 0);
+        t.globalCompositeOperation = 'copy';
+        t.fillStyle = 'rgba(255, 30, 30, 0.5)';
+        t.fillRect(docR.x, docR.y, docR.w, docR.h);
+        t.globalCompositeOperation = 'destination-out';
+        t.setTransform(z, 0, 0, z, dx, dy);
+        t.drawImage(qm, 0, 0);
+      }
       ctx.drawImage(this.qmTint, 0, 0);
-    }
+    } else this.qmSig = '';
 
     // Selection outline ("marching ants").
     const outline = d.selectionOutline();
@@ -634,6 +643,24 @@ class CanvasView {
     this.lazy = this.lazyRadius ? { sx: p.sx, sy: p.sy } : null;
     app.tool.down?.(p);
     this.requestOverlay();
+  }
+
+  /**
+   * Escape while dragging: the tool puts back what the drag changed and the drag ends here (letting go of the button
+   * afterwards does nothing). False if nothing is being dragged, or the tool can't take it back.
+   */
+  cancelDrag(): boolean {
+    const t = this.activeTool;
+    if (!this.down || !t?.cancel) return false;
+    t.cancel();
+    this.down = false;
+    this.activeTool = null;
+    this.lazy = null;
+    try { this.canvas.releasePointerCapture(this.downId); } catch { /* already let go */ }
+    this.restoreTool();
+    this.updateCursor();
+    this.requestOverlay();
+    return true;
   }
 
   /** Back to the tool in use before the pen's eraser end was. */
