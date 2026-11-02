@@ -294,6 +294,40 @@ function toolButton(t: Tool, group: string[] | undefined) {
 
 // ---------- the toolbox ----------
 
+/**
+ * The edge between the tools and the tool options below them (with the options in the side bar): dragging it makes
+ * the tools shorter (they scroll) or taller, and the options take the rest. It lights up on hover and while dragging;
+ * the height is kept, and double-click lets the tools take the room they need again.
+ */
+function sideGrip(grid: HTMLElement) {
+  const grip = h('div', { class: 'dock-grip side-grip', title: 'Drag to give the tools or their options more room · double-click to reset' });
+  grip.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    try { grip.setPointerCapture(e.pointerId); } catch { /* pointer already gone */ }
+    grip.classList.add('drag');
+    const y0 = e.clientY, h0 = grid.getBoundingClientRect().height;
+    // At least a row of tools; at most all of them.
+    const most = grid.scrollHeight, least = Math.min(most, 40);
+    let hNow = h0;
+    const move = (ev: PointerEvent) => { hNow = Math.round(Math.max(least, Math.min(most, h0 + ev.clientY - y0))); grid.style.height = `${hNow}px`; };
+    const up = () => {
+      grip.classList.remove('drag');
+      grip.removeEventListener('pointermove', move);
+      grip.removeEventListener('pointerup', up);
+      grip.removeEventListener('pointercancel', up);
+      grip.removeEventListener('lostpointercapture', up);
+      if (hNow !== h0) app.setPrefs({ toolGridH: hNow >= most ? undefined : hNow });
+    };
+    grip.addEventListener('pointermove', move);
+    grip.addEventListener('pointerup', up);
+    grip.addEventListener('pointercancel', up);
+    grip.addEventListener('lostpointercapture', up);
+  });
+  grip.addEventListener('dblclick', () => app.setPrefs({ toolGridH: undefined }));
+  return grip;
+}
+
 export function toolbox() {
   const el = h('nav', { class: 'toolbox', 'aria-label': 'Tools' });
   const grid = h('div', { class: 'tool-grid' });
@@ -333,7 +367,17 @@ export function toolbox() {
   window.addEventListener('keydown', (e) => { if (editing && e.key === 'Escape' && !view.dragging) { e.preventDefault(); setEditing(false); } });
   syncMore();
   const side = h('section', { class: 'side-options' }, sideOptions);
-  const relayout = () => { side.hidden = app.prefs.optionsDock !== 'side'; layoutToolbox(el, clampCols(app.prefs.toolCols)); applyToolOrder(); render(); };
+  const edge = sideGrip(grid);
+  const filler = h('div', { class: 'grow' });
+  const relayout = () => {
+    const sided = app.prefs.optionsDock === 'side';
+    side.hidden = edge.hidden = !sided;
+    filler.hidden = sided;
+    el.classList.toggle('side', sided);
+    // With the options beside it, the tools can be given a height of their own (dragging the edge between them).
+    grid.style.height = sided && app.prefs.toolGridH ? `${app.prefs.toolGridH}px` : '';
+    layoutToolbox(el, clampCols(app.prefs.toolCols)); applyToolOrder(); render();
+  };
   app.on('prefs', relayout);
   app.on('tool', () => { recent.splice(0, recent.length, app.tool.id, ...recent.filter((id) => id !== app.tool.id)); render(); });
   relayout();
@@ -345,7 +389,7 @@ export function toolbox() {
   bg.addEventListener('click', showColor);
   app.on('colors', syncColors);
   syncColors();
-  el.append(h('div', { class: 'toolbox-head' }, more), grid, side, h('div', { class: 'grow' }),
+  el.append(h('div', { class: 'toolbox-head' }, more), grid, edge, side, filler,
     h('div', { class: 'swatch-stack' }, bg, fg),
     h('div', { class: 'swatch-btns' },
       h('button', { class: 'mini', type: 'button', title: 'Default colours (D)', onclick: () => { app.setColor('fg', '#000000'); app.setColor('bg', '#ffffff'); } }, icon('resetColors')),

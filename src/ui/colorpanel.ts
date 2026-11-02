@@ -121,7 +121,7 @@ export function colorPanel() {
 
   /**
    * Fitting a panel sized by hand. Shorter than it'd be on its own, it gives up room bit by bit: the square shrinks,
-   * then the swatches and the RGB row slide away, then the square shrinks some more, and below that it turns into one
+   * then the swatches shrink and the RGB row slides away, then the square shrinks some more, and below that it turns into one
    * row (the colours, the square and an upright hue strip) that keeps shrinking, to about a quarter of its own height.
    * Taller, the square grows.
    */
@@ -135,21 +135,30 @@ export function colorPanel() {
       el.style.marginTop = room === null ? '' : `${Math.min(GAP, room)}px`;
     };
     let svH = SV, compact = false;
-    if (!sized) { collapse(recent, null); collapse(rgbRow, null); }
+    // The swatches: two rows of nine squares as wide as the panel lets them be, shrinking (not cut off) when short,
+    // until all of them fit in one row across it.
+    const swatch = (s: number | null, cols = 9) => { recent.style.setProperty('--sw', s === null ? '' : `${s}px`); recent.style.setProperty('--swc', String(cols)); };
+    const two = (s: number) => s * 2 + 4;
+    if (!sized) { swatch(null); collapse(rgbRow, null); }
     else {
-      const H = root.clientHeight, hueH = 12;
+      const H = root.clientHeight, hueH = 12, W = root.clientWidth - 20;
       if (!root.classList.contains('compact')) tgtH = tgtRow.offsetHeight || tgtH;
-      // Room for the square, the RGB row and the swatches (those two with the gap above them).
+      const s0 = (W - 8 * 4) / 9, s1 = Math.max(8, Math.floor((W - 17 * 4) / 18));
+      // Room for the square, the swatches and the RGB row (those two with the gap above them).
       const rest = H - 18 - tgtH - GAP - GAP - hueH;
-      if (rest < SV_MIN) compact = true;
+      if (rest < SV_MIN + GAP + s1) compact = true;
       else {
-        let sw = recent.scrollHeight + GAP, rgb = rgbRow.scrollHeight + GAP, over = SV + sw + rgb - rest;
+        let sw = GAP + two(s0), rgb = rgbRow.scrollHeight + GAP, over = SV + sw + rgb - rest;
         const cut = (have: number, floor: number) => { const c = Math.max(0, Math.min(over, have - floor)); over -= c; return have - c; };
         if (over <= 0) svH = Math.min(SV_MAX, SV - over);
-        else { svH = cut(SV, SV_MID); sw = cut(sw, 0); rgb = cut(rgb, 0); svH = cut(svH, SV_MIN); }
-        collapse(recent, sw); collapse(rgbRow, rgb);
+        else { svH = cut(SV, SV_MID); sw = cut(sw, GAP + s1); rgb = cut(rgb, 0); svH = cut(svH, SV_MIN); }
+        const room = sw - GAP;
+        if (room >= two(s0)) swatch(null);
+        else if (room >= two(s1)) swatch((room - 4) / 2);
+        else { swatch(s1, 18); svH += room - s1; } // one row: the room it doesn't need goes to the square
+        collapse(rgbRow, rgb);
       }
-      if (compact) { svH = Math.max(16, H - 12); collapse(recent, null); collapse(rgbRow, null); }
+      if (compact) { svH = Math.max(16, H - 12); swatch(null); collapse(rgbRow, null); }
     }
     root.classList.toggle('compact', compact);
     sv.style.height = `${svH}px`;

@@ -29,6 +29,8 @@ export interface Prefs {
   toolOrder?: string[];
   /** Heights (CSS px) of dock panels sized by dragging the edge between them; the others size themselves. */
   panelHeights?: Record<string, number>;
+  /** The tools' height in the toolbox when the tool options are beside them (dragged); unset = all the tools. */
+  toolGridH?: number;
   /** Readouts in the status bar (View › Status Bar); missing in settings saved before they existed. */
   meters?: Meter[];
   /** Drawing tablet settings (Edit › Pen Tablet), shared by every painting tool. */

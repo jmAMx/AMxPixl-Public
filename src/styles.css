@@ -264,6 +264,11 @@ input[type="range"]:focus-visible::-webkit-slider-thumb { background: var(--acce
 
 /* Tool options shown in the sidebar under the tools. */
 .side-options { align-self: stretch; margin: 10px 0 0; padding: 8px 8px 4px; border-top: 1px solid var(--border); flex: none; }
+/* Options in the side bar: the tools keep their height (or the one dragged), the options take the rest and scroll. */
+.toolbox.side { overflow: hidden; }
+.toolbox.side .tool-grid { overflow-y: auto; overflow-x: hidden; scrollbar-width: none; min-height: 0; }
+.toolbox.side .side-options { flex: 1 1 0; min-height: 60px; overflow-y: auto; margin-top: 4px; }
+.toolbox .side-grip { align-self: stretch; margin: 3px 0 -3px; }
 .opt-body.side { flex-direction: column; align-items: stretch; gap: 8px; }
 .opt-head { display: flex; align-items: center; gap: 6px; }
 .opt-head .opt-tool { border-right: none; padding-right: 0; }
@@ -442,7 +447,7 @@ input[type="range"]:focus-visible::-webkit-slider-thumb { background: var(--acce
 .rgb-row .field { gap: 3px; }
 .rgb-row input { width: 100%; }
 .hex { font-variant-numeric: tabular-nums; }
-.swatches { display: grid; grid-template-columns: repeat(9, 1fr); gap: 4px; }
+.swatches { display: grid; grid-template-columns: repeat(var(--swc, 9), var(--sw, 1fr)); gap: 4px; justify-content: center; }
 .swatch { aspect-ratio: 1; border-radius: 3px; border: 1px solid var(--border-strong); cursor: pointer; padding: 0; }
 .swatch:hover { outline: 2px solid var(--accent); outline-offset: 1px; }
 
