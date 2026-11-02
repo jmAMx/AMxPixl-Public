@@ -139,14 +139,19 @@ class App {
   }
 
   addProject(p: Project) {
-    for (const d of p.docs) d.onChange = (doc, kind) => this.emit('change', { doc, kind });
+    for (const d of p.docs) this.watch(d);
+    // Undo or redo moved, added or removed artboards: show the result.
+    p.onLayout = () => { for (const d of p.docs) this.watch(d); this.emit('docs'); };
     this.projects.push(p);
     this.setDoc(p.active);
   }
 
-  /** Adds an image to a file as another artboard, at (x, y) among the others. */
+  /** Changes to an image are reported as the app's 'change' event. */
+  watch(d: Doc) { d.onChange = (doc, kind) => this.emit('change', { doc, kind }); }
+
+  /** Adds an image to a file as another artboard, at (x, y) among the others. (Not an undo step by itself.) */
   addArtboard(p: Project, d: Doc, x: number, y: number) {
-    d.onChange = (doc, kind) => this.emit('change', { doc, kind });
+    this.watch(d);
     p.add(d, x, y);
     this.emit('docs');
   }
@@ -163,7 +168,7 @@ class App {
     (document.activeElement as HTMLElement | null)?.blur?.();
     this.tool?.deactivate?.();
     const p = d ? this.projectOf(d) : null;
-    if (p && d) p.active = d;
+    if (p && d) p.setActive(d);
     this.project = p;
     this.emit('docs');
     this.tool?.activate?.();

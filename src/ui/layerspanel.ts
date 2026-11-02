@@ -1,8 +1,9 @@
 import { app } from '../app';
 import {
   addMask, applyLook, applyMask, clearStyles, deleteLayer, deleteMask, duplicateLayer, groupLayer, invertMask, lookSourceLayers, mergeDown, setLayersVisible, trimLayers,
-  moveLayer, newAdjustment, newEffect, newGroup, newLayer, newLut, rasterizeLayer, selectLayerShape, setLayerProp, setMaskProp, toggleClip, ungroup,
+  moveLayer, newAdjustment, newEffect, newGroup, newLayer, newLut, rasterizeLayer, renameArtboard, selectLayerShape, setLayerProp, setMaskProp, toggleClip, ungroup,
 } from '../actions';
+import type { Doc } from '../core/document';
 import { BUILTIN_LOOKS, savedLooks } from '../core/looks';
 import { hasStyles } from '../core/styles';
 import { manageLooksDialog, saveLookDialog } from './dialogs';
@@ -305,13 +306,40 @@ export function layersPanel() {
     return out;
   };
 
+  /**
+   * With several artboards, each is a section: its name (click to work on it, double-click to rename), and under the
+   * one worked on, its layers. The last-made artboard is at the top, like layers.
+   */
+  const boardRow = (d: Doc, on: boolean): HTMLElement => {
+    const name = h('span', { class: 'layer-name', title: 'Double-click to rename' }, d.name);
+    name.addEventListener('dblclick', (e) => {
+      e.stopPropagation();
+      const inp = h('input', { class: 'rename', type: 'text', value: d.name, spellcheck: false });
+      const done = (save: boolean) => { if (save) renameArtboard(d, inp.value); build(); };
+      inp.addEventListener('keydown', (ev) => { ev.stopPropagation(); if (ev.key === 'Enter') done(true); if (ev.key === 'Escape') done(false); });
+      inp.addEventListener('blur', () => done(true));
+      name.replaceWith(inp);
+      inp.focus(); inp.select();
+    });
+    return h('div', {
+      class: 'layer-row board-row' + (on ? ' on' : ''), role: 'treeitem', 'aria-expanded': String(on), title: `${d.width} × ${d.height} px`,
+      onclick: () => { if (!on) app.setDoc(d); },
+    }, h('span', { class: 'chev-space' }, icon(on ? 'chevron' : 'chevronR')), h('span', { class: 'board-icon' }, icon('artboard')), name,
+    h('span', { class: 'layer-badge' }, `${d.width} × ${d.height}`));
+  };
+
   const build = () => {
     const doc = app.doc;
     el.classList.toggle('disabled', !doc);
     thumbs.clear();
     syncs.length = 0;
     if (!doc) { list.replaceChildren(h('div', { class: 'empty-note' }, 'No image open')); return; }
-    list.replaceChildren(...[...doc.layers].reverse().flatMap((l) => row(l, 0)));
+    const p = app.project;
+    if (p && p.boards.length > 1) {
+      list.replaceChildren(...[...p.boards].reverse().flatMap((b) => b.doc === doc
+        ? [boardRow(b.doc, true), ...[...doc.layers].reverse().flatMap((l) => row(l, 1))]
+        : [boardRow(b.doc, false)]));
+    } else list.replaceChildren(...[...doc.layers].reverse().flatMap((l) => row(l, 0)));
     const a = doc.active;
     blend.replaceChildren(...[
       ...(a?.type === 'group' ? [h('option', { value: 'pass-through' }, 'Pass Through')] : []),
@@ -327,7 +355,8 @@ export function layersPanel() {
     if (!d) return '';
     const s = (ls: Layer[]): unknown => ls.map((l) => [l.id, l.name, l.blend, l.type, !!l.clip, l.mask ? [l.mask.key, l.mask.enabled] : 0,
       hasStyles(l.styles), !!l.blendIf?.on, l.type === 'raster' && !!l.model, l.type === 'raster' && !!l.depth, (l.type === 'raster' && !!l.warp) || ((l.type === 'text' || l.type === 'shape') && !!l.envelope), l.type === 'group' ? [l.open, s(l.children)] : 0]);
-    return JSON.stringify([d.activeId, d.alsoSelected, d.maskEdit, s(d.layers)]);
+    const boards = (app.project?.boards ?? []).map((b) => [b.doc.name, b.doc.width, b.doc.height]);
+    return JSON.stringify([d.activeId, d.alsoSelected, d.maskEdit, s(d.layers), boards]);
   };
 
   /** What the rows show without a rebuild, and which doesn't change the thumbnails: visibility and opacity. */
@@ -351,7 +380,8 @@ export function layersPanel() {
   };
 
   app.on('docs', () => update('docs'));
-  app.on('change', ({ doc, kind }) => { if (doc === app.doc) update(kind); });
+  // (Renaming or resizing another artboard of the file changes its row.)
+  app.on('change', ({ doc, kind }) => { if (doc === app.doc || app.project?.has(doc)) update(kind); });
   build();
   return el;
 }

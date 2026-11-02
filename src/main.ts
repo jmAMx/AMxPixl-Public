@@ -1,6 +1,7 @@
 import './styles.css';
 import { app } from './app';
 import * as A from './actions';
+import { artboardTool } from './tools/artboard';
 import { cloneTool, healTool } from './tools/clone';
 import { cropTool } from './tools/crop';
 import { moveTool } from './tools/move';
@@ -21,7 +22,7 @@ import { updateDialog } from './ui/dialogs';
 import { mountShell } from './ui/shell';
 import { ask, toast } from './ui/widgets';
 
-app.tools = [moveTool, rectSelectTool, ellipseSelectTool, lassoTool, wandTool, cropTool, pickerTool, brushTool, eraserTool, cloneTool, healTool, dodgeTool, burnTool, blurTool, sharpenTool, smudgeTool, gradientTool, fillTool, penTool, textTool, shapeTool, handTool, zoomTool];
+app.tools = [moveTool, artboardTool, rectSelectTool, ellipseSelectTool, lassoTool, wandTool, cropTool, pickerTool, brushTool, eraserTool, cloneTool, healTool, dodgeTool, burnTool, blurTool, sharpenTool, smudgeTool, gradientTool, fillTool, penTool, textTool, shapeTool, handTool, zoomTool];
 app.tool = brushTool;
 app.applyPrefs();
 document.title = `AMxPixl ${__APP_VERSION__}`;
@@ -85,7 +86,7 @@ async function offerRecovery() {
 
 // After a graphics reset, draw again what was drawn without the graphics card (adjustment, effect and 3D layers, and
 // their thumbnails). Other open images redraw when they're switched to.
-onGpuRestored(() => app.doc?.touch('meta'));
+onGpuRestored(() => { for (const d of app.project?.docs ?? []) d.touch('meta'); });
 
 // Something that failed with nothing to catch it (opening, placing or pasting, say) says so instead of doing nothing.
 // A burst of the same failure shows once.

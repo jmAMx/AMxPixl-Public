@@ -145,7 +145,8 @@ class CropTool implements Tool {
     if (rr.x === 0 && rr.y === 0 && rr.w === app.doc.width && rr.h === app.doc.height) return;
     cropTo(rr);
     this.reset();
-    view.fit();
+    // (Among other artboards the view stays: the cropped one stays where it was.)
+    if ((app.project?.boards.length ?? 1) < 2) view.fit();
   }
 
   overlay(ctx: CanvasRenderingContext2D) {

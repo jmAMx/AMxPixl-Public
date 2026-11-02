@@ -84,7 +84,7 @@ async function pngOf(c: HTMLCanvasElement): Promise<Blob> {
 }
 
 /** Every pixel buffer a snapshot's layers use: raster layers anywhere in the tree, masks, LUTs and 3D textures. */
-function layerKeys(meta: Meta): string[] {
+export function layerKeys(meta: Meta): string[] {
   return [...new Set(flatLayers(meta.layers).flatMap((l) => [
     l.type === 'raster' ? l.key : null, l.mask?.key ?? null, l.type === 'adjust' && l.adj.kind === 'lut' ? l.adj.key : null,
     l.type === 'raster' ? l.model?.texture?.key ?? null : null,

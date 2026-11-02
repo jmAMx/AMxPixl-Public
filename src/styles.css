@@ -150,6 +150,11 @@ html[data-theme="dark"] .mono.for-dark, html[data-theme="light"] .mono.for-light
 .opt-note { color: var(--text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .opt-value { color: var(--text-dim); font-variant-numeric: tabular-nums; }
 .opt-sep { width: 1px; height: 20px; background: var(--border); }
+.opt-text { width: 150px; }
+.board-row { font-weight: 600; cursor: pointer; }
+.board-row.on { color: var(--accent); }
+.board-row .board-icon { display: inline-flex; width: 18px; justify-content: center; opacity: .8; }
+.board-row .layer-badge { color: var(--text-dim); font-weight: 400; }
 .font-select { width: 170px; }
 .chip-swatch { width: 12px; height: 12px; border-radius: 2px; border: 1px solid var(--border-strong); display: inline-block; }
 

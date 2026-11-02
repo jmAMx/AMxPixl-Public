@@ -11,8 +11,14 @@ import { isPlaced } from './types';
  * `after` is captured lazily the first time the step is undone, which halves undo memory.
  */
 export interface PixelDiff { key: string; rect: Rect; before: HTMLCanvasElement; after: HTMLCanvasElement | null }
-/** One undo step, made on the artboard `doc`. */
-interface Entry { doc: Doc; label: string; before: Meta; after: Meta; pixels: PixelDiff[]; bytes: number; merge?: { key: string; time: number } }
+/**
+ * One undo step, made on the artboard `doc`. `layout` is set when the step also changed the file's artboards (added,
+ * moved, renamed or removed one): what they were before and after, as the file records it (see project.ts).
+ */
+interface Entry {
+  doc: Doc; label: string; before: Meta; after: Meta; pixels: PixelDiff[]; bytes: number; merge?: { key: string; time: number };
+  layout?: { before: unknown; after: unknown };
+}
 
 /**
  * Undo history, shared by the artboards of one file (see project.ts): steps undo in the order they were made, whichever
@@ -22,6 +28,8 @@ export class History {
   entries: Entry[] = [];
   index = 0;
   savedIndex = 0;
+  /** Puts the file's artboards back as a step left them (set by the file). */
+  setLayout: (layout: unknown) => void = () => {};
 }
 
 /** Steps with the same merge key this close together become one (holding an arrow key to nudge, say). */
@@ -212,13 +220,13 @@ export class Doc {
    * Records everything changed since the last commit as one undoable step. With `mergeKey`, a step following one
    * with the same key within a second (and no pixels, nothing to redo, not just saved) is folded into it instead.
    */
-  commit(label: string, pixels: PixelDiff[] = [], mergeKey?: string) {
+  commit(label: string, pixels: PixelDiff[] = [], mergeKey?: string, layout?: Entry['layout']) {
     const after = this.snapshot();
-    if (!pixels.length && JSON.stringify(after) === JSON.stringify(this.last)) return;
+    if (!pixels.length && !layout && JSON.stringify(after) === JSON.stringify(this.last)) return;
     const now = Date.now();
     const top = this.entries[this.index - 1];
-    if (mergeKey && !pixels.length && this.index > 1 && this.index === this.entries.length && this.savedIndex !== this.index
-      && top.doc === this && top.merge?.key === mergeKey && now - top.merge.time < MERGE_MS) {
+    if (mergeKey && !pixels.length && !layout && this.index > 1 && this.index === this.entries.length && this.savedIndex !== this.index
+      && top.doc === this && !top.layout && top.merge?.key === mergeKey && now - top.merge.time < MERGE_MS) {
       top.after = after;
       top.merge.time = now;
       this.last = after;
@@ -231,7 +239,7 @@ export class Doc {
     // Steps that could be redone go, on whichever artboard they were (and what only they kept is freed there).
     const others = new Set(this.entries.slice(this.index).map((e) => e.doc).filter((d) => d !== this));
     this.entries.length = this.index;
-    this.entries.push({ doc: this, label, before: this.last, after, pixels, bytes, merge: mergeKey ? { key: mergeKey, time: now } : undefined });
+    this.entries.push({ doc: this, label, before: this.last, after, pixels, bytes, merge: mergeKey ? { key: mergeKey, time: now } : undefined, layout });
     this.index = this.entries.length;
     this.last = after;
     this.trim();
@@ -286,6 +294,7 @@ export class Doc {
     this.restore(m);
     this.last = m;
     this.maskCache = null;
+    if (e.layout) this.hist.setLayout(dir === 'undo' ? e.layout.before : e.layout.after);
     this.touch('history');
   }
 

@@ -6,7 +6,7 @@ import { FILTERS } from '../core/filters';
 import { glfx } from '../core/glfx';
 import { view } from './canvasview';
 import { colorPanel } from './colorpanel';
-import { aboutDialog, animExportDialog, canvasSizeDialog, colorRangeDialog, exportDialog, filterDialog, imageSizeDialog, modifySelectionDialog, newDocDialog, newGuideDialog, shortcutsDialog, updateDialog } from './dialogs';
+import { aboutDialog, animExportDialog, canvasSizeDialog, colorRangeDialog, exportDialog, filterDialog, imageSizeDialog, modifySelectionDialog, newArtboardDialog, newDocDialog, newGuideDialog, renameArtboardDialog, shortcutsDialog, updateDialog } from './dialogs';
 import { h, isTyping } from './dom';
 import { historyPanel } from './historypanel';
 import { adjustmentMenuItems, effectMenuItems, layersPanel, looksMenuItems, maskMenuItems } from './layerspanel';
@@ -95,6 +95,18 @@ const MENUS: MenuDef[] = [
       { label: 'Rotate 180°', run: () => A.rotateCanvas(180), enabled: hasDoc },
       { label: 'Flip Canvas Horizontal', run: () => A.flipCanvas('h'), enabled: hasDoc },
       { label: 'Flip Canvas Vertical', run: () => A.flipCanvas('v'), enabled: hasDoc },
+      'sep',
+      { label: 'Artboards', sub: () => {
+        const p = app.project, many = (p?.boards.length ?? 0) > 1;
+        return [
+          { label: 'New Artboard…', onClick: newArtboardDialog, disabled: !p },
+          { label: 'Duplicate Artboard', onClick: A.duplicateArtboard, disabled: !p },
+          { label: 'Rename Artboard…', onClick: () => renameArtboardDialog(app.doc!), disabled: !p },
+          { label: 'Delete Artboard', onClick: A.deleteArtboard, disabled: !many },
+          { sep: true },
+          ...(p?.boards ?? []).map((b) => ({ label: b.doc.name, checked: b.doc === app.doc, onClick: () => app.setDoc(b.doc) })),
+        ];
+      } },
       'sep',
       { label: 'Flatten Image', run: A.flattenImage, enabled: hasDoc },
     ],
@@ -206,6 +218,7 @@ const MENUS: MenuDef[] = [
       { label: 'Zoom In', accel: 'Ctrl+=', run: () => view.zoomStep(1), enabled: hasDoc },
       { label: 'Zoom Out', accel: 'Ctrl+-', run: () => view.zoomStep(-1), enabled: hasDoc },
       { label: 'Fit on Screen', accel: 'Ctrl+0', run: () => view.fit(), enabled: hasDoc },
+      { label: 'Fit Artboard', accel: 'Ctrl+Alt+0', run: () => view.fit(true), enabled: () => (app.project?.boards.length ?? 0) > 1 },
       { label: 'Actual Pixels (100%)', accel: 'Ctrl+1', run: () => { view.setZoom(1); view.center(); }, enabled: hasDoc },
       'sep',
       { label: 'Rulers', accel: 'Ctrl+R', run: () => app.setPrefs({ rulers: !app.prefs.rulers }), checked: () => app.prefs.rulers },

@@ -1,5 +1,6 @@
 import { app } from '../app';
-import { addGuide, colorRangeSelection, createDoc, cropToContent, deleteLook, exportImage, lookSourceLayers, modifySelection, nextUntitled, resizeCanvas, resizeImage, saveLook } from '../actions';
+import { addGuide, colorRangeSelection, createDoc, cropToContent, deleteLook, exportImage, lookSourceLayers, modifySelection, newArtboard, nextUntitled, renameArtboard, resizeCanvas, resizeImage, saveLook } from '../actions';
+import type { Doc } from '../core/document';
 import { savedLooks } from '../core/looks';
 import { colorRangeMask, sampleSource, type Modify, type SelMode } from '../core/selops';
 import { checkForUpdate, openReleasePage, type UpdateInfo } from '../core/update';
@@ -38,39 +39,83 @@ function tooBig(w: number, h: number): boolean {
   return true;
 }
 
-export function newDocDialog() {
-  let w = 1920, hh = 1080, bg: 'white' | 'black' | 'transparent' | 'bgcolor' = 'white';
-  const name = h('input', { type: 'text', value: nextUntitled(), spellcheck: false });
-  const wf = numField('Width', w, (v) => { w = v; }, { unit: 'px', min: 1, max: MAX_SIDE });
-  const hf = numField('Height', hh, (v) => { hh = v; }, { unit: 'px', min: 1, max: MAX_SIDE });
+type Bg = 'white' | 'black' | 'transparent' | 'bgcolor';
+const bgFill = (bg: Bg) => (bg === 'white' ? '#ffffff' : bg === 'black' ? '#000000' : bg === 'bgcolor' ? app.bg : null);
+const bgField = (bg: Bg, onChange: (v: Bg) => void) => h('div', { class: 'field wide' }, h('span', null, 'Background'),
+  seg([{ v: 'white', label: 'White' }, { v: 'black', label: 'Black' }, { v: 'transparent', label: 'Transparent' }, { v: 'bgcolor', label: 'BG colour' }], bg, onChange));
+
+/** Width and height fields with a preset list and a swap button; `get` reads them. */
+function sizeFields(w: number, hh: number) {
+  const s = { w, h: hh };
+  const wf = numField('Width', w, (v) => { s.w = v; }, { unit: 'px', min: 1, max: MAX_SIDE });
+  const hf = numField('Height', hh, (v) => { s.h = v; }, { unit: 'px', min: 1, max: MAX_SIDE });
   const preset = h('select', {
     onchange: () => {
       const p = PRESETS[Number(preset.value)];
       if (!p) return;
-      w = p[1]; hh = p[2]; wf.set(w); hf.set(hh);
+      s.w = p[1]; s.h = p[2]; wf.set(s.w); hf.set(s.h);
     },
-  }, ...PRESETS.map(([l], i) => h('option', { value: i }, l)), h('option', { value: -1 }, 'Custom'));
-  const swap = h('button', { class: 'btn small', type: 'button', title: 'Swap width and height', onclick: () => { [w, hh] = [hh, w]; wf.set(w); hf.set(hh); } }, '⇄');
+  }, ...PRESETS.map(([l], i) => h('option', { value: i }, l)), h('option', { value: -1, selected: true }, 'Custom'));
+  const swap = h('button', { class: 'btn small', type: 'button', title: 'Swap width and height', onclick: () => { [s.w, s.h] = [s.h, s.w]; wf.set(s.w); hf.set(s.h); } }, '⇄');
+  return { s, preset: h('label', { class: 'field wide' }, h('span', null, 'Preset'), preset), row: h('div', { class: 'row' }, wf, hf, swap) };
+}
+
+export function newDocDialog() {
+  let bg: Bg = 'white', boards = 1;
+  const name = h('input', { type: 'text', value: nextUntitled(), spellcheck: false });
+  const size = sizeFields(1920, 1080);
+  const count = numField('Artboards', boards, (v) => { boards = Math.round(v); }, { min: 1, max: 20 });
+  count.title = 'More than one: artboards of this size side by side in one file (each its own canvas; Image › Artboards adds others)';
   dialog({
     title: 'New image', width: 440,
     body: [
       h('label', { class: 'field wide' }, h('span', null, 'Name'), name),
-      h('label', { class: 'field wide' }, h('span', null, 'Preset'), preset),
-      h('div', { class: 'row' }, wf, hf, swap),
-      h('div', { class: 'field wide' }, h('span', null, 'Background'),
-        seg([{ v: 'white', label: 'White' }, { v: 'black', label: 'Black' }, { v: 'transparent', label: 'Transparent' }, { v: 'bgcolor', label: 'BG colour' }], bg, (v) => { bg = v; })),
+      size.preset,
+      size.row,
+      bgField(bg, (v) => { bg = v; }),
+      h('div', { class: 'row' }, count),
     ],
     buttons: [
       { label: 'Cancel' },
       {
         label: 'Create', primary: true, onClick: () => {
+          const { w, h: hh } = size.s;
           if (tooBig(w, hh)) return false;
-          const fill = bg === 'white' ? '#ffffff' : bg === 'black' ? '#000000' : bg === 'bgcolor' ? app.bg : null;
-          createDoc(name.value.trim() || nextUntitled(), Math.round(w), Math.round(hh), fill);
+          createDoc(name.value.trim() || nextUntitled(), Math.round(w), Math.round(hh), bgFill(bg), boards);
         },
       },
     ],
   });
+}
+
+/** Image › Artboards › New Artboard: a size (the current artboard's to start with) and a background. */
+export function newArtboardDialog() {
+  const d = app.doc; if (!d) return;
+  let bg: Bg = 'white';
+  const size = sizeFields(d.width, d.height);
+  dialog({
+    title: 'New artboard', width: 440,
+    body: [
+      size.preset,
+      size.row,
+      bgField(bg, (v) => { bg = v; }),
+      h('p', { class: 'dialog-note' }, 'An artboard is a canvas of its own in this file, with its own size and layers. It goes to the right of the others; move it with the Artboard tool.'),
+    ],
+    buttons: [
+      { label: 'Cancel' },
+      { label: 'Add', primary: true, onClick: () => { const { w, h: hh } = size.s; if (tooBig(w, hh)) return false; newArtboard(w, hh, bgFill(bg)); view.fit(); } },
+    ],
+  });
+}
+
+export function renameArtboardDialog(d: Doc) {
+  const name = h('input', { type: 'text', value: d.name, spellcheck: false });
+  dialog({
+    title: 'Rename artboard', width: 360,
+    body: [h('label', { class: 'field wide' }, h('span', null, 'Name'), name)],
+    buttons: [{ label: 'Cancel' }, { label: 'Rename', primary: true, onClick: () => { renameArtboard(d, name.value); } }],
+  });
+  setTimeout(() => { name.focus(); name.select(); }, 0);
 }
 
 export function imageSizeDialog() {

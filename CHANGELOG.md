@@ -2,6 +2,24 @@
 
 Each version's section becomes its release notes (`scripts/release.ps1` copies it to the download page).
 
+## 0.9.0
+
+Artboards: several canvases, each its own size, in one file.
+
+- **Artboards.** A file can hold several artboards side by side, each a canvas of its own, with its own size, layers and selection. Everything that works on an image works on an artboard. Press in an artboard, or click its name, to work on it.
+- **New Image › Artboards** starts a file with several artboards of the same size. **Image › Artboards** adds one (any size), duplicates, renames or deletes one, and switches between them.
+- **Artboard tool** (V, with Move): drag an artboard or its name to move it; it snaps to the others' edges, Shift keeps it in line, and Ctrl moves it freely. Drag its edges to resize it, and drag on the empty space to draw a new one. Double-click a name to rename it.
+- **Undo runs across artboards**, in the order you made the changes, and switches to the artboard each step was on. Adding, moving, resizing and deleting artboards are steps too.
+- **Layers panel**: each artboard is a section, with the layers of the one you're working on under it.
+- **View › Fit on Screen** fits all the artboards, and **Fit Artboard** (Ctrl+Alt+0) fits the one you're working on. The scrollbars cover them all.
+- Cropping or resizing the canvas of one artboard among others keeps its picture where it was.
+- Artboards you aren't working on are drawn from a kept copy, so scrolling past them costs little.
+- **Saving**: a file with several artboards is saved in a new .pixl version, which earlier versions of Pixl refuse with a message saying it's from a newer version. A file with one artboard is saved as before. Crash recovery keeps every artboard.
+
+Fixed:
+
+- **The Move tool could stop finding layers' boxes** after a file was closed and opened again: nudging and the Properties panel's size stopped working, and a background task kept running until Pixl was restarted.
+
 ## 0.8.6
 
 Fixes from a full review of the app, and faster saving.

@@ -2,12 +2,12 @@ import { app } from './app';
 import { defaultAdj, ADJ_LABELS } from './core/adjustments';
 import { Doc, flatLayers, newId } from './core/document';
 import { defaultFx, fxDef } from './core/effects';
-import { baseName, canvasBlob, decodeImage, decodePixl, docFromCanvas, encodePixl, extOf, pickFiles, PIXL_ACCEPT, saveBlob, type Picked } from './core/fileio';
+import { baseName, canvasBlob, decodeImage, decodePixl, docFromCanvas, docFromMeta, encodePixl, extOf, layerKeys, pickFiles, PIXL_ACCEPT, saveBlob, type Picked } from './core/fileio';
 import { importPsd } from './core/import/psd';
 import { importXcf } from './core/import/xcfimport';
 import { addRecent, openRecent, removeRecent, type RecentEntry } from './core/recent';
 import { clearRecovery } from './core/recovery';
-import type { Project } from './core/project';
+import { Project } from './core/project';
 import { cloneCanvas, ctx2d, drawPlaced, follow, layerMatrix, localBounds, newCanvas } from './core/layers';
 import { savedLooks, storeLooks, type Look, type LookItem } from './core/looks';
 import { parseCube } from './core/lut';
@@ -35,14 +35,21 @@ const need = (): Doc | null => app.doc;
 
 // ---------- documents ----------
 
-export function createDoc(name: string, w: number, h: number, bg: string | null) {
-  const doc = new Doc(name, w, h);
-  const l = doc.newRasterLayer(bg ? 'Background' : 'Layer 1', bg ?? undefined);
-  if (!bg) doc.counter = 2;
-  doc.layers.push(l);
-  doc.activeId = l.id;
+/** A new image; with `boards` above 1, a file of that many artboards this size, side by side. */
+export function createDoc(name: string, w: number, h: number, bg: string | null, boards = 1) {
+  const make = (n: string) => {
+    const doc = new Doc(n, w, h);
+    const l = doc.newRasterLayer(bg ? 'Background' : 'Layer 1', bg ?? undefined);
+    if (!bg) doc.counter = 2;
+    doc.layers.push(l);
+    doc.activeId = l.id;
+    return doc;
+  };
+  const doc = make(boards > 1 ? 'Artboard 1' : name);
   doc.resetHistory('New');
-  app.addDoc(doc);
+  const p = new Project(name, [{ doc, x: 0, y: 0 }]);
+  for (let i = 1; i < boards; i++) p.add(make(`Artboard ${i + 1}`), i * (w + ARTBOARD_GAP), 0);
+  app.addProject(p);
 }
 
 let untitled = 1;
@@ -197,11 +204,96 @@ export async function closeDoc(doc: Doc | null = app.doc) {
   app.removeProject(p);
 }
 
-/** Shows the artboard an undo or redo step was on, if it isn't the one shown. */
-const showStep = (d: Doc | null | undefined) => { if (d && d !== app.doc) app.setDoc(d); };
+/** Shows the artboard an undo or redo step was on, if it isn't the one shown (and is still there: undoing a new artboard removes it). */
+const showStep = (d: Doc | null | undefined) => { if (d && d !== app.doc && app.projectOf(d)) app.setDoc(d); };
 export const undo = () => showStep(app.doc?.undo());
 export const redo = () => showStep(app.doc?.redo());
 export const goToStep = (index: number) => showStep(app.doc?.goTo(index));
+
+// ---------- artboards ----------
+
+/** Space left between artboards placed automatically (pixels). */
+const ARTBOARD_GAP = 100;
+
+/** "Artboard N", the first number no artboard of the file has. */
+function artboardName(p: Project): string {
+  const taken = new Set(p.docs.map((d) => d.name));
+  let n = p.boards.length + 1;
+  while (taken.has(`Artboard ${n}`)) n++;
+  return `Artboard ${n}`;
+}
+
+/**
+ * Adds an artboard to the file shown: a new image of its own, `w` × `h`, at `at` (spread pixels) or to the right of
+ * the others. The first artboard, still named after the file, becomes "Artboard 1". One undo step.
+ */
+export function newArtboard(w: number, h: number, bg: string | null = '#ffffff', at?: Pt) {
+  const p = app.project; if (!p) return;
+  const before = p.layout();
+  const r = p.bounds();
+  if (p.boards.length === 1 && p.boards[0].doc.name === p.name) p.boards[0].doc.name = 'Artboard 1';
+  const doc = new Doc(artboardName(p), Math.max(1, Math.round(w)), Math.max(1, Math.round(h)));
+  const l = doc.newRasterLayer(bg ? 'Background' : 'Layer 1', bg ?? undefined);
+  if (!bg) doc.counter = 2;
+  doc.layers.push(l);
+  doc.activeId = l.id;
+  app.addArtboard(p, doc, Math.round(at?.x ?? r.x + r.w + ARTBOARD_GAP), Math.round(at?.y ?? r.y));
+  p.commitLayout('New artboard', before, doc);
+  app.setDoc(doc);
+}
+
+/** A copy of the artboard worked on (its layers, settings and pixels), to the right of the others. */
+export function duplicateArtboard() {
+  const p = app.project, src = app.doc; if (!p || !src) return;
+  const before = p.layout();
+  const r = p.bounds(), b = p.boardOf(src)!;
+  const meta = src.snapshot();
+  const doc = docFromMeta(`${src.name} copy`, meta);
+  // The copy's pixels get keys of their own: caches go by key, and painting on one copy mustn't show on the other.
+  let layers = JSON.stringify(meta.layers);
+  for (const k of layerKeys(meta)) {
+    const c = src.pool.get(k);
+    if (c) layers = layers.split(JSON.stringify(k)).join(JSON.stringify(doc.addCanvas(cloneCanvas(c))));
+  }
+  doc.layers = JSON.parse(layers);
+  app.addArtboard(p, doc, r.x + r.w + ARTBOARD_GAP, b.y);
+  p.commitLayout('Duplicate artboard', before, doc);
+  app.setDoc(doc);
+}
+
+/** Removes the artboard worked on (undo brings it back); a file keeps at least one. */
+export function deleteArtboard() {
+  const p = app.project, d = app.doc; if (!p || !d) return;
+  if (p.boards.length < 2) { toast('A file keeps at least one artboard. Close the file to remove it all.'); return; }
+  const before = p.layout();
+  const i = p.boards.findIndex((b) => b.doc === d);
+  const next = p.boards[i + 1]?.doc ?? p.boards[i - 1].doc;
+  p.setActive(next);
+  p.applyLayout(before.filter((e) => e.doc !== d));
+  p.commitLayout('Delete artboard', before, next);
+  app.setDoc(next);
+}
+
+export function renameArtboard(d: Doc, name: string) {
+  const p = app.projectOf(d);
+  name = name.trim();
+  if (!p || !name || name === d.name) return;
+  const before = p.layout();
+  d.name = name;
+  p.commitLayout('Rename artboard', before, d);
+  app.emit('docs');
+}
+
+/** The artboard worked on, resized to `r` (spread pixels): its picture stays where it is, the edges move. */
+export function resizeArtboard(r: Rect) {
+  const p = app.project, d = app.doc; if (!p || !d) return;
+  const b = p.boardOf(d)!;
+  const x = Math.round(r.x), y = Math.round(r.y);
+  const w = Math.max(1, Math.round(r.x + r.w) - x), hh = Math.max(1, Math.round(r.y + r.h) - y);
+  if (x === b.x && y === b.y && w === d.width && hh === d.height) return;
+  if (p.boards.length < 2) { transformDoc('Canvas size', [1, 0, 0, 1, b.x - x, b.y - y], w, hh); return; }
+  transformDoc('Resize artboard', [1, 0, 0, 1, b.x - x, b.y - y], w, hh);
+}
 
 // ---------- layers ----------
 
@@ -1012,6 +1104,16 @@ export function transformDoc(label: string, g: Mat, w: number, h: number, scaleS
   });
   doc.width = Math.max(1, Math.round(w));
   doc.height = Math.max(1, Math.round(h));
+  const p = app.projectOf(doc);
+  if (p && p.boards.length > 1) {
+    // An artboard among others: a crop or a bigger canvas leaves its picture where it was on the spread (the artboard
+    // moves by what the layers moved inside it), as one step.
+    const before = p.layout(), b = p.boardOf(doc)!;
+    if (g[0] === 1 && g[1] === 0 && g[2] === 0 && g[3] === 1) p.place(b, b.x - g[4], b.y - g[5]);
+    p.commitLayout(label, before, doc);
+    view.requestRender();
+    return;
+  }
   doc.commit(label);
   view.fit();
 }

@@ -8,6 +8,8 @@ export const ICONS = {
   lasso: svg(p('M7 13.6C3.6 12.6 2.6 9.4 5 7s8.4-3.6 11 0-1.6 6.8-6.6 6.4') + p('M7 13.6c-1.2 1.2-.6 3.4 1.6 3.6')),
   wand: svg(p('M3.4 16.6 12 8M13.6 2.6v2.4M13.6 9.4v2.4M10.6 6.2h-2.4M17.4 6.2H19M15.6 4.2l1.4-1.4M11.6 4.2 10.2 2.8M15.6 8.2l1.4 1.4')),
   crop: svg(p('M5.5 2v12.5H18M2 5.5h12.5V18')),
+  // Artboard: a board with marks where its edges run on past the corners.
+  artboard: svg('<rect x="5" y="5" width="10" height="10"/>' + p('M5 1.5v2M1.5 5h2M15 1.5v2M18.5 5h-2M5 18.5v-2M1.5 15h2M15 18.5v-2M18.5 15h-2')),
   // Eyedropper: squeeze bulb, collar, glass tube and a drop at the tip.
   picker: svg(p('M12.9 3.3a2.4 2.4 0 0 1 3.8 3.8l-1.9 1.9-3.8-3.8z') + p('M10.2 4.4l5.4 5.4') + p('M12.4 6.6 5.2 13.8a2.4 2.4 0 0 0-.7 1.7v.8h.8a2.4 2.4 0 0 0 1.7-.7l7.2-7.2') + p('M7.1 12.1h3.4') + '<path d="M3.3 16.9c0 .7-.5 1.2-1 1.6-.5-.4-1-.9-1-1.6s1-1.9 1-1.9 1 1.2 1 1.9z" fill="currentColor" stroke="none"/>'),
   brush: svg(p('M15 2.8 9.2 10.3l1.5 1.5L18.2 6c.6-.6.6-1.7 0-2.4-.7-.7-2.5-1.4-3.2-.8zM8.6 11.6c-2 0-3.6 1.2-3.6 3.2 0 1-.7 1.6-2 1.8 1.2 1 2.6 1.4 4 1.4 2.4 0 3.8-1.6 3.4-4.4')),

@@ -13,10 +13,12 @@ export function canvasScrollbars() {
     const track = h('div', { class: `cv-scroll ${axis}` }, thumb);
     /** Viewport and scrollable lengths on this axis, and where the view starts within it (screen px). */
     const geom = () => {
-      const d = app.doc!, { w, h: hh } = view.size;
+      const { w, h: hh } = view.size;
+      // (The image, or with several artboards all of them.)
+      const e = view.extent();
       const vp = axis === 'h' ? w : hh;
-      const pan = axis === 'h' ? d.panX : d.panY;
-      const len = (axis === 'h' ? d.width : d.height) * d.zoom;
+      const pan = axis === 'h' ? e.x : e.y;
+      const len = axis === 'h' ? e.w : e.h;
       const m = vp / 2;
       const lo = Math.min(-m, -pan), hi = Math.max(len + m, vp - pan);
       return { vp, total: hi - lo, at: -pan - lo, show: pan < -0.5 || pan + len > vp + 0.5 };
@@ -70,7 +72,7 @@ export function canvasScrollbars() {
   let sig = '';
   app.on('view', syncAll);
   app.on('docs', syncAll);
-  app.on('change', () => { const d = app.doc; const s = d ? `${d.width}x${d.height}` : ''; if (s !== sig) { sig = s; syncAll(); } });
+  app.on('change', () => { const s = app.doc ? JSON.stringify(view.extent()) : ''; if (s !== sig) { sig = s; syncAll(); } });
   new ResizeObserver(syncAll).observe(view.el);
   const el = h('div', { class: 'cv-scrolls' }, ...bars.map((b) => b.track));
   syncAll();

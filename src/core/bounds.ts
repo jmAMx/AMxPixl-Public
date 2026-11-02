@@ -12,8 +12,13 @@ import { WorkerPool } from './workers/pool';
  */
 export type BoxMode = 'content' | 'layer' | 'custom';
 
-type Entry = { canvas: HTMLCanvasElement; w: number; h: number; ver: number; rect: Rect | null | 'pending' };
-const cache = new Map<string, Entry>();
+type Entry = { w: number; h: number; ver: number; rect: Rect | null | 'pending' };
+/**
+ * By canvas, not by key: a file closed and opened again (or an artboard's copy) has new canvases under the same keys,
+ * and while something still asks about the old ones, sharing an entry would have each answer replace the other's,
+ * scanning again and again for ever. Entries go with their canvases.
+ */
+const cache = new WeakMap<HTMLCanvasElement, Entry>();
 const versions = new Map<string, number>();
 const waiting = new Set<() => void>();
 let pool: WorkerPool<object, { rect: Rect | null }> | null = null;
@@ -40,17 +45,14 @@ export const trimRect = (canvas: HTMLCanvasElement) => scan(canvas, 'trim');
  */
 export function alphaBounds(key: string, canvas: HTMLCanvasElement, onReady?: () => void): Rect | null | undefined {
   const ver = versions.get(key) ?? 0;
-  const c = cache.get(key);
-  if (c && c.canvas === canvas && c.w === canvas.width && c.h === canvas.height && c.ver === ver) {
+  const c = cache.get(canvas);
+  if (c && c.w === canvas.width && c.h === canvas.height && c.ver === ver) {
     if (c.rect !== 'pending') return c.rect;
     if (onReady) waiting.add(onReady);
     return undefined;
   }
-  const e: Entry = { canvas, w: canvas.width, h: canvas.height, ver, rect: 'pending' };
-  // Each entry holds on to its layer's pixels: forget the oldest, so replaced and closed layers don't pile up.
-  cache.delete(key);
-  if (cache.size >= 64) cache.delete(cache.keys().next().value!);
-  cache.set(key, e);
+  const e: Entry = { w: canvas.width, h: canvas.height, ver, rect: 'pending' };
+  cache.set(canvas, e);
   if (onReady) waiting.add(onReady);
   scan(canvas)
     .then((r) => { e.rect = r; }, () => { e.rect = { x: 0, y: 0, w: e.w, h: e.h }; })

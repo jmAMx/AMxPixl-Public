@@ -5,9 +5,11 @@ import { dirtyPad, renderDoc, sampleDoc } from '../core/render';
 import { rgbToHex } from './color';
 import { isDepth } from '../core/types';
 import type { Doc } from '../core/document';
+import type { Board } from '../core/project';
 import { pixelVersion } from '../core/bounds';
 import type { PInfo, Tool } from '../tools/tool';
 import { addGuide } from '../actions';
+import { renameArtboardDialog } from './dialogs';
 import { h } from './dom';
 import { clearSnapLines, snapLines, snapPoint } from './snap';
 
@@ -67,6 +69,12 @@ class CanvasView {
     this.canvas.addEventListener('pointerleave', () => { if (!this.down) { this.hover = null; this.onCursor(null); this.requestOverlay(); } });
     this.canvas.addEventListener('wheel', (e) => this.onWheel(e), { passive: false });
     this.canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+    // Double-clicking an artboard's name renames it.
+    this.canvas.addEventListener('dblclick', (e) => {
+      const r = this.canvas.getBoundingClientRect();
+      const hit = this.boardAt(e.clientX - r.left, e.clientY - r.top);
+      if (hit?.label) renameArtboardDialog(hit.b.doc);
+    });
     window.addEventListener('keydown', (e) => {
       if (e.code === 'Space' && !e.repeat && !isField(e.target)) { this.spaceHeld = true; this.updateCursor(); e.preventDefault(); }
     });
@@ -81,7 +89,8 @@ class CanvasView {
     window.addEventListener('pointerup', release, true);
     window.addEventListener('pointercancel', release, true);
     app.on('change', ({ doc, kind }) => {
-      if (doc !== app.doc) return;
+      // Another artboard of the file shown: it's drawn from its own copy, made again when it changed (see paintBoard).
+      if (doc !== app.doc) { if (app.project?.has(doc)) this.schedule(); return; }
       // Painting reports where it changed the image; only that area (plus a margin) is redrawn.
       const d = doc.takeDirty();
       if (kind === 'pixels' && d && d !== 'all' && !this.dirty) {
@@ -148,13 +157,35 @@ class CanvasView {
     if (d && !d.fitted && this.cssW > 10) { this.fit(); d.fitted = true; }
   }
 
-  fit() {
+  /** Fits the image in the window; with several artboards, all of them (or just the one worked on, with `one`). */
+  fit(one = false) {
     const d = this.doc;
     if (!d) return;
     const pad = 40;
+    const p = app.project;
+    if (!one && p && p.boards.length > 1) {
+      const r = p.bounds(), b = p.boardOf(d)!;
+      // (Room above for the artboards' names.)
+      const z = Math.max(0.01, Math.min((this.cssW - pad * 2) / r.w, (this.cssH - pad * 2 - LABEL) / r.h, 1));
+      d.zoom = z;
+      d.panX = Math.round((this.cssW - r.w * z) / 2 + (b.x - r.x) * z);
+      d.panY = Math.round((this.cssH - r.h * z + LABEL) / 2 + (b.y - r.y) * z);
+      this.changed();
+      return;
+    }
     const z = Math.min((this.cssW - pad * 2) / d.width, (this.cssH - pad * 2) / d.height, 1);
     this.setZoom(Math.max(0.01, z));
     this.center();
+  }
+
+  /** Where everything open in the view is on screen (CSS px): the image, or all the artboards. */
+  extent(): Rect {
+    const d = this.doc!, p = app.project;
+    if (p && p.boards.length > 1) {
+      const o = p.origin, r = p.bounds();
+      return { x: o.x + r.x * o.zoom, y: o.y + r.y * o.zoom, w: r.w * o.zoom, h: r.h * o.zoom };
+    }
+    return { x: d.panX, y: d.panY, w: d.width * d.zoom, h: d.height * d.zoom };
   }
 
   center() {
@@ -207,6 +238,121 @@ class CanvasView {
     return union(intersect({ x: bounds.x - r, y: bounds.y - r, w: bounds.w + r * 2, h: bounds.h + r * 2 }, img), bounds);
   }
 
+  /** Draws `d` through `m` into the whole of `target` (composite pixels). */
+  private renderView(d: Doc, target: HTMLCanvasElement, m: Mat, depth: boolean) {
+    const w = target.width, hh = target.height;
+    const ext = this.withMargin(d, m, { x: 0, y: 0, w, h: hh }, dirtyPad(d));
+    if (ext.w === w && ext.h === hh) { renderDoc(d, target, m, { screen: true, depth }); return; }
+    // Zoomed in: draw past the view's edge too, so effects, styles and feathers there see the image beyond it.
+    const big = this.marginCanvas;
+    if (big.width !== ext.w || big.height !== ext.h) { big.width = ext.w; big.height = ext.h; }
+    renderDoc(d, big, [m[0], 0, 0, m[3], m[4] - ext.x, m[5] - ext.y], { screen: true, depth });
+    const cx = ctx2d(target);
+    cx.save();
+    cx.globalCompositeOperation = 'copy';
+    cx.drawImage(big, ext.x, ext.y);
+    cx.restore();
+  }
+
+  // ---------- the file's other artboards ----------
+
+  /** Each other artboard's drawn copy, and what it was drawn for (see paintBoard). */
+  private boardCache = new WeakMap<Doc, { c: HTMLCanvasElement; sig: string }>();
+  /** Where the artboards' names were drawn (CSS px), for clicking them. */
+  private labels: { b: Board; r: Rect }[] = [];
+
+  /** Where an artboard is on screen (CSS px). */
+  boardRect(b: Board): Rect {
+    const o = app.project!.origin;
+    return { x: o.x + b.x * o.zoom, y: o.y + b.y * o.zoom, w: b.doc.width * o.zoom, h: b.doc.height * o.zoom };
+  }
+
+  /**
+   * The artboard under a point (CSS px), and whether the point is on its name. Only with several artboards; the one
+   * being worked on wins near its edges (a crop or transform handle may sit just outside it).
+   */
+  boardAt(sx: number, sy: number): { b: Board; label: boolean } | null {
+    const p = app.project;
+    if (!p || p.boards.length < 2) return null;
+    for (const l of this.labels) if (sx >= l.r.x && sx <= l.r.x + l.r.w && sy >= l.r.y && sy <= l.r.y + l.r.h) return { b: l.b, label: true };
+    const inside = (r: Rect, m: number) => sx >= r.x - m && sx <= r.x + r.w + m && sy >= r.y - m && sy <= r.y + r.h + m;
+    const a = p.boardOf(p.active)!;
+    if (inside(this.boardRect(a), 8)) return { b: a, label: false };
+    for (const b of [...p.boards].reverse()) if (inside(this.boardRect(b), 0)) return { b, label: false };
+    return null;
+  }
+
+  /**
+   * Draws an artboard other than the one worked on. Its picture is kept and drawn again only when it changes or the
+   * zoom does (scrolling just moves it); a large one at a high zoom keeps only the part in view.
+   */
+  private paintBoard(ctx: CanvasRenderingContext2D, b: Board) {
+    const dpr = this.dpr, d = b.doc, s = this.boardRect(b);
+    // Whole device pixels: the kept picture is then copied, not resampled, as the view scrolls.
+    const r = { x: Math.round(s.x * dpr), y: Math.round(s.y * dpr), w: Math.round(s.w * dpr), h: Math.round(s.h * dpr) };
+    ctx.save();
+    ctx.shadowColor = 'rgba(0,0,0,.45)';
+    ctx.shadowBlur = 18 * dpr;
+    ctx.fillStyle = '#808080';
+    ctx.fillRect(r.x, r.y, r.w, r.h);
+    ctx.restore();
+    const vis = intersect(r, { x: 0, y: 0, w: this.canvas.width, h: this.canvas.height });
+    if (!vis || r.w < 1 || r.h < 1) return;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(r.x, r.y, r.w, r.h);
+    ctx.clip();
+    ctx.fillStyle = this.checkerPattern(ctx);
+    ctx.fillRect(vis.x, vis.y, vis.w, vis.h);
+    const whole = r.w <= 4096 && r.h <= 4096 && r.w * r.h <= 2 * this.canvas.width * this.canvas.height;
+    const area = whole ? { x: 0, y: 0, w: r.w, h: r.h }
+      : roundOut({ x: vis.x - r.x, y: vis.y - r.y, w: vis.w, h: vis.h });
+    const z = r.w / d.width;
+    const sig = `${d.version}:${d.frame}:${app.showDepth}:${z}:${r.h}:${whole ? '' : `${area.x},${area.y},${area.w},${area.h}`}`;
+    let kept = this.boardCache.get(d);
+    if (!kept || kept.sig !== sig) {
+      const c = kept?.c ?? document.createElement('canvas');
+      if (c.width !== area.w || c.height !== area.h) { c.width = area.w; c.height = area.h; }
+      this.renderView(d, c, [z, 0, 0, r.h / d.height, -area.x, -area.y], app.showDepth);
+      kept = { c, sig };
+      this.boardCache.set(d, kept);
+    }
+    ctx.drawImage(kept.c, r.x + area.x, r.y + area.y);
+    ctx.restore();
+  }
+
+  /** The artboards' names above them, the one worked on picked out (CSS px; sets `labels`). */
+  private paintLabels(ctx: CanvasRenderingContext2D) {
+    const p = app.project!;
+    const css = getComputedStyle(document.documentElement);
+    const dim = css.getPropertyValue('--text-dim').trim() || '#8b9a95';
+    const accent = css.getPropertyValue('--accent').trim() || '#2ee6be';
+    ctx.save();
+    ctx.font = '600 12px "Segoe UI", sans-serif';
+    ctx.textBaseline = 'alphabetic';
+    this.labels = [];
+    for (const b of p.boards) {
+      const r = this.boardRect(b), on = b.doc === p.active;
+      // As wide as the artboard (at least a little), shortened with an ellipsis when the name is longer.
+      const room = Math.max(60, r.w);
+      let text = b.doc.name;
+      if (ctx.measureText(text).width > room) {
+        while (text.length > 1 && ctx.measureText(text + '…').width > room) text = text.slice(0, -1);
+        text += '…';
+      }
+      const w = ctx.measureText(text).width;
+      ctx.fillStyle = on ? accent : dim;
+      ctx.fillText(text, Math.round(r.x), Math.round(r.y) - 6);
+      this.labels.push({ b, r: { x: r.x, y: r.y - LABEL, w: w + 4, h: LABEL } });
+      if (on) {
+        ctx.strokeStyle = accent;
+        ctx.lineWidth = 1;
+        ctx.strokeRect(Math.round(r.x) - 0.5, Math.round(r.y) - 0.5, Math.round(r.w) + 1, Math.round(r.h) + 1);
+      }
+    }
+    ctx.restore();
+  }
+
   private paint() {
     const ctx = ctx2d(this.canvas);
     const dpr = this.dpr;
@@ -214,6 +360,8 @@ class CanvasView {
     ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
     const d = this.doc;
     if (!d) return;
+    const p = app.project, multi = !!p && p.boards.length > 1;
+    if (multi) for (const b of p!.boards) if (b.doc !== d) this.paintBoard(ctx, b);
     const z = d.zoom * dpr;
     const dx = d.panX * dpr, dy = d.panY * dpr;
     const docR = { x: dx, y: dy, w: d.width * z, h: d.height * z };
@@ -285,20 +433,7 @@ class CanvasView {
           this.composite.height = ch;
         }
         const t0 = performance.now();
-        const m: Mat = [z * k, 0, 0, z * k, (dx - vr.x) * k, (dy - vr.y) * k];
-        const ext = this.withMargin(d, m, { x: 0, y: 0, w: cw, h: ch }, dirtyPad(d));
-        if (ext.w === cw && ext.h === ch) renderDoc(d, this.composite, m, { screen: true, depth });
-        else {
-          // Zoomed in: draw past the view's edge too, so effects, styles and feathers there see the image beyond it.
-          const big = this.marginCanvas;
-          if (big.width !== ext.w || big.height !== ext.h) { big.width = ext.w; big.height = ext.h; }
-          renderDoc(d, big, [m[0], 0, 0, m[3], m[4] - ext.x, m[5] - ext.y], { screen: true, depth });
-          const cx = ctx2d(this.composite);
-          cx.save();
-          cx.globalCompositeOperation = 'copy';
-          cx.drawImage(big, ext.x, ext.y);
-          cx.restore();
-        }
+        this.renderView(d, this.composite, [z * k, 0, 0, z * k, (dx - vr.x) * k, (dy - vr.y) * k], depth);
         this.noteFrame(performance.now() - t0, k);
         // Onion skin: the frames either side, tinted (red before, green after), for lining up motion.
         const a = d.anim;
@@ -386,6 +521,7 @@ class CanvasView {
     }
 
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    if (multi) this.paintLabels(ctx); else this.labels = [];
     this.paintGuides(ctx);
     app.tool?.overlay?.(ctx);
     if (app.prefs.rulers) this.paintRulers(ctx);
@@ -630,7 +766,7 @@ class CanvasView {
       this.eraserFrom = app.tool.id;
       app.setTool('eraser');
     }
-    const p = this.info(e);
+    let p = this.info(e);
     if (p.button === 1 || (p.button === 0 && (this.spaceHeld || app.tool.id === 'hand'))) {
       this.panning = { x: p.sx, y: p.sy, px: this.doc.panX, py: this.doc.panY };
       this.updateCursor();
@@ -638,6 +774,14 @@ class CanvasView {
     }
     if (p.button !== 0 || app.busy) { this.restoreTool(); return; }
     if (this.startGuide(p)) { this.updateCursor(); return; }
+    // With several artboards, pressing in (or on the name of) another one works on that one. The Artboard tool picks
+    // them itself (it moves them by their names).
+    const hit = app.tool.id === 'artboard' ? null : this.boardAt(p.sx, p.sy);
+    if (hit && hit.b.doc !== this.doc) {
+      app.setDoc(hit.b.doc);
+      if (hit.label) { this.restoreTool(); return; }
+      p = this.info(e);
+    } else if (hit?.label) { this.restoreTool(); return; }
     this.down = true;
     this.activeTool = app.tool;
     this.lazy = this.lazyRadius ? { sx: p.sx, sy: p.sy } : null;
@@ -744,6 +888,7 @@ class CanvasView {
     if (this.panning) c = 'grabbing';
     else if (g) c = g === 'x' ? 'col-resize' : 'row-resize';
     else if (this.spaceHeld || app.tool?.id === 'hand') c = 'grab';
+    else if (hv && app.tool?.id !== 'artboard' && this.boardAt(hv.sx, hv.sy)?.label) c = 'pointer';
     else if (app.tool?.ownCursor && this.hover) c = 'none';
     else if (app.tool?.cursor) c = app.tool.cursor(this.hover);
     if (this.canvas.style.cursor !== c) this.canvas.style.cursor = c;
@@ -757,6 +902,8 @@ class CanvasView {
 
 /** Ruler thickness in CSS pixels. */
 const RULER = 18;
+/** Height of an artboard's name above it (CSS px). */
+const LABEL = 20;
 
 const isField = (t: EventTarget | null) => {
   const el = t as HTMLElement | null;
