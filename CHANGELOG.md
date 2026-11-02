@@ -7,7 +7,9 @@ Each version's section becomes its release notes (`scripts/release.ps1` copies i
 Artboards: several canvases, each its own size, in one file.
 
 - **Artboards.** A file can hold several artboards side by side, each a canvas of its own, with its own size, layers and selection. Everything that works on an image works on an artboard. Press in an artboard, or click its name, to work on it.
-- **New Image › Artboards** starts a file with several artboards of the same size. **Image › Artboards** adds one (any size), duplicates, renames or deletes one, and switches between them.
+- **New Image › Add artboard** starts a file with several artboards, each with a size of its own: type it, or pick a size or a shape (a ratio such as 4 : 5 or 16 : 9 keeps the width). **Image › Artboards** adds one (any size), duplicates, renames or deletes one, and switches between them.
+- **Select several artboards**: Shift or Ctrl+click them with the Artboard tool, or their rows in the Layers panel. Then move, duplicate or delete them together; Export Artboards starts with them ticked.
+- **Change an artboard's size** in the Artboard tool's options: type W and H, pick a size or a shape, or turn it (⇄). With several selected, each gets it, as one undo step. Each keeps its top-left corner, so its picture stays where it is.
 - **Artboard tool** (V, with Move): drag an artboard or its name to move it; it snaps to the others' edges, Shift keeps it in line, and Ctrl moves it freely. Drag its edges to resize it, and drag on the empty space to draw a new one. Double-click a name to rename it.
 - **Undo runs across artboards**, in the order you made the changes, and switches to the artboard each step was on. Adding, moving, resizing and deleting artboards are steps too.
 - **Layers panel**: each artboard is a section, with the layers of the one you're working on under it.

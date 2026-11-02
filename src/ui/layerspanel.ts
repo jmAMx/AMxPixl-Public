@@ -1,7 +1,7 @@
 import { app } from '../app';
 import {
   addMask, applyLook, applyMask, clearStyles, deleteLayer, deleteMask, duplicateLayer, groupLayer, invertMask, lookSourceLayers, mergeDown, setLayersVisible, trimLayers,
-  layersToArtboard, moveLayer, newAdjustment, newEffect, newGroup, newLayer, newLut, rasterizeLayer, renameArtboard, selectLayerShape, setLayerProp, setMaskProp, toggleClip, ungroup,
+  layersToArtboard, moveLayer, pickArtboard, newAdjustment, newEffect, newGroup, newLayer, newLut, rasterizeLayer, renameArtboard, selectLayerShape, setLayerProp, setMaskProp, toggleClip, ungroup,
 } from '../actions';
 import type { Doc } from '../core/document';
 import { BUILTIN_LOOKS, savedLooks } from '../core/looks';
@@ -320,7 +320,7 @@ export function layersPanel() {
    * With several artboards, each is a section: its name (click to work on it, double-click to rename), and under the
    * one worked on, its layers. The last-made artboard is at the top, like layers.
    */
-  const boardRow = (d: Doc, on: boolean): HTMLElement => {
+  const boardRow = (d: Doc, on: boolean, picked = app.project?.picked.has(d) ?? false): HTMLElement => {
     const name = h('span', { class: 'layer-name', title: 'Double-click to rename' }, d.name);
     name.addEventListener('dblclick', (e) => {
       e.stopPropagation();
@@ -332,9 +332,10 @@ export function layersPanel() {
       inp.focus(); inp.select();
     });
     const r = h('div', {
-      class: 'layer-row board-row' + (on ? ' on' : ''), role: 'treeitem', 'aria-expanded': String(on),
-      title: `${d.width} × ${d.height} px` + (on ? '' : ' · drop layers here to move them to this artboard (Alt copies)'),
-      onclick: () => { if (!on) app.setDoc(d); },
+      class: 'layer-row board-row' + (on ? ' on' : '') + (picked ? ' sel' : ''), role: 'treeitem', 'aria-expanded': String(on), 'aria-selected': String(on || picked),
+      title: `${d.width} × ${d.height} px · Shift or Ctrl+click selects several` + (on ? '' : ' · drop layers here to move them to this artboard (Alt copies)'),
+      // Shift/Ctrl+click adds or takes out (the Artboard tool then sizes, moves, duplicates and deletes them together).
+      onclick: (e: MouseEvent) => pickArtboard(d, e.shiftKey || e.ctrlKey || e.metaKey ? 'toggle' : 'only'),
     }, h('span', { class: 'chev-space' }, icon(on ? 'chevron' : 'chevronR')), h('span', { class: 'board-icon' }, icon('artboard')), name,
     h('span', { class: 'layer-badge' }, `${d.width} × ${d.height}`));
     // A layer dragged onto another artboard's row moves there (with Alt, a copy does).
@@ -380,7 +381,7 @@ export function layersPanel() {
     if (!d) return '';
     const s = (ls: Layer[]): unknown => ls.map((l) => [l.id, l.name, l.blend, l.type, !!l.clip, l.mask ? [l.mask.key, l.mask.enabled] : 0,
       hasStyles(l.styles), !!l.blendIf?.on, l.type === 'raster' && !!l.model, l.type === 'raster' && !!l.depth, (l.type === 'raster' && !!l.warp) || ((l.type === 'text' || l.type === 'shape') && !!l.envelope), l.type === 'group' ? [l.open, s(l.children)] : 0]);
-    const boards = (app.project?.boards ?? []).map((b) => [b.doc.name, b.doc.width, b.doc.height]);
+    const boards = (app.project?.boards ?? []).map((b) => [b.doc.name, b.doc.width, b.doc.height, app.project!.picked.has(b.doc)]);
     return JSON.stringify([d.activeId, d.alsoSelected, d.maskEdit, s(d.layers), boards]);
   };
 

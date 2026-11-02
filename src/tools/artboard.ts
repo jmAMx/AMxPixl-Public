@@ -1,15 +1,18 @@
 import { app } from '../app';
-import { artboardToTab, deleteArtboard, duplicateArtboard, newArtboard, renameArtboard, resizeArtboard } from '../actions';
+import { artboardToTab, deleteArtboard, duplicateArtboard, newArtboard, pickArtboard, renameArtboard, resizeArtboard, resizeArtboards } from '../actions';
+import type { Doc } from '../core/document';
+import { MAX_SIDE, pickSize } from '../core/sizes';
+import { sizePicker } from '../ui/dialogs';
 import type { Pt, Rect } from '../core/math';
 import type { Board, Layout } from '../core/project';
 import { view } from '../ui/canvasview';
 import { h } from '../ui/dom';
-import { icon } from '../ui/widgets';
+import { icon, numField } from '../ui/widgets';
 import type { PInfo, Tool } from './tool';
 
 type Edge = `${'n' | 's' | ''}${'w' | 'e' | ''}`;
 type Drag =
-  | { kind: 'move'; b: Board; x0: number; y0: number; s0: Pt; before: Layout; toTab: boolean; at: Pt }
+  | { kind: 'move'; b: Board; x0: number; y0: number; s0: Pt; before: Layout; toTab: boolean; at: Pt; all: { b: Board; x0: number; y0: number }[] }
   | { kind: 'resize'; edge: Edge; r0: Rect; s0: Pt; r: Rect }
   | { kind: 'new'; s0: Pt; r: Rect };
 
@@ -43,10 +46,9 @@ function tabDropSpot(state: 'off' | 'near' | 'over', name = '', copy = false) {
  */
 class ArtboardTool implements Tool {
   id = 'artboard'; name = 'Artboard'; key = 'V'; icon = 'artboard' as const;
-  hint = 'Drag an artboard or its name to move it (up to the tabs: its own tab) · drag its edges to resize · drag on empty space for a new one · Shift keeps it in line';
+  hint = 'Drag an artboard or its name to move it (up to the tabs: its own tab) · Shift/Ctrl+click picks several · drag its edges to resize · drag on empty space for a new one';
   private drag: Drag | null = null;
   private nameField: HTMLInputElement | null = null;
-  private sizeLabel: HTMLElement | null = null;
 
   /** A screen point (CSS px) in the artboards' shared space. */
   private spread(p: PInfo): Pt {
@@ -100,8 +102,11 @@ class ArtboardTool implements Tool {
     if (b) {
       // (A file with one artboard has nothing to move it relative to.)
       if (proj.boards.length < 2) return;
-      if (b.doc !== app.doc) app.setDoc(b.doc);
-      this.drag = { kind: 'move', b, x0: b.x, y0: b.y, s0: s, before: proj.layout(), toTab: false, at: { x: p.sx, y: p.sy } };
+      // Shift or Ctrl+click adds it to the selection or takes it out; a press on one of several selected drags them all.
+      pickArtboard(b.doc, p.shift || p.ctrl ? 'toggle' : 'keep');
+      if (!proj.selection().includes(b.doc)) return;
+      const all = proj.selection().map((d) => proj.boardOf(d)!).map((x) => ({ b: x, x0: x.x, y0: x.y }));
+      this.drag = { kind: 'move', b, x0: b.x, y0: b.y, s0: s, before: proj.layout(), toTab: false, at: { x: p.sx, y: p.sy }, all };
       return;
     }
     this.drag = { kind: 'new', s0: s, r: { x: s.x, y: s.y, w: 0, h: 0 } };
@@ -114,14 +119,17 @@ class ArtboardTool implements Tool {
     let dx = s.x - d.s0.x, dy = s.y - d.s0.y;
     if (d.kind === 'move') {
       // Over the tabs: let go there and the artboard opens in a tab of its own (it waits where it was meanwhile).
+      // (One artboard at a time: several selected just move.)
+      const one = d.all.length === 1 && proj.boards.length > 1;
       const c = view.clientRect();
-      d.toTab = proj.boards.length > 1 && !!document.elementFromPoint(c.left + p.sx, c.top + p.sy)?.closest('.tabs');
+      d.toTab = one && !!document.elementFromPoint(c.left + p.sx, c.top + p.sy)?.closest('.tabs');
       d.at = { x: p.sx, y: p.sy };
-      if (proj.boards.length > 1) tabDropSpot(d.toTab ? 'over' : 'near', d.b.doc.name, p.alt);
+      if (one) tabDropSpot(d.toTab ? 'over' : 'near', d.b.doc.name, p.alt);
       if (d.toTab) { proj.place(d.b, d.x0, d.y0); view.requestRender(); view.requestOverlay(); return; }
       if (p.shift) { if (Math.abs(dx) > Math.abs(dy)) dy = 0; else dx = 0; }
-      const at = this.snap(d.b, Math.round(d.x0 + dx), Math.round(d.y0 + dy), proj.origin.zoom, p.ctrl);
-      proj.place(d.b, at.x, at.y);
+      // The one grabbed snaps to the others' edges; the rest of the selection moves with it.
+      const at = this.snap(d.b, Math.round(d.x0 + dx), Math.round(d.y0 + dy), proj.origin.zoom, p.ctrl, d.all.map((x) => x.b));
+      for (const x of d.all) proj.place(x.b, x.x0 + at.x - d.x0, x.y0 + at.y - d.y0);
       view.requestRender();
     } else if (d.kind === 'resize') {
       let { x, y, w, h: hh } = d.r0;
@@ -142,12 +150,12 @@ class ArtboardTool implements Tool {
   }
 
   /** A moved artboard's place, its edges snapped to the other artboards' edges when close (not with Ctrl). */
-  private snap(b: Board, x: number, y: number, zoom: number, off: boolean): Pt {
+  private snap(b: Board, x: number, y: number, zoom: number, off: boolean, moving: Board[] = [b]): Pt {
     if (off) return { x, y };
     const tol = SNAP / zoom, w = b.doc.width, hh = b.doc.height;
     let bx = x, by = y, best = { x: tol, y: tol };
     for (const o of app.project!.boards) {
-      if (o === b) continue;
+      if (moving.includes(o)) continue;
       for (const [mine, theirs] of [[0, 0], [0, o.doc.width], [w, 0], [w, o.doc.width]]) {
         const dd = Math.abs(x + mine - (o.x + theirs));
         if (dd < best.x) { best.x = dd; bx = o.x + theirs - mine; }
@@ -167,7 +175,7 @@ class ArtboardTool implements Tool {
     if (!d || !proj) return;
     if (d.kind === 'move') {
       if (d.toTab) artboardToTab(d.b.doc, p.alt);
-      else if (d.b.x !== d.x0 || d.b.y !== d.y0) proj.commitLayout('Move artboard', d.before, d.b.doc);
+      else if (d.b.x !== d.x0 || d.b.y !== d.y0) proj.commitLayout(d.all.length > 1 ? 'Move artboards' : 'Move artboard', d.before, d.b.doc);
     } else if (d.kind === 'resize') resizeArtboard(d.r);
     // (A press without much of a drag isn't a new artboard.)
     else if (d.r.w * proj.origin.zoom >= 4 && d.r.h * proj.origin.zoom >= 4) newArtboard(d.r.w, d.r.h, '#ffffff', d.r);
@@ -180,7 +188,7 @@ class ArtboardTool implements Tool {
     const d = this.drag;
     this.drag = null;
     tabDropSpot('off');
-    if (d?.kind === 'move') app.project?.place(d.b, d.x0, d.y0);
+    if (d?.kind === 'move') for (const x of d.all) app.project?.place(x.b, x.x0, x.y0);
     this.syncOptions();
     view.requestRender();
   }
@@ -228,29 +236,51 @@ class ArtboardTool implements Tool {
     ctx.restore();
   }
 
+  /** The selected artboards (just the one worked on, or several picked with Shift/Ctrl+click). */
+  private selected(): Doc[] { return app.project?.selection() ?? []; }
+
   options(bar: HTMLElement) {
     const name = h('input', { type: 'text', class: 'opt-text', spellcheck: false, title: 'The artboard\'s name (also shown above it)' }) as HTMLInputElement;
     const commit = () => { const d = app.doc; if (d) renameArtboard(d, name.value); this.syncOptions(); };
     name.addEventListener('change', commit);
     name.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter') name.blur(); if (e.key === 'Escape') { this.syncOptions(); name.blur(); } });
     this.nameField = name;
-    this.sizeLabel = h('span', { class: 'opt-value' });
+    // Size: typed, picked from the sizes and ratios, or turned (W and H swapped), for every selected artboard; each keeps
+    // its top-left corner, and a ratio keeps each one's width.
+    const sizeAll = (f: (d: Doc) => { w: number; h: number }) => { resizeArtboards(this.selected(), f); this.syncOptions(); };
+    this.wField = numField('W', 1, (v) => sizeAll((d) => ({ w: v, h: d.height })), { unit: 'px', min: 1, max: MAX_SIDE });
+    this.hField = numField('H', 1, (v) => sizeAll((d) => ({ w: d.width, h: v })), { unit: 'px', min: 1, max: MAX_SIDE });
+    const pick = sizePicker((v) => { sizeAll((d) => pickSize(v, d.width, d.height)); pick.custom(); });
+    const swap = h('button', { class: 'btn small', type: 'button', title: 'Turn it: swap width and height', onclick: () => sizeAll((d) => ({ w: d.height, h: d.width })) }, '⇄');
+    this.countLabel = h('span', { class: 'opt-value' });
     const btn = (label: string, title: string, fn: () => void) => h('button', { class: 'btn small', type: 'button', title, onclick: fn }, label);
     bar.append(
       h('label', { class: 'opt' }, h('span', { class: 'opt-label' }, 'Name'), name),
-      this.sizeLabel,
+      this.countLabel,
+      h('div', { class: 'opt board-size' }, pick, this.wField, this.hField, swap),
       btn('New', 'A new artboard the same size, to the right of the others', () => { const d = app.doc; if (d) newArtboard(d.width, d.height); }),
-      btn('Duplicate', 'A copy of this artboard, with its layers', duplicateArtboard),
-      btn('Delete', 'Remove this artboard (Undo brings it back)', deleteArtboard),
+      btn('Duplicate', 'Copies of the selected artboards, with their layers', duplicateArtboard),
+      btn('Delete', 'Remove the selected artboards (Undo brings them back)', deleteArtboard),
     );
     this.syncOptions();
   }
 
-  /** Brings the name and size shown up to date (unless the name is being typed). */
+  private wField: ReturnType<typeof numField> | null = null;
+  private hField: ReturnType<typeof numField> | null = null;
+  private countLabel: HTMLElement | null = null;
+
+  /** Brings the name and size shown up to date (unless being typed); while resizing or drawing, the size being made. */
   syncOptions() {
-    const d = app.doc, dr = this.drag;
-    if (this.nameField && document.activeElement !== this.nameField) { this.nameField.value = d?.name ?? ''; this.nameField.disabled = !d; }
-    if (this.sizeLabel) this.sizeLabel.textContent = dr && dr.kind !== 'move' ? `${dr.r.w} × ${dr.r.h} px` : d ? `${d.width} × ${d.height} px` : '';
+    const d = app.doc, dr = this.drag, n = this.selected().length;
+    if (this.nameField && document.activeElement !== this.nameField) {
+      this.nameField.value = n > 1 ? '' : d?.name ?? '';
+      this.nameField.placeholder = n > 1 ? `${n} artboards` : '';
+      this.nameField.disabled = !d || n > 1;
+    }
+    const w = dr && dr.kind !== 'move' ? dr.r.w : d?.width ?? 0, hh = dr && dr.kind !== 'move' ? dr.r.h : d?.height ?? 0;
+    this.wField?.set(w);
+    this.hField?.set(hh);
+    if (this.countLabel) { this.countLabel.textContent = n > 1 ? `${n} selected · sizes apply to all` : ''; this.countLabel.hidden = n < 2; }
   }
 }
 

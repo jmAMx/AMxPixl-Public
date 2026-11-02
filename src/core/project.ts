@@ -34,6 +34,11 @@ export class Project {
   boards: Board[];
   /** The artboard being worked on. */
   active: Doc;
+  /**
+   * Artboards selected along with the active one (Shift or Ctrl+click), which the Artboard tool moves, resizes,
+   * duplicates and deletes together. Not part of the history.
+   */
+  readonly picked = new Set<Doc>();
   /** Called when undo or redo puts the artboards back as a step left them. */
   onLayout: (l: Layout) => void = () => {};
 
@@ -64,9 +69,16 @@ export class Project {
     return { x: d.panX - b.x * d.zoom, y: d.panY - b.y * d.zoom, zoom: d.zoom };
   }
 
-  /** Switches the artboard being worked on, keeping the view where it is. */
+  /** The selected artboards: the active one and those picked with it, in the file's order. */
+  selection(): Doc[] { return this.docs.filter((d) => d === this.active || this.picked.has(d)); }
+
+  /**
+   * Switches the artboard being worked on, keeping the view where it is. Switching to one of the selected keeps the
+   * selection (the one left stays selected); to any other, it's just that one.
+   */
   setActive(d: Doc) {
     if (d === this.active || !this.has(d)) return;
+    if (this.picked.has(d)) { this.picked.delete(d); this.picked.add(this.active); } else this.picked.clear();
     const o = this.origin, b = this.boardOf(d)!;
     this.active = d;
     d.zoom = o.zoom;
@@ -98,6 +110,7 @@ export class Project {
     const o = this.origin;
     this.boards = l.boards.map((e) => { e.doc.name = e.name; e.doc.source = e.source && { ...e.source }; return { doc: e.doc, x: e.x, y: e.y }; });
     if (!this.has(this.active)) this.active = this.boards[0].doc;
+    for (const p of [...this.picked]) if (!this.has(p) || p === this.active) this.picked.delete(p);
     const d = this.active, b = this.boardOf(d)!;
     d.zoom = o.zoom;
     d.panX = o.x + b.x * o.zoom;

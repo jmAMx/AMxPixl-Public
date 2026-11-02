@@ -36,9 +36,13 @@ const need = (): Doc | null => app.doc;
 
 // ---------- documents ----------
 
-/** A new image; with `boards` above 1, a file of that many artboards this size, side by side. */
-export function createDoc(name: string, w: number, h: number, bg: string | null, boards = 1) {
-  const make = (n: string) => {
+/**
+ * A new image. With `boards`, a file of artboards side by side (top edges in line): a number of them this size, or one
+ * of each size listed (the first listed then stands for w × h).
+ */
+export function createDoc(name: string, w: number, h: number, bg: string | null, boards: number | { w: number; h: number }[] = 1) {
+  const sizes = typeof boards === 'number' ? Array.from({ length: Math.max(1, boards) }, () => ({ w, h })) : boards.length ? boards : [{ w, h }];
+  const make = (n: string, { w, h }: { w: number; h: number }) => {
     const doc = new Doc(n, w, h);
     const l = doc.newRasterLayer(bg ? 'Background' : 'Layer 1', bg ?? undefined);
     if (!bg) doc.counter = 2;
@@ -46,10 +50,11 @@ export function createDoc(name: string, w: number, h: number, bg: string | null,
     doc.activeId = l.id;
     return doc;
   };
-  const doc = make(boards > 1 ? 'Artboard 1' : name);
+  const doc = make(sizes.length > 1 ? 'Artboard 1' : name, sizes[0]);
   doc.resetHistory('New');
   const p = new Project(name, [{ doc, x: 0, y: 0 }]);
-  for (let i = 1; i < boards; i++) p.add(make(`Artboard ${i + 1}`), i * (w + ARTBOARD_GAP), 0);
+  let x = sizes[0].w + ARTBOARD_GAP;
+  for (let i = 1; i < sizes.length; i++) { p.add(make(`Artboard ${i + 1}`, sizes[i]), x, 0); x += sizes[i].w + ARTBOARD_GAP; }
   app.addProject(p);
 }
 
@@ -376,15 +381,40 @@ function copyDoc(src: Doc, name: string): Doc {
   return doc;
 }
 
-/** A copy of the artboard worked on (its layers, settings and pixels), to the right of the others. */
+/**
+ * Selects artboard `d`: 'only' it; 'toggle' adds it to the selection or takes it out (Shift or Ctrl+click); 'keep'
+ * works on it, keeping the selection if it's in it (pressing on one of several to drag them), else just it.
+ */
+export function pickArtboard(d: Doc, how: 'only' | 'toggle' | 'keep') {
+  const p = app.projectOf(d); if (!p) return;
+  if (how === 'only') { p.picked.clear(); app.setDoc(d); app.emit('docs'); return; }
+  if (how === 'keep') { app.setDoc(d); return; }
+  if (d === p.active) {
+    // Taking out the one worked on: the last other selected takes over.
+    const rest = [...p.picked];
+    if (!rest.length) return;
+    app.setDoc(rest[rest.length - 1]);
+    p.picked.delete(d);
+  } else if (p.picked.has(d)) p.picked.delete(d);
+  else { p.picked.add(d); app.setDoc(d); }
+  app.emit('docs');
+}
+
+/** Copies of the selected artboards (their layers, settings and pixels), to the right of the others, as laid out. */
 export function duplicateArtboard() {
-  const p = app.project, src = app.doc; if (!p || !src) return;
+  const p = app.project; if (!p?.active) return;
   const before = p.layout();
-  const r = p.bounds(), b = p.boardOf(src)!;
-  const doc = copyDoc(src, `${src.name} copy`);
-  app.addArtboard(p, doc, r.x + r.w + ARTBOARD_GAP, b.y);
-  p.commitLayout('Duplicate artboard', before, doc);
-  app.setDoc(doc);
+  const r = p.bounds(), sel = p.selection().map((d) => p.boardOf(d)!);
+  const x0 = Math.min(...sel.map((b) => b.x));
+  const copies = sel.map((b) => {
+    const doc = copyDoc(b.doc, `${b.doc.name} copy`);
+    app.addArtboard(p, doc, r.x + r.w + ARTBOARD_GAP + (b.x - x0), b.y);
+    return doc;
+  });
+  p.commitLayout(copies.length > 1 ? 'Duplicate artboards' : 'Duplicate artboard', before, copies[0]);
+  app.setDoc(copies[0]);
+  for (const c of copies.slice(1)) p.picked.add(c);
+  app.emit('docs');
 }
 
 /** The file without artboard `d`, which the one beside it takes over from (not an undo step by itself). */
@@ -407,13 +437,15 @@ export function stepArtboard(dir: 1 | -1) {
   if (r.x + r.w < 0 || r.y + r.h < 0 || r.x > s.w || r.y > s.h) view.panBy(Math.round(s.w / 2 - (r.x + r.w / 2)), Math.round(s.h / 2 - (r.y + r.h / 2)));
 }
 
-/** Removes the artboard worked on (undo brings it back); a file keeps at least one. */
+/** Removes the selected artboards (undo brings them back); a file keeps at least one. */
 export function deleteArtboard() {
-  const p = app.project, d = app.doc; if (!p || !d) return;
-  if (p.boards.length < 2) { toast('A file keeps at least one artboard. Close the file to remove it all.'); return; }
+  const p = app.project; if (!p?.active) return;
+  const sel = p.selection();
+  if (sel.length >= p.boards.length) { toast('A file keeps at least one artboard. Close the file to remove it all.'); return; }
   const before = p.layout();
-  const next = withoutBoard(p, d);
-  p.commitLayout('Delete artboard', before, next);
+  let next = p.active;
+  for (const d of sel) next = withoutBoard(p, d);
+  p.commitLayout(sel.length > 1 ? 'Delete artboards' : 'Delete artboard', before, next);
   app.setDoc(next);
 }
 
@@ -1292,6 +1324,39 @@ export const resetTransform = () => aboutCenter('Reset transform', (t) => ({ ...
 
 export function transformDoc(label: string, g: Mat, w: number, h: number, scaleShapes?: [number, number]) {
   const doc = need(); if (!doc) return;
+  reframe(doc, g, w, h, scaleShapes);
+  const p = app.projectOf(doc);
+  if (p && p.boards.length > 1) {
+    // An artboard among others: a crop or a bigger canvas leaves its picture where it was on the spread (the artboard
+    // moves by what the layers moved inside it), as one step.
+    const before = p.layout(), b = p.boardOf(doc)!;
+    if (g[0] === 1 && g[1] === 0 && g[2] === 0 && g[3] === 1) p.place(b, b.x - g[4], b.y - g[5]);
+    p.commitLayout(label, before, doc);
+    view.requestRender();
+    return;
+  }
+  doc.commit(label);
+  view.fit();
+}
+
+/**
+ * Sets the size of several artboards at once (keeping each one's top-left corner, so their pictures stay put), as one
+ * undo step. `size` gives each its new size.
+ */
+export function resizeArtboards(docs: Doc[], size: (d: Doc) => { w: number; h: number }, label = docs.length > 1 ? 'Resize artboards' : 'Resize artboard') {
+  const p = docs[0] && app.projectOf(docs[0]);
+  if (!p) return;
+  const changed = docs.map((d) => ({ d, s: size(d) })).map(({ d, s }) => ({ d, w: Math.max(1, Math.round(s.w)), h: Math.max(1, Math.round(s.h)) }))
+    .filter(({ d, w, h }) => w !== d.width || h !== d.height);
+  if (!changed.length) return;
+  for (const { d, w, h } of changed) reframe(d, [1, 0, 0, 1, 0, 0], w, h);
+  const [first, ...rest] = changed.map((c) => c.d);
+  first.commit(label, [], undefined, undefined, rest.map((d) => d.takeChange()));
+  if (p.boards.length < 2) view.fit(); else view.requestRender();
+}
+
+/** Puts an image through `g` onto a w × h canvas: its layers, masks, selection, Quick Mask, paths and guides (not a step). */
+function reframe(doc: Doc, g: Mat, w: number, h: number, scaleShapes?: [number, number]) {
   for (const l of doc.all()) {
     if (l.mask) l.mask.t = decompose(mul(g, xformMatrix(l.mask.t)));
     if (!isPlaced(l)) continue;
@@ -1326,18 +1391,6 @@ export function transformDoc(label: string, g: Mat, w: number, h: number, scaleS
   });
   doc.width = Math.max(1, Math.round(w));
   doc.height = Math.max(1, Math.round(h));
-  const p = app.projectOf(doc);
-  if (p && p.boards.length > 1) {
-    // An artboard among others: a crop or a bigger canvas leaves its picture where it was on the spread (the artboard
-    // moves by what the layers moved inside it), as one step.
-    const before = p.layout(), b = p.boardOf(doc)!;
-    if (g[0] === 1 && g[1] === 0 && g[2] === 0 && g[3] === 1) p.place(b, b.x - g[4], b.y - g[5]);
-    p.commitLayout(label, before, doc);
-    view.requestRender();
-    return;
-  }
-  doc.commit(label);
-  view.fit();
 }
 
 export function cropTo(r: Rect) {

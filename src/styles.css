@@ -151,9 +151,25 @@ html[data-theme="dark"] .mono.for-dark, html[data-theme="light"] .mono.for-light
 .opt-value { color: var(--text-dim); font-variant-numeric: tabular-nums; }
 .opt-sep { width: 1px; height: 20px; background: var(--border); }
 .opt-text { width: 150px; }
+.board-size { display: inline-flex; align-items: center; gap: 6px; }
+.board-size .size-pick { width: 150px; }
+.board-size .num { width: 58px; }
+.opt-body.side .board-size { flex-wrap: wrap; }
+.opt-body.side .board-size .size-pick { width: 100%; }
+/* New Image / New Artboard: a row per size (picker, W, H, swap, remove). */
+.size-rows { display: flex; flex-direction: column; gap: 6px; min-width: 0; flex: 1; }
+.size-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.size-row .size-pick { flex: 1 1 120px; min-width: 0; }
+.size-row .field { flex: none; }
+.size-row .num { width: 58px; }
+.size-label { width: 14px; color: var(--text-dim); text-align: right; flex: none; }
+.add-size { align-self: flex-start; display: inline-flex; align-items: center; gap: 4px; }
+.add-size .ico { width: 13px; height: 13px; }
+.field.top { align-items: flex-start; }
 .export-boards { display: flex; flex-direction: column; gap: 4px; max-height: 160px; overflow: auto; }
 .board-row { font-weight: 600; cursor: pointer; }
 .board-row.on { color: var(--accent); }
+.board-row.sel { color: var(--accent); background: var(--accent-soft); }
 .board-row .board-icon { display: inline-flex; width: 18px; justify-content: center; opacity: .8; }
 .board-row .layer-badge { color: var(--text-dim); font-weight: 400; }
 .font-select { width: 170px; }

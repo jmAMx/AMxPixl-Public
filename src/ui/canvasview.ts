@@ -351,7 +351,7 @@ class CanvasView {
     this.labels = [];
     this.chips = [];
     for (const b of p.boards) {
-      const r = this.boardRect(b), on = b.doc === p.active;
+      const r = this.boardRect(b), on = b.doc === p.active, picked = p.picked.has(b.doc);
       // As wide as the artboard (at least a little), shortened with an ellipsis when the name is longer.
       const room = Math.max(60, r.w);
       let text = b.doc.name;
@@ -360,7 +360,7 @@ class CanvasView {
         text += '…';
       }
       const w = ctx.measureText(text).width;
-      ctx.fillStyle = on ? accent : dim;
+      ctx.fillStyle = on || picked ? accent : dim;
       ctx.fillText(text, Math.round(r.x), Math.round(r.y) - 6);
       this.labels.push({ b, r: { x: r.x, y: r.y - LABEL, w: w + 4, h: LABEL } });
       // Came from a .pixl of its own: a chip saying whether saving also saves it there (click to switch).
@@ -381,10 +381,14 @@ class CanvasView {
         ctx.restore();
         this.chips.push({ d: b.doc, r: { x: cx, y: cy, w: cw, h: LABEL - 6 } });
       }
-      if (on) {
+      // The one worked on outlined; others selected with it, dashed.
+      if (on || picked) {
+        ctx.save();
         ctx.strokeStyle = accent;
         ctx.lineWidth = 1;
+        if (picked) ctx.setLineDash([5, 3]);
         ctx.strokeRect(Math.round(r.x) - 0.5, Math.round(r.y) - 0.5, Math.round(r.w) + 1, Math.round(r.h) + 1);
+        ctx.restore();
       }
     }
     ctx.restore();

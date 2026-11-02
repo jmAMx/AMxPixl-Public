@@ -11,32 +11,43 @@ import { cloneCanvas, ctx2d } from '../core/layers';
 import { FILTERS, maskedMerge, type FilterDef, type Params } from '../core/filters';
 import { h } from './dom';
 import { paintableTarget } from '../tools/paint';
-import { checkbox, dialog, numField, seg, slider, toast } from './widgets';
-
-const PRESETS: [string, number, number][] = [
-  ['Full HD 1920 × 1080', 1920, 1080],
-  ['4K UHD 3840 × 2160', 3840, 2160],
-  ['Square post 1080 × 1080', 1080, 1080],
-  ['Portrait post 1080 × 1350', 1080, 1350],
-  ['Story 1080 × 1920', 1080, 1920],
-  ['YouTube thumbnail 1280 × 720', 1280, 720],
-  ['Logo 1024 × 1024', 1024, 1024],
-  ['Web banner 1500 × 500', 1500, 500],
-  ['A4 @ 300 ppi 2480 × 3508', 2480, 3508],
-  ['Letter @ 300 ppi 2550 × 3300', 2550, 3300],
-];
-
-/** The largest image a canvas can hold: no side over 32,767 px and no more than 16,384 × 16,384 pixels in all. */
-const MAX_SIDE = 32767, MAX_AREA = 16384 * 16384;
+import { checkbox, dialog, icon, numField, seg, slider, toast } from './widgets';
+import { MAX_SIDE, pickSize, sizeOptions, sizeProblem } from '../core/sizes';
 
 /** Shows why an image of w × h can't be made and returns true (the dialog then stays open), or false if it can. */
 function tooBig(w: number, h: number): boolean {
-  w = Math.round(w); h = Math.round(h);
-  if (w <= MAX_SIDE && h <= MAX_SIDE && w * h <= MAX_AREA) return false;
-  toast(w > MAX_SIDE || h > MAX_SIDE
-    ? `${w} × ${h} px is too big: an image can be at most ${MAX_SIDE.toLocaleString()} px wide or tall.`
-    : `${w} × ${h} px is ${Math.round((w * h) / 1e6)} megapixels, too big: the most an image can have is ${Math.round(MAX_AREA / 1e6)} (16,384 × 16,384).`, 'error');
-  return true;
+  const why = sizeProblem(w, h);
+  if (why) toast(why, 'error');
+  return !!why;
+}
+
+/**
+ * A size picker: the presets and the ratios (a ratio keeps the width), with "Custom" while the size matches none.
+ * `pick` gets the picker's value; `custom()` puts it back to Custom (after the size is typed).
+ */
+export function sizePicker(pick: (value: string) => void) {
+  const groups = new Map<string, HTMLElement>();
+  for (const o of sizeOptions()) {
+    if (!groups.has(o.group)) groups.set(o.group, h('optgroup', { label: o.group }));
+    groups.get(o.group)!.append(h('option', { value: o.value }, o.label));
+  }
+  const s = h('select', { class: 'size-pick', title: 'A size, or a shape for the width you have', onchange: () => pick(s.value) },
+    h('option', { value: '', selected: true }, 'Custom'), ...groups.values()) as HTMLSelectElement;
+  return Object.assign(s, { custom: () => { s.value = ''; } });
+}
+
+/**
+ * One size: a picker, width and height, and a swap button (and a remove button with `onRemove`). `s` holds the size;
+ * `label` names it in a list.
+ */
+function sizeRow(s: { w: number; h: number }, label?: string, onRemove?: () => void) {
+  const wf = numField('W', s.w, (v) => { s.w = v; pick.custom(); }, { unit: 'px', min: 1, max: MAX_SIDE });
+  const hf = numField('H', s.h, (v) => { s.h = v; pick.custom(); }, { unit: 'px', min: 1, max: MAX_SIDE });
+  const pick = sizePicker((v) => { Object.assign(s, pickSize(v, s.w, s.h)); wf.set(s.w); hf.set(s.h); });
+  const swap = h('button', { class: 'btn small', type: 'button', title: 'Swap width and height', onclick: () => { [s.w, s.h] = [s.h, s.w]; wf.set(s.w); hf.set(s.h); pick.custom(); } }, '⇄');
+  return h('div', { class: 'size-row' },
+    label ? h('span', { class: 'size-label' }, label) : null, pick, wf, hf, swap,
+    onRemove ? h('button', { class: 'icon-btn', type: 'button', title: 'Remove this artboard', onclick: onRemove }, icon('close')) : null);
 }
 
 type Bg = 'white' | 'black' | 'transparent' | 'bgcolor';
@@ -44,44 +55,36 @@ const bgFill = (bg: Bg) => (bg === 'white' ? '#ffffff' : bg === 'black' ? '#0000
 const bgField = (bg: Bg, onChange: (v: Bg) => void) => h('div', { class: 'field wide' }, h('span', null, 'Background'),
   seg([{ v: 'white', label: 'White' }, { v: 'black', label: 'Black' }, { v: 'transparent', label: 'Transparent' }, { v: 'bgcolor', label: 'BG colour' }], bg, onChange));
 
-/** Width and height fields with a preset list and a swap button; `get` reads them. */
-function sizeFields(w: number, hh: number) {
-  const s = { w, h: hh };
-  const wf = numField('Width', w, (v) => { s.w = v; }, { unit: 'px', min: 1, max: MAX_SIDE });
-  const hf = numField('Height', hh, (v) => { s.h = v; }, { unit: 'px', min: 1, max: MAX_SIDE });
-  const preset = h('select', {
-    onchange: () => {
-      const p = PRESETS[Number(preset.value)];
-      if (!p) return;
-      s.w = p[1]; s.h = p[2]; wf.set(s.w); hf.set(s.h);
-    },
-  }, ...PRESETS.map(([l], i) => h('option', { value: i }, l)), h('option', { value: -1, selected: true }, 'Custom'));
-  const swap = h('button', { class: 'btn small', type: 'button', title: 'Swap width and height', onclick: () => { [s.w, s.h] = [s.h, s.w]; wf.set(s.w); hf.set(s.h); } }, '⇄');
-  return { s, preset: h('label', { class: 'field wide' }, h('span', null, 'Preset'), preset), row: h('div', { class: 'row' }, wf, hf, swap) };
-}
-
+/**
+ * File › New: a name, a size, and a background. "Add artboard" adds more sizes: each becomes an artboard of its own
+ * size, side by side in one file.
+ */
 export function newDocDialog() {
-  let bg: Bg = 'white', boards = 1;
+  let bg: Bg = 'white';
   const name = h('input', { type: 'text', value: nextUntitled(), spellcheck: false });
-  const size = sizeFields(1920, 1080);
-  const count = numField('Artboards', boards, (v) => { boards = Math.round(v); }, { min: 1, max: 20 });
-  count.title = 'More than one: artboards of this size side by side in one file (each its own canvas; Image › Artboards adds others)';
+  const sizes = [{ w: 1920, h: 1080 }];
+  const list = h('div', { class: 'size-rows' });
+  const draw = () => {
+    const many = sizes.length > 1;
+    list.replaceChildren(...sizes.map((s, i) => sizeRow(s, many ? `${i + 1}` : undefined, many ? () => { sizes.splice(i, 1); draw(); } : undefined)),
+      h('button', { class: 'btn small add-size', type: 'button', title: 'Another artboard in the same file, with a size of its own (each is its own canvas)',
+        onclick: () => { sizes.push({ ...sizes[sizes.length - 1] }); draw(); } }, icon('plus'), 'Add artboard'));
+  };
+  draw();
   dialog({
-    title: 'New image', width: 440,
+    title: 'New image', width: 520,
     body: [
       h('label', { class: 'field wide' }, h('span', null, 'Name'), name),
-      size.preset,
-      size.row,
+      h('div', { class: 'field wide top' }, h('span', null, 'Size'), list),
       bgField(bg, (v) => { bg = v; }),
-      h('div', { class: 'row' }, count),
     ],
     buttons: [
       { label: 'Cancel' },
       {
         label: 'Create', primary: true, onClick: () => {
-          const { w, h: hh } = size.s;
-          if (tooBig(w, hh)) return false;
-          createDoc(name.value.trim() || nextUntitled(), Math.round(w), Math.round(hh), bgFill(bg), boards);
+          if (sizes.some((s) => tooBig(s.w, s.h))) return false;
+          const list = sizes.map((s) => ({ w: Math.round(s.w), h: Math.round(s.h) }));
+          createDoc(name.value.trim() || nextUntitled(), list[0].w, list[0].h, bgFill(bg), list);
         },
       },
     ],
@@ -92,18 +95,17 @@ export function newDocDialog() {
 export function newArtboardDialog() {
   const d = app.doc; if (!d) return;
   let bg: Bg = 'white';
-  const size = sizeFields(d.width, d.height);
+  const size = { w: d.width, h: d.height };
   dialog({
-    title: 'New artboard', width: 440,
+    title: 'New artboard', width: 520,
     body: [
-      size.preset,
-      size.row,
+      h('div', { class: 'field wide' }, h('span', null, 'Size'), sizeRow(size)),
       bgField(bg, (v) => { bg = v; }),
       h('p', { class: 'dialog-note' }, 'An artboard is a canvas of its own in this file, with its own size and layers. It goes to the right of the others; move it with the Artboard tool.'),
     ],
     buttons: [
       { label: 'Cancel' },
-      { label: 'Add', primary: true, onClick: () => { const { w, h: hh } = size.s; if (tooBig(w, hh)) return false; newArtboard(w, hh, bgFill(bg)); view.fit(); } },
+      { label: 'Add', primary: true, onClick: () => { if (tooBig(size.w, size.h)) return false; newArtboard(size.w, size.h, bgFill(bg)); view.fit(); } },
     ],
   });
 }
@@ -174,7 +176,9 @@ export function canvasSizeDialog() {
 export function exportDialog(all = false) {
   const doc = app.doc; if (!doc) return;
   const boards = app.project && app.project.boards.length > 1 ? app.project.docs : [doc];
-  const chosen = new Set(all ? boards : [doc]);
+  // (Several selected with the Artboard tool or in Layers: those.)
+  const sel = app.project?.selection() ?? [doc];
+  const chosen = new Set(all ? boards : sel.length > 1 ? sel : [doc]);
   let format: 'png' | 'jpeg' | 'webp' = 'png', quality = 0.92, scale = 1, resample = doc.resample;
   const info = h('p', { class: 'dialog-msg' });
   const q = slider({ label: 'Quality', min: 0.1, max: 1, step: 1, display: 100, value: quality, unit: '%', onInput: (v) => { quality = v; } });
