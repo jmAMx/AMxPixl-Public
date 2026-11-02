@@ -195,8 +195,11 @@ export function exportDialog(all = false, startFormat: ExportOpts['format'] = 'p
   const upd = () => {
     const list = boards.filter((d) => chosen.has(d));
     const one = list.length === 1 ? list[0] : null;
-    info.textContent = (one ? `${Math.round(one.width * scale)} × ${Math.round(one.height * scale)} px` : `${list.length} artboards, each its own ${format === 'psd' ? 'file' : 'image'}`)
-      + ` · ${format === 'psd' ? 'Photoshop, with layers' : format.toUpperCase()}${format === 'jpeg' ? ' (transparent areas become white)' : ''}`;
+    info.textContent = (format === 'ico' ? 'Icon: one square picture each at 16, 24, 32, 48, 64, 128 and 256 px (up to its own size)'
+      : one ? `${Math.round(one.width * scale)} × ${Math.round(one.height * scale)} px` : `${list.length} artboards, each its own ${format === 'psd' ? 'file' : 'image'}`)
+      + (format === 'ico' && !one ? ` · ${list.length} icons` : format === 'ico' ? '' : ` · ${format === 'psd' ? 'Photoshop, with layers' : format.toUpperCase()}`)
+      + (format === 'jpeg' ? ' (transparent areas become white)' : '');
+    sc.hidden = format === 'ico';
     q.style.display = format === 'jpeg' || format === 'webp' ? '' : 'none';
     psdNote.hidden = format !== 'psd';
     flatNote.hidden = format === 'psd' && boards.length === 1;
@@ -216,7 +219,7 @@ export function exportDialog(all = false, startFormat: ExportOpts['format'] = 'p
       ...(pick ? [pick] : []),
       h('div', { class: 'field wide' }, h('span', null, 'Format'),
         seg<ExportOpts['format']>([{ v: 'png', label: 'PNG' }, { v: 'jpeg', label: 'JPEG' }, { v: 'webp', label: 'WebP' }, { v: 'tiff', label: 'TIFF' },
-          { v: 'psd', label: 'PSD', title: 'Photoshop, with layers' }], format, (v) => { format = v; upd(); })),
+          { v: 'bmp', label: 'BMP' }, { v: 'ico', label: 'ICO', title: 'Windows icon, 16 to 256 pixels' }, { v: 'psd', label: 'PSD', title: 'Photoshop, with layers' }], format, (v) => { format = v; upd(); })),
       q, sc, resampleField(resample, (v) => { resample = v; }), info, psdNote, flatNote,
     ],
     buttons: [{ label: 'Cancel' }, { label: 'Export', primary: true, onClick: () => {

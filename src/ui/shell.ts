@@ -34,21 +34,23 @@ const hasSel = () => !!app.doc?.selection;
 const open = async () => A.openFiles(await pickFiles('any'));
 const place = async () => A.placeFiles((await pickFiles('image')).map((p) => p.file));
 
-const pasteFromMenu = async () => {
+/** Edit › Paste (a layer), or File › New from Clipboard (`asNew`: an image of its own, the clipboard's size). */
+const pasteFromMenu = async (asNew = false) => {
   try {
     const items = await navigator.clipboard.read();
     for (const it of items) {
       const t = it.types.find((x) => x.startsWith('image/'));
-      if (t) { await A.pasteBlob(await it.getType(t)); return; }
+      if (t) { await A.pasteBlob(await it.getType(t), asNew); return; }
     }
   } catch { /* permission denied: fall back to the in-app clipboard */ }
-  await A.pasteBlob(null);
+  await A.pasteBlob(null, asNew);
 };
 
 const MENUS: MenuDef[] = [
   {
     title: 'File', items: [
       { label: 'New…', accel: 'Ctrl+N', run: newDocDialog },
+      { label: 'New from Clipboard', accel: 'Ctrl+Alt+N', run: () => pasteFromMenu(true) },
       { label: 'Open…', accel: 'Ctrl+O', run: open },
       { label: 'Open Recent', sub: recentMenuItems },
       { label: 'Place Image as Layer…', accel: 'Ctrl+Shift+O', run: place, enabled: hasDoc },
@@ -58,6 +60,8 @@ const MENUS: MenuDef[] = [
       { label: 'Export Image…', accel: 'Ctrl+Shift+E', run: () => exportDialog(), enabled: hasDoc },
       { label: 'Export Artboards…', run: () => exportDialog(true), enabled: () => (app.project?.boards.length ?? 0) > 1 },
       { label: 'Export as Photoshop (.psd)…', run: () => exportDialog(false, 'psd'), enabled: hasDoc },
+      { label: () => { const f = A.lastExportFormat(); return f ? `Quick Export as ${f === 'jpeg' ? 'JPEG' : f.toUpperCase()}…` : 'Quick Export…'; },
+        accel: 'Ctrl+Alt+E', run: async () => { if (!(await A.quickExport())) exportDialog(); }, enabled: hasDoc },
       { label: 'Export Animation (GIF / Video)…', accel: 'Ctrl+Alt+Shift+E', run: animExportDialog, enabled: hasDoc },
       'sep',
       { label: 'Close', accel: 'Ctrl+W', run: () => A.closeDoc(), enabled: hasDoc },
@@ -72,7 +76,7 @@ const MENUS: MenuDef[] = [
       { label: 'Cut', accel: 'Ctrl+X', run: () => A.copy(false, true), enabled: hasLayer },
       { label: 'Copy', accel: 'Ctrl+C', run: () => A.copy(), enabled: hasLayer },
       { label: 'Copy Merged', accel: 'Ctrl+Shift+C', run: () => A.copy(true), enabled: hasDoc },
-      { label: 'Paste', accel: 'Ctrl+V', run: pasteFromMenu, native: true },
+      { label: 'Paste', accel: 'Ctrl+V', run: () => pasteFromMenu(), native: true },
       { label: 'Clear', accel: 'Delete', alt: 'Backspace', run: A.clearSelection, enabled: hasLayer },
       'sep',
       { label: 'Fill with Foreground', accel: 'Alt+Backspace', run: () => A.fillWith('fg'), enabled: hasLayer },

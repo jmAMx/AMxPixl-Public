@@ -19,6 +19,7 @@ import { apply, decompose, intersect, invert, mapRect, matScale, mul, roundOut, 
 import { flatten, renderDoc } from './core/render';
 import { encodePsd } from './core/export/psd';
 import { encodeTiff } from './core/export/tiff';
+import { encodeBmp, encodeIco } from './core/export/bmp';
 import { layerBoxReady, trimRect } from './core/bounds';
 import { Stroke } from './core/brush';
 import { glops } from './core/glops';
@@ -342,7 +343,22 @@ export async function saveDoc(doc: Doc | null = app.doc, saveAs = false) {
   }
 }
 
-export type ExportOpts = { format: 'png' | 'jpeg' | 'webp' | 'tiff' | 'psd'; quality: number; scale: number; nearest?: boolean };
+export type ExportOpts = { format: 'png' | 'jpeg' | 'webp' | 'tiff' | 'bmp' | 'ico' | 'psd'; quality: number; scale: number; nearest?: boolean };
+
+/** The settings of the last export (this session), for File › Quick Export. */
+let lastExport: ExportOpts | null = null;
+export const lastExportFormat = () => lastExport?.format ?? null;
+
+/**
+ * File › Quick Export: the image (the artboard being worked on) with the last export's settings, asking only where
+ * to save it; with no export yet this session, false (so the Export dialog opens instead).
+ */
+export async function quickExport(): Promise<boolean> {
+  const doc = app.doc;
+  if (!doc || !lastExport) return false;
+  await exportImage(doc, lastExport).catch((e) => toast(`Export failed: ${e.message}`, 'error'));
+  return true;
+}
 
 /** Notes from the last Photoshop export on what had to change (text as pixels and so on), shown once it's saved. */
 let psdNotes: string[] = [];
@@ -356,6 +372,8 @@ async function exported(doc: Doc, o: ExportOpts): Promise<{ blob: Blob; w: numbe
   }
   let c = flatten(doc, o.scale, { nearest: o.nearest });
   if (o.format === 'tiff') return { blob: await encodeTiff(c), w: c.width, h: c.height };
+  if (o.format === 'bmp') return { blob: encodeBmp(c), w: c.width, h: c.height };
+  if (o.format === 'ico') { const s = Math.min(256, Math.max(16, c.width, c.height)); return { blob: await encodeIco(c, o.nearest), w: s, h: s }; }
   if (o.format === 'jpeg') {
     const bgc = newCanvas(c.width, c.height);
     const x = ctx2d(bgc);
@@ -368,12 +386,13 @@ async function exported(doc: Doc, o: ExportOpts): Promise<{ blob: Blob; w: numbe
 }
 
 const extOfFormat = (f: ExportOpts['format']) => (f === 'jpeg' ? 'jpg' : f === 'tiff' ? 'tif' : f);
-const mimeOf = (f: ExportOpts['format']) => (f === 'psd' ? 'image/vnd.adobe.photoshop' : `image/${f}`);
+const mimeOf = (f: ExportOpts['format']) => (f === 'psd' ? 'image/vnd.adobe.photoshop' : f === 'ico' ? 'image/x-icon' : `image/${f}`);
 const acceptOf = (f: ExportOpts['format']) => ({ [mimeOf(f)]: f === 'tiff' ? ['.tif', '.tiff'] : [`.${extOfFormat(f)}`] });
 /** What changed on the way into a Photoshop file, as a sentence for after the export ('' for other formats). */
 const psdNote = (o: ExportOpts) => (o.format === 'psd' && psdNotes.length ? ` ${psdNotes.join(' ')}` : '');
 
 export async function exportImage(doc: Doc, o: ExportOpts) {
+  lastExport = { ...o };
   const { blob, w, h } = await exported(doc, o);
   const ext = extOfFormat(o.format);
   const ref = await saveBlob(blob, `${baseName(app.nameOf(doc)).replace(/[\\/:*?"<>|]/g, '-')}.${ext}`, null, acceptOf(o.format));
@@ -389,6 +408,7 @@ export async function exportArtboards(docs: Doc[], o: ExportOpts, folder?: strin
   const p = docs[0] && app.projectOf(docs[0]);
   if (!p) return;
   if (docs.length === 1 && !folder) return exportImage(docs[0], o);
+  lastExport = { ...o };
   const ext = extOfFormat(o.format), accept = acceptOf(o.format);
   const nameOf = (d: Doc) => `${String(p.boards.findIndex((b) => b.doc === d) + 1).padStart(2, '0')} - ${d.name.replace(/[\\/:*?"<>|]/g, '-')}.${ext}`;
   let rest = docs;
@@ -1873,8 +1893,8 @@ export async function copy(merged = false, cut = false) {
   toast(cut ? 'Cut to clipboard' : 'Copied to clipboard');
 }
 
-/** Pastes an image as a new layer (or a new document when none is open). */
-export async function pasteBlob(blob: Blob | null) {
+/** Pastes an image as a new layer (or, with `asNew` or when none is open, as a new image the clipboard's size). */
+export async function pasteBlob(blob: Blob | null, asNew = false) {
   let c: HTMLCanvasElement | null = null;
   let at: Pt | null = null;
   if (blob) {
@@ -1885,7 +1905,7 @@ export async function pasteBlob(blob: Blob | null) {
     at = clip.at;
   }
   if (!c) { toast('The clipboard has no image.'); return; }
-  if (!app.doc) { app.addDoc(docFromCanvas(nextUntitled(), c)); return; }
+  if (!app.doc || asNew) { app.addDoc(docFromCanvas(nextUntitled(), c)); return; }
   placeCanvas(c, 'Pasted', at);
 }
 
