@@ -594,18 +594,78 @@ function dock() {
     { id: 'history', title: 'History', el: historyPanel() },
   ];
   const el = h('aside', { class: 'dock' });
+  const isOpen = (p: typeof panels[number]) => (p.closedByDefault ? app.prefs.dock[p.id] === true : app.prefs.dock[p.id] !== false);
   const build = () => {
-    el.replaceChildren(...panels.map((p) => {
-      const openP = p.closedByDefault ? app.prefs.dock[p.id] === true : app.prefs.dock[p.id] !== false;
-      return h('section', { class: `panel panel-${p.id}` + (openP ? ' open' : '') + (p.grow ? ' grow' : '') },
+    const heights = app.prefs.panelHeights ?? {};
+    const open = panels.filter(isOpen);
+    // With every stretching panel sized by hand, the last open one takes up what's left.
+    const fill = open.some((p) => p.grow && !heights[p.id]) ? null : open[open.length - 1];
+    const sections = panels.map((p) => {
+      const openP = isOpen(p), sized = openP && !!heights[p.id];
+      const s = h('section', { class: `panel panel-${p.id}` + (openP ? ' open' : '') + (p.grow ? ' grow' : '') + (sized ? ' sized' : '') + (p === fill ? ' fill' : '') },
         h('button', { class: 'panel-head', type: 'button', 'aria-expanded': String(openP), onclick: () => { app.prefs.dock[p.id] = !openP; app.setPrefs({}); } },
           h('span', { class: 'chev' }, icon('chevron')), p.title),
         h('div', { class: 'panel-body' }, p.el));
-    }));
+      if (sized) s.style.flexBasis = `${heights[p.id]}px`;
+      return s;
+    });
+    // An edge to drag between each two open panels next to each other.
+    const kids: HTMLElement[] = [];
+    panels.forEach((p, i) => {
+      kids.push(sections[i]);
+      const next = panels[i + 1];
+      if (next && isOpen(p) && isOpen(next)) kids.push(panelGrip(sections[i], sections[i + 1], p.id, next.id));
+    });
+    el.replaceChildren(...kids);
   };
   app.on('prefs', build);
   build();
   return el;
+}
+
+/** The smallest a dock panel can be dragged to: its header and a little of what's in it. */
+const PANEL_MIN = 76;
+
+/**
+ * The edge between two open dock panels: dragging it makes one taller and the other shorter by as much (the others
+ * stay put), and the heights are kept. It lights up on hover and while dragging; double-click puts both back to sizing
+ * themselves.
+ */
+function panelGrip(above: HTMLElement, below: HTMLElement, a: string, b: string) {
+  const grip = h('div', { class: 'dock-grip', title: 'Drag to resize these panels · double-click to size them automatically' });
+  grip.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    try { grip.setPointerCapture(e.pointerId); } catch { /* pointer already gone */ }
+    grip.classList.add('drag');
+    const y0 = e.clientY, ha = above.getBoundingClientRect().height, hb = below.getBoundingClientRect().height;
+    let na = ha, nb = hb;
+    const set = (s: HTMLElement, v: number) => { s.classList.add('sized'); s.style.flexBasis = `${v}px`; s.style.flexGrow = '0'; };
+    const move = (ev: PointerEvent) => {
+      const dy = Math.max(PANEL_MIN - ha, Math.min(hb - PANEL_MIN, ev.clientY - y0));
+      na = Math.round(ha + dy); nb = Math.round(hb - dy);
+      set(above, na); set(below, nb);
+    };
+    const up = () => {
+      grip.classList.remove('drag');
+      grip.removeEventListener('pointermove', move);
+      grip.removeEventListener('pointerup', up);
+      grip.removeEventListener('pointercancel', up);
+      grip.removeEventListener('lostpointercapture', up);
+      if (na !== ha || nb !== hb) app.setPrefs({ panelHeights: { ...app.prefs.panelHeights, [a]: na, [b]: nb } });
+    };
+    grip.addEventListener('pointermove', move);
+    grip.addEventListener('pointerup', up);
+    grip.addEventListener('pointercancel', up);
+    grip.addEventListener('lostpointercapture', up);
+  });
+  grip.addEventListener('dblclick', () => {
+    const rest = { ...app.prefs.panelHeights };
+    delete rest[a];
+    delete rest[b];
+    app.setPrefs({ panelHeights: rest });
+  });
+  return grip;
 }
 
 export function mountShell(root: HTMLElement) {

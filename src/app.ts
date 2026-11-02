@@ -27,6 +27,8 @@ export interface Prefs {
   toolGroups: string[][]; optionsDock: 'top' | 'side';
   /** The order of the tools in the toolbox (tool ids), when it's been rearranged; tools added since go where they were. */
   toolOrder?: string[];
+  /** Heights (CSS px) of dock panels sized by dragging the edge between them; the others size themselves. */
+  panelHeights?: Record<string, number>;
   /** Readouts in the status bar (View › Status Bar); missing in settings saved before they existed. */
   meters?: Meter[];
   /** Drawing tablet settings (Edit › Pen Tablet), shared by every painting tool. */

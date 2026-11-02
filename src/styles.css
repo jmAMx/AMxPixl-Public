@@ -405,6 +405,14 @@ input[type="range"]:focus-visible::-webkit-slider-thumb { background: var(--acce
 .panel-layers.open .panel-body { display: flex; flex-direction: column; overflow: hidden; flex: 1; }
 .panel-properties.open .panel-body { flex: 1; }
 .panel-history .panel-body { max-height: 180px; }
+/* Sized by dragging the edge between panels: that height (shrinking if the window is too short); what's in it scrolls. */
+.panel.open.sized { flex: 0 1 auto; min-height: 76px; }
+.panel.open.sized .panel-body { flex: 1 1 auto; max-height: none; }
+.panel.open.fill { flex-grow: 1; }
+/* The edge between two open panels: a thin strip over their border, lit up on hover and while dragging. */
+.dock-grip { flex: none; height: 6px; margin: -3px 0; position: relative; z-index: 3; cursor: row-resize; }
+.dock-grip:hover, .dock-grip.drag { background: linear-gradient(to bottom, transparent 2px, var(--accent-line) 2px 4px, transparent 4px); }
+.dock-grip.drag { background: linear-gradient(to bottom, transparent 2px, var(--accent) 2px 4px, transparent 4px); box-shadow: var(--glow); }
 .empty-note { color: var(--text-dim); padding: 14px 12px; text-align: center; }
 
 /* colour */
