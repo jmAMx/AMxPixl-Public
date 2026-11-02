@@ -2,7 +2,7 @@ import { app } from '../app';
 import { Stroke } from '../core/brush';
 import type { Doc } from '../core/document';
 import { lumOf } from '../actions';
-import { ctx2d, newCanvas } from '../core/layers';
+import { cropCanvas, ctx2d, newCanvas } from '../core/layers';
 import { apply, invert, mapRect, setT, xformMatrix, type Pt, type Rect } from '../core/math';
 import { sampleDoc } from '../core/render';
 import type { PixelTarget } from '../core/types';
@@ -22,7 +22,8 @@ export function paintableTarget(doc: Doc): { target: PixelTarget; isMask: boolea
   if (!a) { toast('Add a layer first (Layer › New Layer).'); return null; }
   const pt = doc.paintTarget();
   if (pt) {
-    if (!doc.shows(a)) { toast(doc.anim ? 'That layer is hidden in this frame. Show it before painting.' : 'That layer is hidden. Show it before painting.'); return null; }
+    // (Quick Mask belongs to the image, so a hidden layer doesn't matter for it.)
+    if (pt.target.key !== doc.quickMask && !doc.shows(a)) { toast(doc.anim ? 'That layer is hidden in this frame. Show it before painting.' : 'That layer is hidden. Show it before painting.'); return null; }
     return pt;
   }
   if (a.type === 'raster' && a.model) toast('This is a 3D layer. Rasterize it first (Properties › 3D › Rasterize) to paint on it.');
@@ -174,7 +175,6 @@ class FillTool implements Tool {
     const ctx = ctx2d(c, true);
     const img = ctx.getImageData(0, 0, W, H);
     const d = img.data;
-    const orig = new Uint8ClampedArray(d);
     const si = (sy * W + sx) * 4;
     const tr = d[si], tg = d[si + 1], tb = d[si + 2], ta = d[si + 3];
     const tol = app.opts.fill.tolerance;
@@ -218,8 +218,8 @@ class FillTool implements Tool {
     }
     if (x1 < 0) return;
     const r = { x: x0, y: y0, w: x1 - x0 + 1, h: y1 - y0 + 1 };
-    const before = newCanvas(r.w, r.h);
-    ctx2d(before).putImageData(subImage(new ImageData(orig, W, H), r), 0, 0);
+    // (Copied on the GPU before the canvas changes: exact, and no second full-size copy of the pixels.)
+    const before = cropCanvas(c, r);
     ctx.putImageData(subImage(img, r), r.x, r.y);
     doc.commit('Paint Bucket', [{ key: layer.key, rect: r, before, after: null }]);
     app.useColor(app.fg);

@@ -254,7 +254,8 @@ export function colorRangeDialog() {
   };
   // While open, a click on the image samples its colour.
   const sample = (e: PointerEvent) => {
-    if (e.button !== 0 || mode !== 0) return;
+    // (Only on the image the dialog was opened for: another one shown meanwhile has other colours at that spot.)
+    if (e.button !== 0 || mode !== 0 || app.doc !== doc) return;
     const r = view.clientRect();
     const p = view.toDoc(e.clientX - r.left, e.clientY - r.top);
     if (p.x < 0 || p.y < 0 || p.x >= doc.width || p.y >= doc.height) return;
@@ -283,7 +284,7 @@ export function colorRangeDialog() {
     onCancel: done,
     buttons: [
       { label: 'Cancel', onClick: done },
-      { label: 'OK', primary: true, onClick: () => { done(); colorRangeSelection(src, mode, fuzz, rgb, how); } },
+      { label: 'OK', primary: true, onClick: () => { done(); colorRangeSelection(doc, src, mode, fuzz, rgb, how); } },
     ],
   });
 }

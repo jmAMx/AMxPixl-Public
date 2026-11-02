@@ -109,9 +109,10 @@ interface Env {
 /**
  * Depth maps drawn recently, kept while nothing they show has changed: the depth layers (their pixels, place,
  * visibility...), the view and the frame. Dragging an effect's slider or playing an animation then reuses the map
- * instead of drawing the depth layers again for every frame. The two most recent (a full view and a partial redraw).
+ * instead of drawing the depth layers again for every frame. The two most recent (a full view and a partial redraw),
+ * by document id rather than the document itself, so a closed one isn't kept in memory.
  */
-const keptDepth: { doc: Doc; sig: string; canvas: HTMLCanvasElement }[] = [];
+const keptDepth: { uid: string; sig: string; canvas: HTMLCanvasElement }[] = [];
 
 /** Everything a depth map depends on, as text to compare. */
 function depthSignature(env: Env, w: number, h: number): string {
@@ -129,7 +130,7 @@ function depthSignature(env: Env, w: number, h: number): string {
 function depthMap(env: Env, like: HTMLCanvasElement): HTMLCanvasElement {
   if (env.depth) return env.depth;
   const sig = depthSignature(env, like.width, like.height);
-  const kept = keptDepth.find((k) => k.doc === env.doc && k.sig === sig);
+  const kept = keptDepth.find((k) => k.uid === env.doc.uid && k.sig === sig);
   if (kept) return (env.depth = kept.canvas);
   // Reuse the older map's canvas when it's the same size.
   const old = keptDepth.length >= 2 ? keptDepth.shift()! : null;
@@ -141,7 +142,7 @@ function depthMap(env: Env, like: HTMLCanvasElement): HTMLCanvasElement {
   x.fillRect(0, 0, c.width, c.height);
   x.globalCompositeOperation = 'source-over';
   renderList(env.doc.layers, c, { ...env, depthPass: true, out: c, done: false, stopAt: undefined, depth: undefined });
-  keptDepth.push({ doc: env.doc, sig, canvas: c });
+  keptDepth.push({ uid: env.doc.uid, sig, canvas: c });
   return (env.depth = c);
 }
 

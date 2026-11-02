@@ -48,6 +48,7 @@ window.addEventListener('drop', (e) => {
   overlay.hidden = true;
   const files = [...(e.dataTransfer?.files ?? [])];
   if (!files.length) return;
+  if (app.busy) { toast('Apply or cancel the filter first.'); return; }
   const overCanvas = view.el.contains(e.target as Node);
   if (app.doc && overCanvas) A.placeFiles(files);
   else A.openFiles(files.map((f) => ({ file: f, ref: { name: f.name } })));
@@ -58,6 +59,7 @@ window.addEventListener('paste', (e) => {
   if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')) return;
   const item = [...(e.clipboardData?.items ?? [])].find((i) => i.type.startsWith('image/'));
   e.preventDefault();
+  if (app.busy) return;
   A.pasteBlob(item?.getAsFile() ?? null);
 });
 
@@ -103,6 +105,8 @@ const openPaths = async (paths: string[]) => {
   for (const p of paths) {
     try { files.push({ file: await readPath(p), ref: { name: fileName(p), path: p } }); } catch (err) { toast(`Couldn't open ${fileName(p)}: ${err}`, 'error'); }
   }
+  // (A file double-clicked in Explorer during a filter preview opens once the preview is applied or cancelled.)
+  while (app.busy) await new Promise((r) => setTimeout(r, 300));
   if (files.length) await A.openFiles(files);
 };
 
@@ -118,6 +122,8 @@ if (isDesktop) {
     const win = getCurrentWindow();
     win.onCloseRequested(async (e) => {
       e.preventDefault();
+      // A field still being typed in commits first, so its edit counts as unsaved work.
+      (document.activeElement as HTMLElement | null)?.blur?.();
       const dirty = app.docs.filter((d) => d.dirty);
       if (dirty.length) {
         const what = dirty.length === 1 ? `"${dirty[0].name}" has` : `${dirty.length} images have`;

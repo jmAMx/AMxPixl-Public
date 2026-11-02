@@ -25,6 +25,7 @@ export class WorkerPool<J extends object, R> {
       // A crashed worker fails its job and is replaced.
       for (const [id, p] of this.pending) if (p.w === w) { this.pending.delete(id); p.rej(new Error(e.message || 'Background task failed')); }
       this.workers = this.workers.filter((x) => x !== w);
+      this.idle = this.idle.filter((x) => x !== w);
       w.terminate();
       this.pump();
     };

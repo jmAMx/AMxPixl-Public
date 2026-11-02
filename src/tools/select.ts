@@ -102,7 +102,8 @@ class MarqueeTool extends SelectTool {
     if (p.alt && this.mode === 'replace') { x -= w; y -= h; w *= 2; h *= 2; }
     const x0 = Math.round(Math.min(x, x + w)), y0 = Math.round(Math.min(y, y + h));
     const x1 = Math.round(Math.max(x, x + w)), y1 = Math.round(Math.max(y, y + h));
-    this.op = { mode: this.mode === 'sub' ? 'sub' : 'add', shape: this.shape, pts: [x0, y0, x1 - x0, y1 - y0] };
+    // A drag too thin to cover a whole pixel selects nothing: it counts as a click (which deselects).
+    this.op = x1 > x0 && y1 > y0 ? { mode: this.mode === 'sub' ? 'sub' : 'add', shape: this.shape, pts: [x0, y0, x1 - x0, y1 - y0] } : null;
     view.requestOverlay();
   }
 }

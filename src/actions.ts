@@ -120,6 +120,8 @@ export async function saveDoc(doc: Doc | null = app.doc, saveAs = false) {
   if (!doc) return false;
   const isPixl = doc.name.toLowerCase().endsWith('.pixl');
   const existing = !saveAs && isPixl ? doc.file : null;
+  // The history step being saved. Edits made while the file is written aren't in it, so they stay unsaved.
+  const saving = doc.entries[doc.index - 1];
   try {
     const blob = await encodePixl(doc);
     const ref = await saveBlob(blob, `${baseName(doc.name)}.pixl`, existing, PIXL_ACCEPT);
@@ -127,11 +129,12 @@ export async function saveDoc(doc: Doc | null = app.doc, saveAs = false) {
     const stored = ref.path || ref.handle;
     doc.file = stored ? ref : null;
     doc.name = stored ? ref.name : `${baseName(doc.name)}.pixl`;
-    doc.savedIndex = doc.index;
+    // (0, never current, if that step has since been undone and replaced or dropped from history.)
+    doc.savedIndex = doc.entries.indexOf(saving) + 1;
     app.emit('docs');
     toast(`Saved ${doc.name}`);
     if (stored) { addRecent(ref, thumbOf(doc)); app.emit('recent'); }
-    clearRecovery(doc).catch(() => {});
+    if (!doc.dirty) clearRecovery(doc).catch(() => {});
     return true;
   } catch (e) {
     toast(`Save failed: ${(e as Error).message}`, 'error');
@@ -1150,8 +1153,8 @@ export async function selectSimilar(x: number, y: number, mode: SelMode) {
 }
 
 /** Colour Range: preview mask (not committed) or apply it. */
-export function colorRangeSelection(src: HTMLCanvasElement, mode: number, fuzz: number, rgb: [number, number, number], how: SelMode) {
-  const doc = need(); if (!doc) return;
+export function colorRangeSelection(doc: Doc, src: HTMLCanvasElement, mode: number, fuzz: number, rgb: [number, number, number], how: SelMode) {
+  if (!app.docs.includes(doc)) return;
   doc.setSelection(combine(doc, colorRangeMask(src, mode, fuzz, rgb), how));
   doc.commit('Colour Range');
 }
@@ -1332,7 +1335,7 @@ export async function newLut() {
 // ---------- warp presets ----------
 
 /** A layer as it was before a warp preset was tried on it, to put back on Cancel. */
-type EnvelopeStart = { l: PlacedLayer; envelope?: Envelope | null; warp?: Warp | null; key?: string; t: Xform; box?: Rect | null };
+type EnvelopeStart = { doc: Doc; l: PlacedLayer; envelope?: Envelope | null; warp?: Warp | null; key?: string; t: Xform; box?: Rect | null };
 
 /**
  * Starts trying warp presets on the active layer. Text and shapes keep the preset as a setting (they stay
@@ -1343,7 +1346,7 @@ export async function beginEnvelope(): Promise<EnvelopeStart | null> {
   const doc = need(); const l = doc?.activePlaced;
   if (!doc || !l) { toast('Select an image, text or shape layer to warp.'); return null; }
   if (l.type === 'raster' && l.model) { toast('3D layers can\'t be warped. Rasterize it first (Properties › 3D › Rasterize).'); return null; }
-  const start: EnvelopeStart = { l, t: { ...l.t }, box: l.box ? { ...l.box } : l.box };
+  const start: EnvelopeStart = { doc, l, t: { ...l.t }, box: l.box ? { ...l.box } : l.box };
   if (l.type !== 'raster') { start.envelope = l.envelope ? { ...l.envelope } : null; return start; }
   start.warp = l.warp ? structuredClone(l.warp) : null;
   start.key = l.key;
@@ -1362,18 +1365,19 @@ export async function beginEnvelope(): Promise<EnvelopeStart | null> {
   return start;
 }
 
-/** Shows `e` on the layer being warped (null takes the preset off). */
+/**
+ * Shows `e` on the layer being warped (null takes the preset off). Always on the image it started in, which may no
+ * longer be the one shown (the Warp dialog lets you switch).
+ */
 export function previewEnvelope(s: EnvelopeStart, e: Envelope | null) {
-  const doc = need(); if (!doc) return;
-  const l = s.l;
+  const { doc, l } = s;
   if (l.type === 'raster') l.warp = e ? envelopeMesh(e, rasterBox(doc, l)) : s.warp ?? null;
   else l.envelope = e ? { ...e } : null;
   doc.touch('meta');
 }
 
 export function finishEnvelope(s: EnvelopeStart, keep: boolean, label = 'Warp') {
-  const doc = need(); if (!doc) return;
-  const l = s.l;
+  const { doc, l } = s;
   if (keep) {
     const on = l.type === 'raster' ? !!l.warp : !!l.envelope;
     doc.commit(on ? label : 'Remove warp');

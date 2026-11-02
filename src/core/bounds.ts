@@ -47,6 +47,9 @@ export function alphaBounds(key: string, canvas: HTMLCanvasElement, onReady?: ()
     return undefined;
   }
   const e: Entry = { canvas, w: canvas.width, h: canvas.height, ver, rect: 'pending' };
+  // Each entry holds on to its layer's pixels: forget the oldest, so replaced and closed layers don't pile up.
+  cache.delete(key);
+  if (cache.size >= 64) cache.delete(cache.keys().next().value!);
   cache.set(key, e);
   if (onReady) waiting.add(onReady);
   scan(canvas)

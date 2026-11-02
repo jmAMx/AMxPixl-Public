@@ -481,7 +481,8 @@ class MoveTool implements Tool {
     const dir = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[e.key];
     if (!dir) return false;
     for (const l of f.layers) setPlacedTransform(l, { ...l.t, x: l.t.x + dir[0] * step, y: l.t.y + dir[1] * step });
-    app.doc!.commit('Nudge');
+    // Holding the key (or tapping quickly) nudges as one undo step, rather than one per key repeat.
+    app.doc!.commit('Nudge', [], `nudge:${f.layers.map((l) => l.id).join()}`);
     return true;
   }
 

@@ -90,8 +90,13 @@ class App {
   tools: Tool[] = [];
   opts: ToolOpts = structuredClone(DEFAULT_OPTS);
   prefs: Prefs = load<Prefs>('amxpixl.prefs', { theme: 'dark', glow: false, dock: { color: true, properties: true, layers: true, history: false }, rulers: false, guides: true, snap: true, pixelGrid: true, onion: false, toolCols: 1, toolLabels: false, toolGroups: [], optionsDock: 'top', tablet: DEFAULT_TABLET });
-  /** Set while a modal filter preview or text edit owns the canvas. */
-  busy = false;
+  /**
+   * Set while a filter preview owns the canvas: the layer shows previewed pixels that aren't a history step yet, so
+   * saving, undoing, switching images and the like wait (the rest of the window ignores the mouse meanwhile).
+   */
+  get busy() { return this.isBusy; }
+  set busy(v: boolean) { this.isBusy = v; document.body.classList.toggle('previewing', v); }
+  private isBusy = false;
   /** An animation is playing in the Timeline. */
   playing = false;
   /** View › Depth Map: the canvas shows the depth map instead of the picture. */
@@ -127,6 +132,8 @@ class App {
   }
 
   setDoc(d: Doc | null) {
+    // A field still being typed in (say a text layer's text in Properties) commits to the document it belongs to.
+    (document.activeElement as HTMLElement | null)?.blur?.();
     this.tool?.deactivate?.();
     this.doc = d;
     this.emit('docs');

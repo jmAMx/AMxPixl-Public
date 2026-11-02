@@ -41,6 +41,7 @@ class CanvasView {
   private antsTimer = 0;
   private panning: { x: number; y: number; px: number; py: number } | null = null;
   private down = false;
+  private downId = -1;
   private spaceHeld = false;
   private activeTool: Tool | null = null;
   /** The tool to go back to after a stroke with the pen's eraser end. */
@@ -110,6 +111,8 @@ class CanvasView {
   get size() { return { w: this.cssW, h: this.cssH }; }
   /** A drag is in progress (background work like autosave waits for it to finish). */
   get busy() { return this.interacting || this.down; }
+  /** A tool is being dragged on the canvas (a stroke, a move...). */
+  get dragging() { return this.down; }
 
   requestRender() { this.dirty = true; this.partial = null; this.schedule(); }
 
@@ -565,6 +568,9 @@ class CanvasView {
 
   private onDown(e: PointerEvent) {
     if (!this.doc) return;
+    // A second pen, mouse or finger while one is already drawing would start a new stroke over the unfinished one.
+    if (this.down && e.pointerId !== this.downId) return;
+    this.downId = e.pointerId;
     // Stop the browser moving focus to <body> after this handler, so tools can focus their own editors.
     e.preventDefault();
     (document.activeElement as HTMLElement | null)?.blur?.();
@@ -619,7 +625,7 @@ class CanvasView {
   }
 
   private onMove(e: PointerEvent) {
-    if (!this.doc) return;
+    if (!this.doc || (this.down && e.pointerId !== this.downId)) return;
     const p = this.info(e);
     this.hover = p;
     this.onCursor({ x: p.x, y: p.y });
@@ -643,6 +649,7 @@ class CanvasView {
   }
 
   private onUp(e: PointerEvent) {
+    if (this.down && e.pointerId !== this.downId) return;
     if (this.panning) { this.panning = null; this.updateCursor(); return; }
     if (this.guideDrag) { this.endGuide(this.info(e)); this.updateCursor(); return; }
     if (!this.down) { this.restoreTool(); return; }

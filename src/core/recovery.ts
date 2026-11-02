@@ -1,5 +1,5 @@
 import { Doc, flatLayers } from './document';
-import { canvasBlob, decodeImage } from './fileio';
+import { canvasBlob, decodeImage, fewAtOnce } from './fileio';
 import { idbDel, idbGet, idbKeys, idbPut } from './idb';
 import { isDesktop } from './platform';
 import type { Meta } from './types';
@@ -100,7 +100,8 @@ export async function autosave(doc: Doc) {
     const c = doc.pool.get(k);
     if (!c) continue;
     doc.dirtyKeys.delete(k);
-    await store.putBlob(doc.uid, k, await canvasBlob(c));
+    // If writing fails, the buffer is tried again next time rather than left as its older copy.
+    try { await store.putBlob(doc.uid, k, await canvasBlob(c)); } catch (e) { doc.dirtyKeys.add(k); throw e; }
     doc.storedKeys.add(k);
     // Yield between layers so the editor stays responsive.
     await new Promise((r) => setTimeout(r, 0));
@@ -139,17 +140,22 @@ export async function listRecovery(): Promise<{ uid: string; name: string; saved
   return out.sort((a, b) => b.savedAt - a.savedAt);
 }
 
-/** Rebuilds a recovered document (marked unsaved). */
+/**
+ * Rebuilds a recovered document (marked unsaved). Its copy is kept, under the same id, until the document is saved
+ * or closed, so crashing again before the next autosave doesn't lose it.
+ */
 export async function restoreRecovery(uid: string): Promise<Doc | null> {
   const s = await storeOf(uid);
   const r = s && (await s.getRecord(uid));
   if (!s || !r) return null;
   const doc = new Doc(r.name, r.meta.width, r.meta.height);
-  for (const k of r.keys) {
+  doc.uid = uid;
+  const canvases = await fewAtOnce(r.keys, async (k) => {
     const b = await s.getBlob(uid, k);
     if (!b) throw new Error('part of the image data is missing.');
-    doc.pool.set(k, await decodeImage(b));
-  }
+    return decodeImage(b);
+  });
+  r.keys.forEach((k, i) => doc.pool.set(k, canvases[i]));
   doc.layers = r.meta.layers;
   doc.activeId = r.meta.activeId;
   doc.counter = r.meta.counter;
@@ -163,6 +169,7 @@ export async function restoreRecovery(uid: string): Promise<Doc | null> {
   doc.file = r.file;
   doc.resetHistory('Recovered');
   doc.savedIndex = -1;
-  await clearRecovery(uid);
+  // Buffers already in the files needn't be written again (a copy from before 0.8.3 is moved to the files).
+  if (s === store) for (const k of r.keys) doc.storedKeys.add(k);
   return doc;
 }

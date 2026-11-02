@@ -73,7 +73,8 @@ class ShapeTool implements Tool {
     this.drawing = null;
     if (!d) return;
     const s = d.layer.shape;
-    if (Math.abs(s.w) < 2 && Math.abs(s.h) < 2) { app.doc!.revert(); return; }
+    // (A box shape too thin to see is dropped too: it would be an invisible layer that can't be scaled sensibly.)
+    if (s.kind === 'line' ? Math.abs(s.w) < 2 && Math.abs(s.h) < 2 : Math.abs(s.w) < 2 || Math.abs(s.h) < 2) { app.doc!.revert(); return; }
     if (s.kind !== 'line') {
       // Normalise so the box always grows right/down from its origin.
       d.layer.t = { ...d.layer.t, x: d.layer.t.x + Math.min(0, s.w), y: d.layer.t.y + Math.min(0, s.h) };

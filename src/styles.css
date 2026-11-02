@@ -479,6 +479,8 @@ input[type="range"]:focus-visible::-webkit-slider-thumb { background: var(--acce
 .st-gpu.bad { color: var(--danger); }
 
 /* ---------- dialogs ---------- */
+/* While a filter preview owns the canvas, only the canvas (to look around) and the dialog respond. */
+body.previewing :is(.menubar, .optionsbar, .toolbox, .tabs, .timeline, .dock) { pointer-events: none; opacity: .5; }
 .backdrop { position: fixed; inset: 0; z-index: 40; background: rgba(0, 0, 0, .45); display: grid; place-items: center; }
 .backdrop.modeless { background: none; pointer-events: none; place-items: start end; padding: 84px 312px 0 0; }
 .backdrop.modeless .dialog { pointer-events: auto; }

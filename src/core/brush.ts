@@ -216,7 +216,7 @@ export class Stroke {
     const pad = RING * 3;
     const R = intersect({ x: rr.x - pad, y: rr.y - pad, w: rr.w + pad * 2, h: rr.h + pad * 2 }, { x: 0, y: 0, w: this.src.width, h: this.src.height });
     if (!R) return;
-    const cov = cropCanvas(this.buffer, R);
+    const cov = this.coverage(R);
     // Only a thin ring just outside the painted area counts as "surroundings", so a dark patch further away
     // (or the far side of an edge) can't tint the result.
     const spread = newCanvas(R.w, R.h);
@@ -273,7 +273,7 @@ export class Stroke {
       x.filter = `blur(${radius}px)`;
       x.drawImage(B, 0, 0);
     }
-    const res = glops.retouch(B, blurred, cropCanvas(this.buffer, R), mode, rt.strength, rt.range);
+    const res = glops.retouch(B, blurred, this.coverage(R), mode, rt.strength, rt.range);
     if (!res) return;
     putBack(ctx2d(this.src), res, R, rr);
   }
@@ -322,6 +322,21 @@ export class Stroke {
     s.drawImage(changed, rr.x, rr.y);
   }
 
+  /**
+   * How strongly the stroke so far covers region `R`: the dab buffer, limited by the selection. The buffer itself is
+   * never masked, as dabs keep landing on parts already painted: masking it again on every move would fade those parts
+   * a little more each time wherever the selection is soft.
+   */
+  private coverage(R: Rect): HTMLCanvasElement {
+    const c = cropCanvas(this.buffer, R);
+    if (this.mask) {
+      const x = ctx2d(c);
+      x.globalCompositeOperation = 'destination-in';
+      x.drawImage(this.mask, -R.x, -R.y);
+    }
+    return c;
+  }
+
   /** Redraws `rr` of the layer as it was before the stroke with the stroke so far on top. */
   private compose(rr: Rect) {
     if (this.o.retouch && this.o.retouch.mode !== 'smudge') { this.retouchRegion(rr); return; }
@@ -332,7 +347,8 @@ export class Stroke {
     blit(s, this.backup, rr);
     s.globalCompositeOperation = this.o.erase ? 'destination-out' : 'source-over';
     s.globalAlpha = this.o.opacity;
-    blit(s, this.buffer, rr);
+    if (this.mask) s.drawImage(this.coverage(rr), rr.x, rr.y);
+    else blit(s, this.buffer, rr);
     s.restore();
   }
 
@@ -425,13 +441,6 @@ export class Stroke {
       this.dirty = union(this.dirty, rr);
       this.doc.markPixels(this.layer.key, true, rr);
       return;
-    }
-    if (this.mask) {
-      bctx.save();
-      bctx.globalCompositeOperation = 'destination-in';
-      bctx.beginPath(); bctx.rect(rr.x, rr.y, rr.w, rr.h); bctx.clip();
-      blit(bctx, this.mask, rr);
-      bctx.restore();
     }
     this.compose(rr);
     if (this.o.heal) this.healRegion(rr);

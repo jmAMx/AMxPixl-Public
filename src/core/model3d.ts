@@ -1499,6 +1499,8 @@ float lit(vec3 p, vec3 toward, vec3 g) {
   if (dot(g, toward) < 0.0) g = -g;
   float ct = clamp(dot(g, toward), 0.0, 1.0), slope = min(10.0, sqrt(1.0 - ct * ct) / max(ct, 0.05));
   vec4 q = uLM * vec4(p + g * uSh.w * (1.0 + 2.0 * (1.0 - ct)), 1.0);
+  // (Behind a lamp close enough to be among the shape: out of its view, so not shadowed by it.)
+  if (q.w <= 0.0) return 1.0;
   vec3 c = q.xyz / q.w * 0.5 + 0.5;
   if (c.x < 0.0 || c.y < 0.0 || c.x > 1.0 || c.y > 1.0 || c.z > 1.0) return 1.0;
   float bias = (1.5 + 2.0 * slope) / ${SM}.0, s = 0.0;
@@ -1688,6 +1690,22 @@ class ModelGL {
   /** What the shadow map holds: the mesh, and its turn, pivot, the light's view and the shape's kind (see render). */
   private smMesh: Mesh | null = null;
   private smKey = '';
+  /** The shaders wouldn't build (an old graphics driver): don't try again on every repaint. */
+  private failed = false;
+
+  constructor() {
+    // A graphics reset loses everything on the GPU: start again from scratch once it's back, and forget renders made
+    // while it was gone (they're blank).
+    this.canvas.addEventListener('webglcontextlost', (e) => {
+      e.preventDefault();
+      this.gl = null;
+      this.texKey = this.txKey = this.shSize = this.smKey = '';
+      this.bufMesh = this.smMesh = null;
+      this.liteVao = null; this.liteData = null;
+      this.shTex = []; this.shFbo = [];
+      outCache.clear(); wallCache.clear();
+    });
+  }
 
   /** Draws the mesh for shadows (its plainer version, if it has one) with the flat program set up. */
   private drawFlat(gl: WebGL2RenderingContext, mesh: Mesh) {
@@ -1719,8 +1737,9 @@ class ModelGL {
 
   private init() {
     if (this.gl) return this.gl;
+    if (this.failed) return null;
     const gl = this.canvas.getContext('webgl2', { premultipliedAlpha: true, antialias: true, preserveDrawingBuffer: true });
-    if (!gl) return null;
+    if (!gl || gl.isContextLost()) return null;
     const sh = (type: number, src: string) => { const s = gl.createShader(type)!; gl.shaderSource(s, src); gl.compileShader(s); if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) console.error(gl.getShaderInfoLog(s)); return s; };
     const link = (vs: string, fs: string, attrs: [string, number][]) => {
       const p = gl.createProgram()!;
@@ -1734,7 +1753,7 @@ class ModelGL {
     const p = link(VS, FS, ['aPos', 'aNrm', 'aUV', 'aSolid', 'aT', 'aEdge', 'aReach'].map((n, i) => [n, i]));
     const fp = link(FLAT_VS, FLAT_FS, [['aPos', 0], ['aUV', 2], ['aSolid', 3]]);
     const qp = link(QUAD_VS, QUAD_FS, [['aQ', 0]]);
-    if (!p || !fp || !qp) return null;
+    if (!p || !fp || !qp) { this.failed = !gl.isContextLost(); return null; }
     this.quad = qp;
     for (const n of ['uImg', 'uMode', 'uStep', 'uSigma', 'uOpacity']) this.qu[n] = gl.getUniformLocation(qp, n);
     this.qVao = gl.createVertexArray();
@@ -2007,15 +2026,18 @@ class ModelGL {
     gl.uniform2f(this.u.uProf, mesh.profile?.[0] ?? 0, mesh.profile?.[1] ?? 0);
     gl.uniform1i(this.u.uPass, 0);
     gl.drawElements(gl.TRIANGLES, mesh.count, gl.UNSIGNED_INT, 0);
-    // The faces' soft edges, blended over what's already drawn behind them (without hiding anything else).
-    gl.uniform1i(this.u.uPass, 1);
-    gl.enable(gl.BLEND);
-    gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
-    gl.depthFunc(gl.LEQUAL);
-    gl.depthMask(false);
-    gl.drawElements(gl.TRIANGLES, mesh.count, gl.UNSIGNED_INT, 0);
-    gl.depthMask(true);
-    gl.disable(gl.BLEND);
+    // The faces' soft edges, blended over what's already drawn behind them (without hiding anything else). Only
+    // Extrude has any: Inflate and Revolve would run the whole mesh again for nothing.
+    if (r.kind === 1) {
+      gl.uniform1i(this.u.uPass, 1);
+      gl.enable(gl.BLEND);
+      gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+      gl.depthFunc(gl.LEQUAL);
+      gl.depthMask(false);
+      gl.drawElements(gl.TRIANGLES, mesh.count, gl.UNSIGNED_INT, 0);
+      gl.depthMask(true);
+      gl.disable(gl.BLEND);
+    }
     gl.disable(gl.DEPTH_TEST);
     gl.activeTexture(gl.TEXTURE0);
     return { canvas: this.canvas, box };

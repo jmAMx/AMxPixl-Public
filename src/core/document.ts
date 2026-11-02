@@ -11,7 +11,10 @@ import { isPlaced } from './types';
  * `after` is captured lazily the first time the step is undone, which halves undo memory.
  */
 export interface PixelDiff { key: string; rect: Rect; before: HTMLCanvasElement; after: HTMLCanvasElement | null }
-interface Entry { label: string; before: Meta; after: Meta; pixels: PixelDiff[]; bytes: number }
+interface Entry { label: string; before: Meta; after: Meta; pixels: PixelDiff[]; bytes: number; merge?: { key: string; time: number } }
+
+/** Steps with the same merge key this close together become one (holding an arrow key to nudge, say). */
+const MERGE_MS = 1000;
 
 const MAX_ENTRIES = 80;
 /** Undo pixel budget. Integrated GPUs share system RAM, so stay well clear of exhausting it. */
@@ -77,8 +80,8 @@ export class Doc {
   savedIndex = 0;
   /** Where this document was opened from / last saved to as .pixl (for Save and Recent Files). */
   file: { name: string; path?: string | null; handle?: FileSystemFileHandle | null } | null = null;
-  /** Stable id for crash-recovery storage. */
-  readonly uid = `D${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
+  /** Stable id for crash-recovery storage (a recovered document keeps the id of its copy). */
+  uid =`D${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
   /** Pixel buffers changed since the last autosave, and those already autosaved. */
   readonly dirtyKeys = new Set<string>();
   readonly storedKeys = new Set<string>();
@@ -191,15 +194,28 @@ export class Doc {
     return null;
   }
 
-  /** Records everything changed since the last commit as one undoable step. */
-  commit(label: string, pixels: PixelDiff[] = []) {
+  /**
+   * Records everything changed since the last commit as one undoable step. With `mergeKey`, a step following one
+   * with the same key within a second (and no pixels, nothing to redo, not just saved) is folded into it instead.
+   */
+  commit(label: string, pixels: PixelDiff[] = [], mergeKey?: string) {
     const after = this.snapshot();
     if (!pixels.length && JSON.stringify(after) === JSON.stringify(this.last)) return;
+    const now = Date.now();
+    const top = this.entries[this.index - 1];
+    if (mergeKey && !pixels.length && this.index > 1 && this.index === this.entries.length && this.savedIndex !== this.index
+      && top.merge?.key === mergeKey && now - top.merge.time < MERGE_MS) {
+      top.after = after;
+      top.merge.time = now;
+      this.last = after;
+      this.touch('history');
+      return;
+    }
     for (const p of pixels) this.markPixels(p.key, false, p.rect);
     const bytes = pixels.reduce((n, p) => n + p.rect.w * p.rect.h * 8, 0) + 4096;
     if (this.savedIndex > this.index) this.savedIndex = -1;
     this.entries.length = this.index;
-    this.entries.push({ label, before: this.last, after, pixels, bytes });
+    this.entries.push({ label, before: this.last, after, pixels, bytes, merge: mergeKey ? { key: mergeKey, time: now } : undefined });
     this.index = this.entries.length;
     this.last = after;
     this.trim();

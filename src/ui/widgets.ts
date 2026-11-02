@@ -20,18 +20,20 @@ export interface DialogButton { label: string; primary?: boolean; danger?: boole
 
 export interface DialogHandle { close(): void; el: HTMLElement }
 
-let openDialogs = 0;
-export const dialogOpen = () => openDialogs > 0;
+/** Open dialogs, oldest first: only the top one answers Enter and Escape. */
+const openDialogs: object[] = [];
+export const dialogOpen = () => openDialogs.length > 0;
 
 export function dialog(o: { title: string; body: HTMLElement | HTMLElement[]; buttons: DialogButton[]; onCancel?: () => void; width?: number; modeless?: boolean }): DialogHandle {
   const backdrop = h('div', { class: 'backdrop' + (o.modeless ? ' modeless' : '') });
   const box = h('div', { class: 'dialog', role: 'dialog', 'aria-label': o.title, style: o.width ? `width:${o.width}px` : undefined });
   const foot = h('div', { class: 'dialog-foot' });
   let closed = false;
+  const me = {};
   const close = () => {
     if (closed) return;
     closed = true;
-    openDialogs--;
+    openDialogs.splice(openDialogs.indexOf(me), 1);
     backdrop.remove();
     window.removeEventListener('keydown', onKey, true);
   };
@@ -48,16 +50,20 @@ export function dialog(o: { title: string; body: HTMLElement | HTMLElement[]; bu
   backdrop.append(box);
   if (!o.modeless) backdrop.addEventListener('pointerdown', (e) => { if (e.target === backdrop) cancel(); });
   const onKey = (e: KeyboardEvent) => {
-    if (closed) return;
+    if (closed || openDialogs[openDialogs.length - 1] !== me) return;
     if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); cancel(); }
     else if (e.key === 'Enter' && (e.target as HTMLElement)?.tagName !== 'TEXTAREA' && (e.target as HTMLElement)?.tagName !== 'BUTTON') {
       const p = o.buttons.find((b) => b.primary);
-      if (p) { e.preventDefault(); e.stopPropagation(); run(p); }
+      if (!p) return;
+      e.preventDefault(); e.stopPropagation();
+      // Leaving the field first fires its "change", so a number just typed counts.
+      if (box.contains(document.activeElement)) (document.activeElement as HTMLElement).blur();
+      run(p);
     }
   };
   window.addEventListener('keydown', onKey, true);
   document.body.append(backdrop);
-  openDialogs++;
+  openDialogs.push(me);
   requestAnimationFrame(() => box.querySelector<HTMLElement>('input:not([type=checkbox]):not([type=range]), select, textarea, .btn.primary')?.focus());
   return { close, el: box };
 }

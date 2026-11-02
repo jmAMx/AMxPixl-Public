@@ -310,6 +310,8 @@ function onKey(e: KeyboardEvent) {
   const accel = accelOf(e);
   const mod = e.ctrlKey || e.metaKey;
   if (!mod && app.doc && app.tool.keydown?.(e)) { e.preventDefault(); return; }
+  // No commands mid-drag: undoing under a stroke, say, would mix the undone pixels back into it.
+  if (view.dragging) { if (accelMap.has(accel)) e.preventDefault(); return; }
   const cmd = accelMap.get(accel);
   if (cmd) {
     e.preventDefault();
@@ -374,7 +376,10 @@ function tabs() {
       const t = h('div', { class: 'tab' + (d === app.doc ? ' on' : ''), role: 'tab', title: `${d.name} · ${d.width} × ${d.height}` },
         h('span', { class: 'tab-name' }, d.name), d.dirty ? h('span', { class: 'dirty', title: 'Unsaved changes' }, '●') : null,
         h('button', { class: 'tab-x', type: 'button', title: 'Close (Ctrl+W)', onclick: (e: MouseEvent) => { e.stopPropagation(); A.closeDoc(d); } }, icon('close')));
-      t.addEventListener('pointerdown', (e) => { if (e.button === 1) { e.preventDefault(); A.closeDoc(d); } else if (d !== app.doc) app.setDoc(d); });
+      // (Not when pressing its close button: switching rebuilds the tabs, and the click would then miss the button.)
+      t.addEventListener('pointerdown', (e) => {
+        if (e.button === 1) { e.preventDefault(); A.closeDoc(d); } else if (d !== app.doc && !(e.target as Element).closest('.tab-x')) app.setDoc(d);
+      });
       return t;
     }), h('button', { class: 'tab-new', type: 'button', title: 'New image (Ctrl+N)', onclick: newDocDialog }, icon('plus')));
   };
