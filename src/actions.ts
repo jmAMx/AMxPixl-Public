@@ -4,6 +4,8 @@ import { Doc, flatLayers, newId } from './core/document';
 import { defaultFx, fxDef } from './core/effects';
 import { baseName, canvasBlob, decodeImage, decodePixl, docFromCanvas, docFromMeta, encodePixl, extOf, hashOf, layerKeys, pickFiles, PIXL_ACCEPT, saveBlob, type Picked } from './core/fileio';
 import { importPsd } from './core/import/psd';
+import { ANIMATED_EXT, FRAMES_MAX, FRAMES_WARN, frameBytes, probeAnimated, probeVideo, VIDEO_EXT, type Frames } from './core/import/animated';
+import { videoImportDialog } from './ui/dialogs';
 import { importXcf } from './core/import/xcfimport';
 import { addRecent, openRecent, removeRecent, type RecentEntry } from './core/recent';
 import { clearRecovery } from './core/recovery';
@@ -92,11 +94,60 @@ async function openAlready(ref: Picked['ref']): Promise<Project | null> {
   return null;
 }
 
+/**
+ * A file of frames (an animated image, or a video): a layer each, the first at the bottom, and a Timeline frame each
+ * showing just its layer. The frame rate is the most common frame length's; frames held longer or shorter keep theirs.
+ */
+function framesDoc(name: string, f: Frames): Doc {
+  const doc = new Doc(name, f.w, f.h);
+  const ids = f.frames.map((fr, i) => {
+    const l: RasterLayer = { id: newId(), type: 'raster', name: `Frame ${i + 1}`, visible: true, opacity: 1, blend: 'normal', key: doc.addCanvas(fr.canvas), t: { x: 0, y: 0, sx: 1, sy: 1, rot: 0 } };
+    doc.layers.push(l);
+    return l.id;
+  });
+  const counts = new Map<number, number>();
+  for (const fr of f.frames) counts.set(Math.round(fr.ms), (counts.get(Math.round(fr.ms)) ?? 0) + 1);
+  const common = [...counts].sort((a, b) => b[1] - a[1])[0][0];
+  const fps = Math.max(1, Math.min(60, Math.round(1000 / common)));
+  doc.anim = {
+    fps, loop: true,
+    frames: f.frames.map((fr, i) => ({ id: frameId(), vis: Object.fromEntries(ids.map((id, k) => [id, k === i])), ms: Math.abs(fr.ms - 1000 / fps) > 1 ? Math.round(fr.ms) : undefined })),
+  };
+  doc.activeId = ids[ids.length - 1];
+  doc.counter = ids.length + 1;
+  doc.resetHistory('Open');
+  if (!app.prefs.dock.timeline) app.setPrefs({ dock: { ...app.prefs.dock, timeline: true } });
+  return doc;
+}
+
+const gb = (bytes: number) => (bytes >= 1e9 ? `${(bytes / 1e9).toFixed(1)} GB` : `${Math.round(bytes / 1e6)} MB`);
+
+/**
+ * How many of an animated image's frames to open: all of them, after asking when they'd take a lot of memory, or the
+ * first that fit when they'd take more than Pixl takes at once. 0 if the user cancels.
+ */
+async function framesToOpen(name: string, w: number, h: number, count: number): Promise<number> {
+  const per = frameBytes(w, h), total = per * count;
+  if (total > FRAMES_MAX) {
+    const fit = Math.max(1, Math.floor(FRAMES_MAX / per));
+    const r = await ask('Too many frames', `${name} has ${count} frames at ${w} × ${h}: about ${gb(total)} as layers, more than Pixl opens at once. Open the first ${fit}?`,
+      [{ id: 'cancel', label: 'Cancel' }, { id: 'open', label: `Open the first ${fit}`, primary: true }]);
+    return r === 'open' ? fit : 0;
+  }
+  if (total > FRAMES_WARN) {
+    const r = await ask('A lot of frames', `${name} has ${count} frames at ${w} × ${h}: about ${gb(total)} of memory as layers. Open them all?`,
+      [{ id: 'cancel', label: 'Cancel' }, { id: 'open', label: 'Open', primary: true }]);
+    return r === 'open' ? count : 0;
+  }
+  return count;
+}
+
 export async function openFiles(files: Picked[]) {
   for (const { file, ref } of files) {
     try {
       const ext = extOf(file.name);
       let p: Project;
+      let animated: Awaited<ReturnType<typeof probeAnimated>>;
       if (ext === 'pixl') {
         const open = await openAlready(ref);
         if (open) { app.setDoc(open.active); toast(`${open.name} is already open.`); continue; }
@@ -110,6 +161,14 @@ export async function openFiles(files: Picked[]) {
         if (boards.length > 1) { p = new Project(file.name, boards); app.addProject(p); } else p = app.addDoc(boards[0].doc);
       } else if (ext === 'xcf') {
         p = app.addDoc(await importXcf(await file.arrayBuffer(), file.name));
+      } else if (VIDEO_EXT.includes(ext)) {
+        const f = await videoImportDialog(file.name, await probeVideo(file));
+        if (!f) continue;
+        p = app.addDoc(framesDoc(file.name, f));
+      } else if (ANIMATED_EXT.includes(ext) && (animated = await probeAnimated(file, ext))) {
+        const max = await framesToOpen(file.name, animated.w, animated.h, animated.count);
+        if (!max) { animated.close(); continue; }
+        p = app.addDoc(framesDoc(file.name, await animated.open(max)));
       } else {
         p = app.addDoc(docFromCanvas(file.name, await decodeImage(file)));
       }
@@ -183,7 +242,11 @@ export async function placeFiles(files: File[]) {
   if (!doc) return openFiles(files.map((f) => ({ file: f, ref: { name: f.name } })));
   for (const f of files) {
     try {
-      if (['pixl', 'psd', 'xcf'].includes(extOf(f.name))) { await openFiles([{ file: f, ref: { name: f.name } }]); continue; }
+      // Files of their own (projects, layered files, video) and animations open as files; a still image is placed.
+      const ext = extOf(f.name);
+      let anim = false;
+      if (ANIMATED_EXT.includes(ext)) { const a = await probeAnimated(f, ext); anim = !!a; a?.close(); }
+      if (['pixl', 'psd', 'xcf', ...VIDEO_EXT].includes(ext) || anim) { await openFiles([{ file: f, ref: { name: f.name } }]); continue; }
       placeCanvas(await decodeImage(f), baseName(f.name), null, true);
     } catch (e) {
       toast(`Couldn't place ${f.name}: ${(e as Error).message}`, 'error');

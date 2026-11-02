@@ -4,6 +4,7 @@ import { fileName, isDesktop, openDialog, readPath, saveDialog, writePath, type 
 import type { Layer, Meta } from './types';
 import { Project } from './project';
 import { textureKeys } from './model3d';
+import { VIDEO_EXT } from './import/animated';
 import { WorkerPool } from './workers/pool';
 
 const MAGIC = 'PIXL';
@@ -194,15 +195,15 @@ export async function pickFiles(kind: 'any' | 'image', multiple = true): Promise
   if (isDesktop) {
     const filters: Filters = kind === 'image'
       ? [{ name: 'Images', extensions: IMAGE_EXT }]
-      : [{ name: 'Images, projects and layered files', extensions: ['pixl', ...LAYERED_EXT, ...IMAGE_EXT] }, { name: 'Pixl project', extensions: ['pixl'] },
-        { name: 'Photoshop / GIMP', extensions: LAYERED_EXT }, { name: 'Images', extensions: IMAGE_EXT }];
+      : [{ name: 'Images, projects, layered files and video', extensions: ['pixl', ...LAYERED_EXT, ...IMAGE_EXT, ...VIDEO_EXT] }, { name: 'Pixl project', extensions: ['pixl'] },
+        { name: 'Photoshop / GIMP', extensions: LAYERED_EXT }, { name: 'Images', extensions: IMAGE_EXT }, { name: 'Video (opens frame by frame)', extensions: VIDEO_EXT }];
     const paths = await openDialog(filters, multiple);
     return Promise.all(paths.map(async (p) => ({ file: await readPath(p), ref: { name: fileName(p), path: p } })));
   }
   const layered = { 'application/octet-stream': LAYERED_EXT.map((e) => '.' + e) } as Record<string, string[]>;
   const types = kind === 'image'
     ? [{ description: 'Images', accept: IMAGE_TYPES }]
-    : [{ description: 'Images, projects and layered files', accept: { ...IMAGE_TYPES, ...PIXL_TYPES, ...layered } }, { description: 'Pixl project', accept: PIXL_TYPES }];
+    : [{ description: 'Images, projects, layered files and video', accept: { ...IMAGE_TYPES, ...PIXL_TYPES, ...layered, 'video/*': VIDEO_EXT.map((e) => '.' + e) } }, { description: 'Pixl project', accept: PIXL_TYPES }];
   if (fsw.showOpenFilePicker) {
     try {
       const hs = await fsw.showOpenFilePicker({ multiple, types, id: 'amxpixl-open' });
@@ -215,7 +216,7 @@ export async function pickFiles(kind: 'any' | 'image', multiple = true): Promise
     const inp = document.createElement('input');
     inp.type = 'file';
     inp.multiple = multiple;
-    inp.accept = kind === 'image' ? 'image/*' : 'image/*,.pixl,.psd,.xcf';
+    inp.accept = kind === 'image' ? 'image/*' : `image/*,.pixl,.psd,.xcf,${VIDEO_EXT.map((e) => '.' + e).join(',')}`;
     inp.onchange = () => res([...(inp.files ?? [])].map((f) => ({ file: f, ref: { name: f.name } })));
     inp.click();
   });

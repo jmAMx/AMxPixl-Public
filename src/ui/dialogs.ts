@@ -13,6 +13,7 @@ import { h } from './dom';
 import { paintableTarget } from '../tools/paint';
 import { checkbox, dialog, icon, numField, seg, slider, toast } from './widgets';
 import { MAX_SIDE, pickSize, sizeOptions, sizeProblem } from '../core/sizes';
+import { FRAMES_MAX, FRAMES_WARN, frameBytes, type Frames, type VideoInfo } from '../core/import/animated';
 
 /** Shows why an image of w × h can't be made and returns true (the dialog then stays open), or false if it can. */
 function tooBig(w: number, h: number): boolean {
@@ -402,6 +403,70 @@ export function shortcutsDialog(rows: [string, string][]) {
 }
 
 /** File › Export Animation: GIF, animated PNG, MP4 or WebM from the Timeline's frames. */
+/**
+ * Opening a video: which part (start and end, seconds), how many frames a second, and what size, with how many frames
+ * that makes and the memory they take (each is a layer); then reads them, with a progress bar. Null if cancelled.
+ */
+export function videoImportDialog(name: string, v: VideoInfo): Promise<Frames | null> {
+  return new Promise((resolve) => {
+    const len = Math.max(0, v.duration);
+    let start = 0, end = Math.min(len, 5), fps = Math.min(v.fps, 12), scale = 1, busy = false, done = false;
+    const finish = (f: Frames | null) => { if (done) return; done = true; if (!f) v.close(); resolve(f); };
+    const info = h('p', { class: 'dialog-msg' });
+    const rates = [...new Set([Math.round(v.fps * 100) / 100, 30, 24, 15, 12, 10, 8, 5].filter((r) => r <= v.fps + 0.01))].sort((a, b) => b - a);
+    const count = () => Math.max(0, Math.ceil((end - start) * fps - 1e-6));
+    const bytes = () => count() * frameBytes(Math.round(v.w * scale), Math.round(v.h * scale));
+    const upd = () => {
+      const b = bytes();
+      info.textContent = `${count()} frames · ${Math.round(v.w * scale)} × ${Math.round(v.h * scale)} px · about ${b >= 1e9 ? `${(b / 1e9).toFixed(1)} GB` : `${Math.round(b / 1e6)} MB`} of memory`
+        + (b > FRAMES_MAX ? ': too much to open at once. Pick a shorter part, fewer frames a second or a smaller size.' : b > FRAMES_WARN ? ': a lot. Fine on a PC with plenty of memory.' : '');
+      info.classList.toggle('warn', b > FRAMES_WARN);
+    };
+    const startF = numField('Start', start, (x) => { start = Math.min(x, len); if (end <= start) { end = Math.min(len, start + 1); endF.set(end); } upd(); }, { unit: 's', min: 0, max: len, decimals: 1, step: 0.1 });
+    const endF = numField('End', end, (x) => { end = Math.max(Math.min(x, len), start + 0.1); upd(); }, { unit: 's', min: 0, max: len, decimals: 1, step: 0.1 });
+    const rate = h('select', { onchange: () => { fps = Number(rate.value); upd(); } },
+      ...rates.map((r) => h('option', { value: r, selected: r === fps }, r === rates[0] ? `${r} (as filmed)` : String(r)))) as HTMLSelectElement;
+    if (!rates.includes(fps)) { fps = rates.find((r) => r <= 12) ?? rates[rates.length - 1]; rate.value = String(fps); }
+    const progress = h('progress', { class: 'export-progress', max: 1, value: 0 });
+    progress.hidden = true;
+    upd();
+    dialog({
+      title: `Open video: ${name}`, width: 470,
+      body: [
+        h('p', { class: 'dialog-msg' }, `${v.w} × ${v.h} px · ${len.toFixed(1)} s · ${Math.round(v.fps * 100) / 100} frames a second`),
+        h('div', { class: 'row' }, startF, endF),
+        h('label', { class: 'field wide' }, h('span', null, 'Frames a second'), rate),
+        h('div', { class: 'field wide' }, h('span', null, 'Size'),
+          seg([{ v: '1', label: '100%' }, { v: '0.75', label: '75%' }, { v: '0.5', label: '50%' }, { v: '0.25', label: '25%' }], '1', (x) => { scale = Number(x); upd(); })),
+        info, progress,
+        h('p', { class: 'dialog-note' }, 'Each frame becomes a layer, with a Timeline frame showing it, to edit frame by frame. Export Animation saves it as video or GIF again.'),
+      ],
+      onCancel: () => finish(null),
+      buttons: [
+        { label: 'Cancel', onClick: () => finish(null) },
+        {
+          label: 'Open', primary: true, onClick: async () => {
+            if (busy) return false;
+            if (count() < 1) { toast('Pick a part of the video at least one frame long.'); return false; }
+            if (bytes() > FRAMES_MAX) { toast('That\'s too much to open at once: pick a shorter part, fewer frames a second or a smaller size.', 'error'); return false; }
+            busy = true;
+            progress.hidden = false;
+            try {
+              const f = await v.open({ start, end, fps, scale, onProgress: (d, t) => { progress.value = d / t; } });
+              if (!f.frames.length) throw new Error('no frames could be read from that part.');
+              finish(f);
+            } catch (err) {
+              toast(`Couldn't open the video: ${(err as Error).message}`, 'error');
+              finish(null);
+            }
+            return undefined;
+          },
+        },
+      ],
+    });
+  });
+}
+
 export function animExportDialog() {
   const doc = app.doc; if (!doc) return;
   const a = doc.anim;

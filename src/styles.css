@@ -166,6 +166,7 @@ html[data-theme="dark"] .mono.for-dark, html[data-theme="light"] .mono.for-light
 .add-size { align-self: flex-start; display: inline-flex; align-items: center; gap: 4px; }
 .add-size .ico { width: 13px; height: 13px; }
 .field.top { align-items: flex-start; }
+.dialog-msg.warn { color: #e8a33d; }
 .export-boards { display: flex; flex-direction: column; gap: 4px; max-height: 160px; overflow: auto; }
 .board-row { font-weight: 600; cursor: pointer; }
 .board-row.on { color: var(--accent); }
