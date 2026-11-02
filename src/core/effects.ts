@@ -1,3 +1,4 @@
+import { FILTER_FX } from './filterfx';
 import type { FxParams } from './types';
 
 /**
@@ -24,7 +25,7 @@ type Uniforms = Partial<Record<'uA' | 'uB' | 'uC', [number, number, number, numb
 export interface FxDef {
   kind: string;
   label: string;
-  group: 'Film' | 'Lens' | 'CRT & VHS' | 'Damage & Print' | 'Depth';
+  group: typeof FX_GROUPS[number];
   /** Reads the document's depth map (`depth(p)` in the shader: 0 far, 1 near). */
   depth?: boolean;
   params: FxParam[];
@@ -32,8 +33,13 @@ export interface FxDef {
   seeded?: boolean;
   /** Whether the shader moves with `uTime` (seconds) when the layer's motion is on. */
   moves?: boolean;
-  /** Extra blurred input: the whole image, or just its highlights above a threshold (0..1). */
-  aux?: { radius: (v: V) => number; threshold?: (v: V) => number };
+  /**
+   * Extra blurred input: the whole image, or just its highlights above a threshold (0..1). With `clamp`, the
+   * canvas's edge pixels are stretched outward before blurring, so the blur doesn't fade in from outside it.
+   */
+  aux?: { radius: (v: V) => number; threshold?: (v: V) => number; clamp?: boolean };
+  /** How far (document pixels) it reads around each pixel, beyond any `aux` blur; Infinity for anywhere. */
+  margin?: (v: V) => number;
   uniforms: (v: V) => Uniforms;
   /**
    * How far past the canvas edge the effect reads, as a fraction of the canvas size. The image is then rendered with
@@ -80,6 +86,7 @@ export const hex3 = (h: FxValue): [number, number, number] => {
 const sel = (v: FxValue, opts: string[]) => Math.max(0, opts.indexOf(String(v)));
 
 export const FX_DEFS: FxDef[] = [
+  ...FILTER_FX,
   // ---------- Film ----------
   {
     kind: 'grain', label: 'Film Grain', group: 'Film', seeded: true,
@@ -746,7 +753,8 @@ vec4 fx(vec2 p, vec2 d) {
   },
 ];
 
-export const FX_GROUPS = ['Film', 'Lens', 'CRT & VHS', 'Damage & Print', 'Depth'] as const;
+/** The classic filter groups (core/filterfx.ts) first, then the looks: film, lens, screens, print and depth. */
+export const FX_GROUPS = ['Blur', 'Sharpen', 'Noise', 'Distort', 'Stylize', 'Render', 'Film', 'Lens', 'CRT & VHS', 'Damage & Print', 'Depth'] as const;
 
 export const fxDef = (kind: string) => FX_DEFS.find((d) => d.kind === kind);
 

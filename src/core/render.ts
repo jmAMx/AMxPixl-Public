@@ -60,11 +60,13 @@ export function dirtyPad(doc: Doc): number {
 }
 
 /** How far (document pixels) an effect reads around each pixel; Infinity when it can pull pixels from anywhere. */
-function effectReach(fx: FxParams): number {
+export function effectReach(fx: FxParams): number {
   const n = (v: unknown) => Number(v) || 0;
   const v = fx.v, def = fxDef(fx.kind);
   if (fx.kind === 'distortion' || fx.kind === 'crt' || fx.kind === 'parallax') return Infinity;
   let p = def?.aux ? def.aux.radius(v) * 3 : 0;
+  if (def?.margin) p += def.margin(v);
+  if (!Number.isFinite(p)) return Infinity;
   switch (fx.kind) {
     case 'grain': p += n(v.size) * 2; break;
     case 'chromatic': p += n(v.amount) * 1.5; break;

@@ -2,7 +2,6 @@ import { app, DEFAULT_METERS, type Meter } from '../app';
 import * as A from '../actions';
 import { pickFiles } from '../core/fileio';
 import { clearRecent, recentList } from '../core/recent';
-import { FILTERS } from '../core/filters';
 import { glfx } from '../core/glfx';
 import { TAB_DRAG, view } from './canvasview';
 import { colorPanel } from './colorpanel';
@@ -10,7 +9,7 @@ import { aboutDialog, animExportDialog, canvasSizeDialog, colorRangeDialog, expo
 import { h, isTyping } from './dom';
 import { historyPanel } from './historypanel';
 import { adjustmentMenuItems, artboardMenuItems, effectMenuItems, layersPanel, looksMenuItems, maskMenuItems } from './layerspanel';
-import { FX_DEFS } from '../core/effects';
+import { FX_DEFS, FX_GROUPS } from '../core/effects';
 import { tabletMenuItems } from '../tools/pressure';
 import { propertiesPanel } from './properties';
 import { canvasScrollbars } from './scrollbars';
@@ -237,7 +236,10 @@ const MENUS: MenuDef[] = [
       { label: 'Effect Layer (editable)', sub: effectMenuItems },
       { label: 'Adjustment Layer (editable)', sub: adjustmentMenuItems },
       'sep',
-      ...FILTERS.map((f) => ({ label: `${f.name}…`, run: () => filterDialog(f), enabled: hasLayer })),
+      // Every effect but the depth ones, applied to the layer (or kept editable from the dialog).
+      ...FX_GROUPS.filter((g) => g !== 'Depth').map((g) => ({
+        label: g, sub: () => FX_DEFS.filter((d) => d.group === g).map((d) => ({ label: `${d.label}…`, disabled: !app.doc?.active, onClick: () => filterDialog(d.kind) })),
+      })),
     ],
   },
   {

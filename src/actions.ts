@@ -25,7 +25,7 @@ import { shapePoints } from './core/layers';
 import { invertSel, mapSel, maskSelection, selBounds } from './core/selection';
 import { colorRangeMask, combine, layerAlphaMask, modifyMask, sampleSource, wandMask, type Modify, type SelMode } from './core/selops';
 import { defaultStyles } from './core/styles';
-import type { AdjKind, AdjParams, Anim, AnimFrame, BlendIf, GroupLayer, Guide, Layer, LayerStyles, Mask, PathPoint, PlacedLayer, RasterLayer, ShapeLayer, SubPath, TextLayer, VPath, Warp } from './core/types';
+import type { AdjKind, AdjParams, Anim, AnimFrame, BlendIf, FxParams, GroupLayer, Guide, Layer, LayerStyles, Mask, PathPoint, PlacedLayer, RasterLayer, ShapeLayer, SubPath, TextLayer, VPath, Warp } from './core/types';
 import { initWarp, warpBounds } from './core/warp';
 import { envelopeMesh, shapeFit, type Envelope } from './core/envelope';
 import { loadFont, outlineText } from './core/outline';
@@ -698,6 +698,24 @@ export function newEffect(kind: string) {
   const doc = need(); const def = fxDef(kind); if (!doc || !def) return;
   doc.insertLayer({ id: newId(), type: 'effect', name: def.label, visible: true, opacity: 1, blend: 'normal', fx: defaultFx(kind) });
   doc.commit(`New ${def.label} layer`);
+}
+
+/**
+ * A filter kept editable (Filter menu › Keep editable): an effect layer with these settings, clipped to the layer
+ * `onId` so it changes only that layer, and limited to the selection (as its mask) if there is one. One undo step.
+ */
+export function newEffectOn(fx: FxParams, onId: string) {
+  const doc = need(); const def = fxDef(fx.kind); if (!doc || !def || !doc.layer(onId)) return;
+  const l: Layer = { id: newId(), type: 'effect', name: def.label, visible: true, opacity: 1, blend: 'normal', fx, clip: true };
+  const sel = doc.selectionMask();
+  if (sel) {
+    const r = fullRect(doc);
+    const c = newCanvas(r.w, r.h);
+    ctx2d(c).drawImage(sel, -r.x, -r.y);
+    l.mask = { key: doc.addCanvas(c), t: { x: r.x, y: r.y, sx: 1, sy: 1, rot: 0 }, enabled: true, density: 1, feather: 0 };
+  }
+  doc.insertLayer(l, onId);
+  doc.commit(`${def.label} (editable)`);
 }
 
 export function newGroup() {

@@ -1,5 +1,5 @@
 import { app } from '../app';
-import { addGuide, colorRangeSelection, createDoc, cropToContent, deleteLook, exportArtboards, lookSourceLayers, modifySelection, newArtboard, nextUntitled, renameArtboard, resizeCanvas, resizeImage, saveLook } from '../actions';
+import { addGuide, colorRangeSelection, createDoc, cropToContent, deleteLook, exportArtboards, lookSourceLayers, modifySelection, newArtboard, newEffectOn, nextUntitled, renameArtboard, resizeCanvas, resizeImage, saveLook } from '../actions';
 import type { Doc } from '../core/document';
 import { savedLooks } from '../core/looks';
 import { colorRangeMask, sampleSource, type Modify, type SelMode } from '../core/selops';
@@ -8,7 +8,14 @@ import { ANIM_EXT, ANIM_MIME, exportAnimation, type AnimExportOptions, type Anim
 import { saveBlob } from '../core/fileio';
 import { view } from './canvasview';
 import { cloneCanvas, ctx2d } from '../core/layers';
-import { FILTERS, maskedMerge, type FilterDef, type Params } from '../core/filters';
+import { maskedMerge } from '../core/filters';
+import { defaultFx, fxDef, type FxValue } from '../core/effects';
+import { fxEngine } from '../core/fx';
+import { inTiles } from '../core/gpu';
+import { cropCanvas, newCanvas } from '../core/layers';
+import { effectReach } from '../core/render';
+import { isFilter, type FxParams } from '../core/types';
+import { fxParamControl } from './fxcontrols';
 import { h } from './dom';
 import { paintableTarget } from '../tools/paint';
 import { checkbox, dialog, icon, numField, seg, slider, toast } from './widgets';
@@ -216,16 +223,40 @@ export function exportDialog(all = false) {
   });
 }
 
-/** Destructive filter with live on-canvas preview; Cancel restores the original pixels. */
-export function filterDialog(def: FilterDef) {
-  const doc = app.doc; if (!doc) return;
+/** `img` with the effect applied at full size, in pieces if it's bigger than the graphics card takes; null if it can't. */
+function applyFilter(img: HTMLCanvasElement, fx: FxParams): HTMLCanvasElement | null {
+  const w = img.width, h = img.height;
+  const out = newCanvas(w, h);
+  if (w <= fxEngine.maxSize && h <= fxEngine.maxSize) {
+    const r = fxEngine.apply(img, fx, 1, { x: 0, y: 0, w, h });
+    if (!r) return null;
+    ctx2d(out).drawImage(r, 0, 0);
+    return out;
+  }
+  return inTiles(w, h, fxEngine.maxSize, effectReach(fx) + 2, (r) => fxEngine.apply(cropCanvas(img, r), fx, 1, { x: -r.x, y: -r.y, w, h }), out) ? out : null;
+}
+
+/**
+ * A filter (Filter menu) applied to the selected layer's pixels, inside the selection if there is one, with a live
+ * preview on the canvas; Cancel puts the pixels back. "Keep editable" adds it as an effect layer clipped to the layer
+ * instead, to change or remove later. A layer without pixels to change (text, shapes, a group, 3D) gets it that way.
+ */
+export function filterDialog(kind: string) {
+  const doc = app.doc; const def = fxDef(kind); if (!doc || !def) return;
+  const a = doc.active;
+  if (a && !isFilter(a) && !doc.paintTarget()) {
+    newEffectOn(defaultFx(kind), a.id);
+    toast(`${def.label} added as an editable effect layer on "${a.name}" (its settings are in Properties).`);
+    return;
+  }
   const pt = paintableTarget(doc); if (!pt) return;
   const layer = pt.target;
+  const onLayer = pt.isMask ? null : doc.active;
   const src = doc.canvasOf(layer);
   const key = layer.key;
   const backup = cloneCanvas(src);
   const mask = doc.maskForLayer(layer);
-  const params: Params = Object.fromEntries(def.params.map((p) => [p.key, p.value]));
+  const fx = defaultFx(kind);
   let preview = true;
   let pending = 0;
   const show = (c: HTMLCanvasElement) => {
@@ -236,38 +267,49 @@ export function filterDialog(def: FilterDef) {
     x.restore();
     doc.markPixels(key);
   };
-  const run = () => maskedMerge(backup, def.run(backup, params), mask);
+  const run = () => { const r = applyFilter(backup, fx); return r && maskedMerge(backup, r, mask); };
+  let failed = false;
   const schedule = () => {
     cancelAnimationFrame(pending);
-    pending = requestAnimationFrame(() => { show(preview ? run() : backup); });
+    pending = requestAnimationFrame(() => {
+      const r = preview ? run() : backup;
+      if (r) { show(r); return; }
+      if (!failed) toast(`Couldn't run ${def.label} on the graphics card.`, 'error');
+      failed = true;
+    });
   };
   app.busy = true;
   schedule();
   const done = () => { app.busy = false; cancelAnimationFrame(pending); };
+  const set = (k: string, v: FxValue) => { fx.v = { ...fx.v, [k]: v }; schedule(); };
   dialog({
-    title: def.name, width: 360, modeless: true,
+    title: def.label, width: 380, modeless: true,
     body: [
-      ...def.params.map((p) => p.bool
-        ? checkbox(p.label, !!params[p.key], (v) => { params[p.key] = v ? 1 : 0; schedule(); })
-        : slider({ label: p.label, min: p.min, max: p.max, step: p.step, value: p.value, unit: p.unit, onInput: (v) => { params[p.key] = v; schedule(); } })),
-      checkbox('Preview', true, (v) => { preview = v; schedule(); }),
-      mask ? h('p', { class: 'dialog-note' }, 'Applies inside the selection only.') : null,
+      ...def.params.map((p) => fxParamControl(p, fx.v[p.key] ?? p.value, set, () => {})),
+      h('div', { class: 'row' },
+        checkbox('Preview', true, (v) => { preview = v; schedule(); }),
+        def.seeded ? h('button', { class: 'btn small', type: 'button', title: 'Re-roll the random pattern', onclick: () => { fx.seed = Math.floor(Math.random() * 1000); schedule(); } }, icon('dice'), 'New variation') : null),
+      mask ? h('p', { class: 'dialog-note' }, pt.isMask ? 'Applies to the mask, inside the selection only.' : 'Applies inside the selection only.')
+        : pt.isMask ? h('p', { class: 'dialog-note' }, 'Applies to the mask.') : null,
+      onLayer ? h('p', { class: 'dialog-note' }, 'Keep editable adds it as an effect layer on just this layer instead, to change or remove later.') : null,
     ].filter(Boolean) as HTMLElement[],
     onCancel: () => { done(); show(backup); },
     buttons: [
       { label: 'Cancel', onClick: () => { done(); show(backup); } },
+      ...(onLayer ? [{ label: 'Keep editable', onClick: () => { done(); show(backup); newEffectOn(fx, onLayer.id); } }] : []),
       {
         label: 'Apply', primary: true, onClick: () => {
+          const r = run();
+          if (!r) { toast(`Couldn't run ${def.label} on the graphics card.`, 'error'); return false; }
           done();
-          show(run());
-          doc.commit(def.name, [{ key, rect: { x: 0, y: 0, w: src.width, h: src.height }, before: backup, after: null }]);
+          show(r);
+          doc.commit(def.label, [{ key, rect: { x: 0, y: 0, w: src.width, h: src.height }, before: backup, after: null }]);
+          return undefined;
         },
       },
     ],
   });
 }
-
-export const filterById = (id: string) => FILTERS.find((f) => f.id === id)!;
 
 export function saveLookDialog() {
   const src = lookSourceLayers();

@@ -18,7 +18,8 @@ import { autosave, clearRecovery, listRecovery, restoreRecovery } from './core/r
 import { flushSettings } from './core/settings';
 import { dueForCheck } from './core/update';
 import { view } from './ui/canvasview';
-import { updateDialog } from './ui/dialogs';
+import { filterDialog, updateDialog } from './ui/dialogs';
+import { flatten } from './core/render';
 import { mountShell } from './ui/shell';
 import { ask, toast } from './ui/widgets';
 
@@ -187,4 +188,4 @@ if (isDesktop) {
 }
 
 // Dev/test hook (harmless in production): lets automated checks drive the editor.
-(window as unknown as Record<string, unknown>).__pixl = { app, actions: A, view, recovery: { autosave, restoreRecovery, clearRecovery } };
+(window as unknown as Record<string, unknown>).__pixl = { app, actions: A, view, recovery: { autosave, restoreRecovery, clearRecovery }, flatten, filterDialog };

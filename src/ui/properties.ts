@@ -8,6 +8,7 @@ import { defaultStyles } from '../core/styles';
 import { ADJ_LABELS, HSL_BANDS, curveTable, histogram, type Histogram } from '../core/adjustments';
 import type { Doc } from '../core/document';
 import { canMove, DEFAULT_MOTION, fxDef } from '../core/effects';
+import { colorInput, fxParamControl } from './fxcontrols';
 import { layerBox } from '../core/bounds';
 import { envelopeLabel } from '../core/envelope';
 import { warpDialog } from './warpdialog';
@@ -154,14 +155,6 @@ export function propertiesPanel() {
     refreshers.push(refresh);
     return section(title, h('div', { class: 'grid2' }, x, y, w, hh),
       h('p', { class: 'props-note' }, `The box around ${layers.length} layers: they move and resize together.`));
-  };
-
-  const colorInput = (value: string, onInput: (v: string) => void, onDone: () => void) => {
-    const inp = h('input', { type: 'color', value, class: 'color-input' });
-    inp.addEventListener('input', () => onInput(inp.value));
-    inp.addEventListener('change', onDone);
-    return h('span', { class: 'color-pair' }, inp,
-      h('button', { class: 'btn small', type: 'button', title: 'Use the foreground colour', onclick: () => { inp.value = app.fg; onInput(app.fg); onDone(); } }, 'Use FG'));
   };
 
   const textSection = (l: TextLayer) => {
@@ -479,17 +472,7 @@ export function propertiesPanel() {
     if (!def) return section('Effect', h('p', { class: 'props-note' }, `Unknown effect "${l.fx.kind}".`));
     const e = edit(l, def.label);
     const set = (key: string, v: number | string | boolean, final: boolean) => { l.fx = { ...l.fx, v: { ...l.fx.v, [key]: v } }; e.live(); if (final) e.done(); };
-    const kids = def.params.map((p) => {
-      const cur = l.fx.v[p.key] ?? p.value;
-      switch (p.type) {
-        case 'range': return slider({ label: p.label, min: p.min, max: p.max, step: p.step ?? 1, value: Number(cur), unit: p.unit, onInput: (v) => set(p.key, v, false), onChange: e.done });
-        case 'bool': return checkbox(p.label, !!cur, (v) => set(p.key, v, true));
-        case 'color': return h('div', { class: 'prop-line' }, h('span', { class: 'dim' }, p.label), colorInput(String(cur), (v) => set(p.key, v, false), e.done));
-        case 'select': return h('label', { class: 'field wide' }, h('span', null, p.label),
-          p.options.length <= 3 ? seg(p.options.map(([v, lab]) => ({ v, label: lab })), String(cur), (v) => set(p.key, v, true))
-            : h('select', { onchange: (ev: Event) => set(p.key, (ev.target as HTMLSelectElement).value, true) }, ...p.options.map(([v, lab]) => h('option', { value: v, selected: v === cur }, lab))));
-      }
-    });
+    const kids = def.params.map((p) => fxParamControl(p, l.fx.v[p.key] ?? p.value, set, e.done));
     const hasDepth = flatLayers(app.doc!.layers).some(isDepth);
     return section(def.label,
       def.depth ? h('div', { class: 'props-note' }, hasDepth

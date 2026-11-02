@@ -1,4 +1,5 @@
 import { fxDef, type FxDef, type FxEnv } from './effects';
+import { padEdges } from './filters';
 import { glLimit, gpuRestored } from './gpu';
 import { ctx2d } from './layers';
 import type { FxParams } from './types';
@@ -28,6 +29,12 @@ vec4 texOut(sampler2D s, vec2 p) { return texture(s, vec2(p.x / uRes.x, 1.0 - p.
 vec4 src(vec2 p) { return texOut(uSrc, p); }
 vec4 aux(vec2 p) { return texOut(uAux, p); }
 vec4 srcDoc(vec2 d) { return texOut(uSrc, fromDoc(d)); }
+// The picture with positions kept on the canvas: past its edge, the edge pixels repeat.
+vec4 srcC(vec2 p) { return src(clamp(p, fromDoc(vec2(0.0)) + 0.5, fromDoc(docSize()) - 0.5)); }
+vec4 srcDocC(vec2 d) { return srcC(fromDoc(d)); }
+// For averaging colours where some are see-through: add them premultiplied, then divide out.
+vec4 pm(vec4 c) { return vec4(c.rgb * c.a, c.a); }
+vec4 unpm(vec4 c) { return c.a > 1e-5 ? vec4(c.rgb / c.a, c.a) : vec4(0.0); }
 float lum(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
 // The depth map (0 far, 1 near) at an output pixel; only set for effects that use depth.
 float depth(vec2 p) { return lum(texOut(uDepth, p).rgb); }
@@ -41,6 +48,16 @@ float vnoise(vec2 q) {
   vec2 i = floor(q), f = fract(q);
   f = f * f * (3.0 - 2.0 * f);
   return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x), mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x), f.y);
+}
+// Layered noise (0..1, around 0.5): \`oct\` layers, each twice as fine and half as strong.
+float fbm(vec2 q, float oct) {
+  float s = 0.0, a = 0.5, t = 0.0;
+  for (int i = 0; i < 8; i++) {
+    if (float(i) >= oct) break;
+    s += a * vnoise(q); t += a;
+    q = q * 2.03 + 17.1; a *= 0.5;
+  }
+  return s / t;
 }
 `;
 
@@ -72,6 +89,9 @@ class FXEngine {
   private depthTex!: WebGLTexture;
   private blur = document.createElement('canvas');
   private stage = document.createElement('canvas');
+  private edged = document.createElement('canvas');
+  private padded = document.createElement('canvas');
+  private auxOut = document.createElement('canvas');
   maxSize = 4096;
 
   constructor() {
@@ -188,6 +208,47 @@ class FXEngine {
     return this.blur;
   }
 
+  /** `img` with what's outside the canvas (`r`, in its pixels) filled by stretching the canvas's edge pixels out. */
+  private clampToDoc(img: HTMLCanvasElement, r: { x: number; y: number; w: number; h: number }): HTMLCanvasElement {
+    const W = img.width, H = img.height;
+    const x0 = Math.max(0, Math.round(r.x)), y0 = Math.max(0, Math.round(r.y));
+    const x1 = Math.min(W, Math.round(r.x + r.w)), y1 = Math.min(H, Math.round(r.y + r.h));
+    if (x1 - x0 < 1 || y1 - y0 < 1 || (x0 === 0 && y0 === 0 && x1 === W && y1 === H)) return img;
+    const c = this.edged;
+    if (c.width !== W || c.height !== H) { c.width = W; c.height = H; }
+    const x = ctx2d(c);
+    x.save();
+    x.imageSmoothingEnabled = false;
+    x.clearRect(0, 0, W, H);
+    x.drawImage(img, x0, y0, x1 - x0, y1 - y0, x0, y0, x1 - x0, y1 - y0);
+    if (x0 > 0) x.drawImage(img, x0, y0, 1, y1 - y0, 0, y0, x0, y1 - y0);
+    if (x1 < W) x.drawImage(img, x1 - 1, y0, 1, y1 - y0, x1, y0, W - x1, y1 - y0);
+    // Then up and down from the rows already stretched sideways, which fills the corners too.
+    if (y0 > 0) x.drawImage(c, 0, y0, W, 1, 0, 0, W, y0);
+    if (y1 < H) x.drawImage(c, 0, y1 - 1, W, 1, 0, y1, W, H - y1);
+    x.restore();
+    return c;
+  }
+
+  /**
+   * `img` blurred by `radius`, as if the canvas's edge pixels went on outward (beyond the canvas and beyond `img`
+   * itself), so nothing fades in at the edges. Same reduced size as `blurred`.
+   */
+  private blurredClamped(img: HTMLCanvasElement, docRect: { x: number; y: number; w: number; h: number }, radius: number) {
+    const base = this.clampToDoc(img, docRect);
+    const down = radius > 24 ? 4 : radius > 6 ? 2 : 1;
+    const pad = Math.ceil((radius * 3 + 2) / down) * down;
+    const padded = padEdges(base, pad, this.padded);
+    const b = this.blurred(padded, radius);
+    const w = Math.max(1, Math.ceil(img.width / down)), h = Math.max(1, Math.ceil(img.height / down));
+    const out = this.auxOut;
+    if (out.width !== w || out.height !== h) { out.width = w; out.height = h; }
+    const x = ctx2d(out);
+    x.clearRect(0, 0, w, h);
+    x.drawImage(b, pad / down, pad / down, w, h, 0, 0, w, h);
+    return out;
+  }
+
   /**
    * Applies an effect to `src`. `docRect` is the document's rectangle in `src` pixels and `scale` how many of
    * those pixels one document pixel covers. `time` (seconds) is where an animation is: with the effect's motion on,
@@ -209,6 +270,11 @@ class FXEngine {
     if (depth) this.upload(this.depthTex, depth, 2);
     if (def.aux) {
       const radius = Math.max(0.5, def.aux.radius(fx.v) * scale);
+      if (def.aux.clamp) {
+        this.upload(this.auxTex, this.blurredClamped(src, docRect, radius), 1);
+        this.run(prog, w, h, env, seed, def.uniforms(fx.v) as Record<string, number[]>);
+        return this.canvas;
+      }
       let auxSrc: HTMLCanvasElement = src;
       const thr = def.aux.threshold?.(fx.v);
       if (thr !== undefined) {
