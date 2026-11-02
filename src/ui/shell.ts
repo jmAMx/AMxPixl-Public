@@ -57,6 +57,7 @@ const MENUS: MenuDef[] = [
       { label: 'Save As…', accel: 'Ctrl+Shift+S', run: () => A.saveDoc(app.doc, true), enabled: hasDoc },
       { label: 'Export Image…', accel: 'Ctrl+Shift+E', run: () => exportDialog(), enabled: hasDoc },
       { label: 'Export Artboards…', run: () => exportDialog(true), enabled: () => (app.project?.boards.length ?? 0) > 1 },
+      { label: 'Export as Photoshop (.psd)…', run: () => exportDialog(false, 'psd'), enabled: hasDoc },
       { label: 'Export Animation (GIF / Video)…', accel: 'Ctrl+Alt+Shift+E', run: animExportDialog, enabled: hasDoc },
       'sep',
       { label: 'Close', accel: 'Ctrl+W', run: () => A.closeDoc(), enabled: hasDoc },

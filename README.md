@@ -62,6 +62,7 @@ One-time setup: `winget install GitHub.cli`, then `gh auth login`, and a `public
 - **Brushes:** textured tips (built-in or from your own image), spacing, angle jitter, scatter and saved presets.
 - **Paths:** a Paths tool for Bézier paths (place points like a pen, or draw freehand and it's smoothed into points); fill, stroke, path ↔ selection, text on a path, polygon and star shapes, shape to path.
 - **Selections:** marquee, lasso, magic wand, Colour Range, Modify (feather, expand, contract, smooth, border), Quick Mask (Q) and Ctrl+click a layer to select its shape.
+- **Exports Photoshop files with layers** (groups, masks, blend modes, clipping, Blend If), plus PNG, JPEG, WebP and TIFF.
 - **Opens GIMP and Photoshop files:** `.xcf` (GIMP 2.10 and 3, including GIMP 3's non-destructive filters and linear-light layer blending) and `.psd` (layers, groups, masks, clipping, blend modes). Anything that can't be carried over editably is listed when the file opens.
 - **Motion:** a Timeline with frames (one per layer, or a loop), onion skinning and playback. Effect layers can animate: grain, dust and glitches re-roll, scanlines and VHS tracking roll, light leaks drift, halftone dots drift, turn, pulse or ripple. Export as GIF, animated PNG, MP4 or WebM.
 - **Pixel art:** anti-aliasing can be turned off for the brush, eraser, text, shapes and selections; nearest-neighbour resampling in Image Size and Export keeps scaled pixels blocky; a pixel grid appears from 600% zoom.

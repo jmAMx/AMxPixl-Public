@@ -1,5 +1,5 @@
 import { app } from '../app';
-import { addGuide, colorRangeSelection, createDoc, cropToContent, deleteLook, exportArtboards, lookSourceLayers, modifySelection, newArtboard, newEffectOn, nextUntitled, renameArtboard, resizeCanvas, resizeImage, saveLook } from '../actions';
+import { addGuide, colorRangeSelection, createDoc, cropToContent, deleteLook, exportArtboards, type ExportOpts, lookSourceLayers, modifySelection, newArtboard, newEffectOn, nextUntitled, renameArtboard, resizeCanvas, resizeImage, saveLook } from '../actions';
 import type { Doc } from '../core/document';
 import { savedLooks } from '../core/looks';
 import { colorRangeMask, sampleSource, type Modify, type SelMode } from '../core/selops';
@@ -182,22 +182,28 @@ export function canvasSizeDialog() {
 }
 
 /** File › Export; with several artboards, which to export (just the one worked on to start with, or `all`). */
-export function exportDialog(all = false) {
+export function exportDialog(all = false, startFormat: ExportOpts['format'] = 'png') {
   const doc = app.doc; if (!doc) return;
   const boards = app.project && app.project.boards.length > 1 ? app.project.docs : [doc];
   // (Several selected with the Artboard tool or in Layers: those.)
   const sel = app.project?.selection() ?? [doc];
   const chosen = new Set(all ? boards : sel.length > 1 ? sel : [doc]);
-  let format: 'png' | 'jpeg' | 'webp' = 'png', quality = 0.92, scale = 1, resample = doc.resample;
+  let format = startFormat, quality = 0.92, scale = 1, resample = doc.resample;
   const info = h('p', { class: 'dialog-msg' });
+  const psdNote = h('p', { class: 'dialog-note' }, 'Keeps the layers, groups, masks, opacity, blend modes, clipping and Blend If. Text, shapes, 3D and layer styles go in as pixels; an adjustment or effect layer goes in as a pixel layer showing its result, with the layers it changes kept below it.');
   const q = slider({ label: 'Quality', min: 0.1, max: 1, step: 1, display: 100, value: quality, unit: '%', onInput: (v) => { quality = v; } });
   const upd = () => {
     const list = boards.filter((d) => chosen.has(d));
     const one = list.length === 1 ? list[0] : null;
-    info.textContent = (one ? `${Math.round(one.width * scale)} × ${Math.round(one.height * scale)} px` : `${list.length} artboards, each its own image`)
-      + ` · ${format.toUpperCase()}${format === 'jpeg' ? ' (transparent areas become white)' : ''}`;
-    q.style.display = format === 'png' ? 'none' : '';
+    info.textContent = (one ? `${Math.round(one.width * scale)} × ${Math.round(one.height * scale)} px` : `${list.length} artboards, each its own ${format === 'psd' ? 'file' : 'image'}`)
+      + ` · ${format === 'psd' ? 'Photoshop, with layers' : format.toUpperCase()}${format === 'jpeg' ? ' (transparent areas become white)' : ''}`;
+    q.style.display = format === 'jpeg' || format === 'webp' ? '' : 'none';
+    psdNote.hidden = format !== 'psd';
+    flatNote.hidden = format === 'psd' && boards.length === 1;
   };
+  const flatNote = h('p', { class: 'dialog-note' }, boards.length > 1
+    ? 'Each artboard becomes its own image, named by its place and name ("01 - Artboard 1"). Choose where the first goes; the others go in the same folder.'
+    : 'Exports are resampled straight from each layer\'s originals for the sharpest result. Save as .pixl to keep layers.');
   const sc = numField('Size', 100, (v) => { scale = v / 100; upd(); }, { unit: '%', min: 1, max: 800, decimals: 0 });
   // Several artboards: a box each (and all / just this one).
   const checks = boards.length > 1 ? boards.map((d) => checkbox(d.name, chosen.has(d), (v) => { if (v) chosen.add(d); else chosen.delete(d); upd(); })) : [];
@@ -209,11 +215,9 @@ export function exportDialog(all = false) {
     body: [
       ...(pick ? [pick] : []),
       h('div', { class: 'field wide' }, h('span', null, 'Format'),
-        seg([{ v: 'png', label: 'PNG' }, { v: 'jpeg', label: 'JPEG' }, { v: 'webp', label: 'WebP' }], format, (v) => { format = v; upd(); })),
-      q, sc, resampleField(resample, (v) => { resample = v; }), info,
-      h('p', { class: 'dialog-note' }, boards.length > 1
-        ? 'Each artboard becomes its own image, named by its place and name ("01 - Artboard 1"). Choose where the first goes; the others go in the same folder.'
-        : 'Exports are resampled straight from each layer\'s originals for the sharpest result. Save as .pixl to keep layers.'),
+        seg<ExportOpts['format']>([{ v: 'png', label: 'PNG' }, { v: 'jpeg', label: 'JPEG' }, { v: 'webp', label: 'WebP' }, { v: 'tiff', label: 'TIFF' },
+          { v: 'psd', label: 'PSD', title: 'Photoshop, with layers' }], format, (v) => { format = v; upd(); })),
+      q, sc, resampleField(resample, (v) => { resample = v; }), info, psdNote, flatNote,
     ],
     buttons: [{ label: 'Cancel' }, { label: 'Export', primary: true, onClick: () => {
       const list = boards.filter((d) => chosen.has(d));

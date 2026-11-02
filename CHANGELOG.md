@@ -27,6 +27,12 @@ Artboards: several canvases, each its own size, in one file.
 - **Photoshop artboards** come in as artboards, with their layers. Any layers outside them go on one more artboard, "Other layers".
 - **Next and previous artboard**: Ctrl+Alt+] and Ctrl+Alt+[.
 - While you drag an artboard, the tab bar shows a spot where it can go to get a tab of its own. The spot lights up when you're over the bar.
+- **Export to Photoshop (.psd) with layers**: File › Export as Photoshop, or PSD in Export Image (each artboard its own file, at any size).
+  - **Kept as they are**: layers and groups (open or closed, pass-through or not), names, visibility, opacity, blend modes, clipping, masks and Blend If. Layers that run past the canvas edge keep what's outside it.
+  - **As pixels that look the same**: text, shapes, 3D, warps and layer styles. Each adjustment or effect layer becomes a pixel layer of the picture as it looks with it, with the layers it changes kept below it. Those are hidden where the result doesn't fully cover them.
+  - A layer with styles that has layers clipped to it goes in as one layer, since its styles apply to them all. Opening the file again in Pixl gives exactly the same picture.
+- **Export to TIFF**: 8 bits a channel with transparency, compressed losslessly.
+- Opening a Photoshop file now keeps its layers' Blend If settings.
 - **Open animated GIFs and video to edit frame by frame.** An animated GIF, Animated PNG or animated WebP opens with each frame as a layer and a Timeline frame showing it, keeping each frame's timing. A video (MP4, MOV, WebM, MKV) opens the same way: first pick the part to open, how many frames a second and the size, and Pixl shows what it will take in memory. Export Animation saves the result as GIF, Animated PNG or video again. Very long or very large animations ask first, and above what fits in memory Pixl offers to open the first frames only. Dropping an animated GIF or a video on Pixl opens it too.
 - **Filters, editable or applied**: 19 filters, run on the graphics card. Each one can be an editable effect layer (Layer › New Effect Layer, or Filter › Effect Layer), or be applied to a layer from the Filter menu.
   - **Blur**: Gaussian, Motion, Radial (Spin), Zoom and Surface Blur.

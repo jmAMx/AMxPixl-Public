@@ -1,7 +1,7 @@
 import { Doc, flatLayers, newId } from '../document';
 import type { Board } from '../project';
 import { ctx2d, newCanvas } from '../layers';
-import type { BlendMode, GroupLayer, Layer, Mask, RasterLayer } from '../types';
+import type { BlendIf, BlendMode, GroupLayer, Layer, Mask, RasterLayer } from '../types';
 import { inflate, Reader, sampleTo8 } from './reader';
 
 /** Photoshop blend mode keys. Modes AMxPixl doesn't have map to the closest one (and are reported). */
@@ -21,6 +21,8 @@ interface Rec {
   top: number; left: number; bottom: number; right: number; chans: ChanInfo[]; blend: string; opacity: number;
   clipping: boolean; hidden: boolean; name: string; divider: number; mask: { top: number; left: number; bottom: number; right: number; def: number; disabled: boolean } | null;
   adjust: boolean;
+  /** Blend If, from the layer's grey blending ranges (when they're not left open). */
+  blendIf?: BlendIf;
   /** A group that's an artboard: its rectangle on the document. */
   artboard?: { x: number; y: number; w: number; h: number };
 }
@@ -180,7 +182,15 @@ export async function importPsd(buf: ArrayBuffer, name: string): Promise<Board[]
           rec.mask = m;
         }
         r.pos = mEnd;
-        r.skip(r.u32()); // blending ranges
+        // Blending ranges: the grey pair (this layer, then what's under it) is Blend If; the per-channel ones are left.
+        const brLen = r.u32(), brEnd = r.pos + brLen;
+        if (brLen >= 8) {
+          type Range = [number, number, number, number];
+          const self: Range = [r.u8(), r.u8(), r.u8(), r.u8()], under: Range = [r.u8(), r.u8(), r.u8(), r.u8()];
+          const open = (v: Range) => v[0] === 0 && v[1] === 0 && v[2] === 255 && v[3] === 255;
+          if (!open(self) || !open(under)) rec.blendIf = { on: true, self, under };
+        }
+        r.pos = brEnd;
         const nl = r.u8();
         rec.name = new TextDecoder('latin1').decode(r.bytes(nl));
         r.pos += (4 - ((nl + 1) % 4)) % 4;
@@ -242,7 +252,7 @@ export async function importPsd(buf: ArrayBuffer, name: string): Promise<Board[]
   const stack: Layer[][] = [[]];
   const artboards = new Map<string, NonNullable<Rec['artboard']>>();
   recs.forEach((rec, i) => {
-    const base = { name: rec.name || 'Layer', visible: !rec.hidden, opacity: rec.opacity / 255, blend: BLEND[rec.blend] ?? 'normal', clip: rec.clipping };
+    const base = { name: rec.name || 'Layer', visible: !rec.hidden, opacity: rec.opacity / 255, blend: BLEND[rec.blend] ?? 'normal', clip: rec.clipping, ...(rec.blendIf ? { blendIf: rec.blendIf } : {}) };
     if (APPROX.has(rec.blend)) notes.add('Some blend modes were replaced with the closest match.');
     let mask: Mask | null = null;
     const m = rec.mask, mc = pixels[i].mask;
