@@ -1,5 +1,6 @@
 import { flatLayers, type Doc } from './document';
 import { fxDef } from './effects';
+import { padEdges } from './filters';
 import { fxEngine } from './fx';
 import { glfx } from './glfx';
 import { glops } from './glops';
@@ -150,6 +151,21 @@ function depthMap(env: Env, like: HTMLCanvasElement): HTMLCanvasElement {
 
 const maskOn = (l: Layer): Mask | null => (l.mask && l.mask.enabled ? l.mask : null);
 
+/**
+ * Feathered masks are blurred from a copy with their edge pixels stretched outward, so the blur doesn't fade the layer
+ * where the mask ends (usually the canvas edge). Kept until the mask's pixels or the margin change.
+ */
+const paddedMasks = new WeakMap<HTMLCanvasElement, { sig: string; canvas: HTMLCanvasElement }>();
+
+function paddedMask(img: HTMLCanvasElement, key: string, pad: number): HTMLCanvasElement {
+  const sig = `${pixelVersion(key)}:${pad}:${img.width}x${img.height}`;
+  const kept = paddedMasks.get(img);
+  if (kept?.sig === sig) return kept.canvas;
+  const canvas = padEdges(img, pad);
+  paddedMasks.set(img, { sig, canvas });
+  return canvas;
+}
+
 /** The mask drawn into target space (alpha = how much shows), with live feather and density. */
 function maskInTarget(m: Mask, like: HTMLCanvasElement, env: Env): HTMLCanvasElement {
   const out = acquire(like.width, like.height);
@@ -160,10 +176,15 @@ function maskInTarget(m: Mask, like: HTMLCanvasElement, env: Env): HTMLCanvasEle
   const s = matScale(mm);
   x.save();
   setT(x, mm);
-  if (m.feather > 0) x.filter = `blur(${m.feather * env.scale}px)`;
   x.imageSmoothingEnabled = !env.nearest;
   const { img, f } = env.nearest ? { img: src, f: 1 } : displaySource(src, s);
-  x.drawImage(img, 0, 0, img.width * f, img.height * f);
+  if (m.feather > 0) {
+    const r = m.feather * env.scale;
+    x.filter = `blur(${r}px)`;
+    // The margin in `img` pixels: three blur radii, as one img pixel covers f·s target pixels.
+    const pad = Math.min(Math.ceil((r * 3) / (f * s)) + 2, Math.max(img.width, img.height));
+    x.drawImage(paddedMask(img, m.key, pad), -pad * f, -pad * f, (img.width + pad * 2) * f, (img.height + pad * 2) * f);
+  } else x.drawImage(img, 0, 0, img.width * f, img.height * f);
   x.restore();
   if (m.density < 1) {
     x.fillStyle = `rgba(255,255,255,${1 - m.density})`;
@@ -325,8 +346,10 @@ function renderList(list: Layer[], target: HTMLCanvasElement, env: Env) {
     if (!shows(l, env)) continue;
     const live = clipped.filter((c) => shows(c, env));
     if (!live.length && !clipped.some((c) => c.id === env.stopAt)) { drawLayer(l, target, env); continue; }
+    // The clipped layers show through the base's own pixels (masked, but before its styles), and the base's styles,
+    // Blend If, blend mode and opacity then apply to the whole clipping group, as in Photoshop.
     const iso = like(target);
-    drawLayer({ ...l, opacity: 1, blend: 'normal' } as Layer, iso, env);
+    drawContent(l, iso, env);
     const baseAlpha = like(target);
     composite(baseAlpha, iso, 'normal', 1);
     for (const c of live) {
@@ -334,9 +357,21 @@ function renderList(list: Layer[], target: HTMLCanvasElement, env: Env) {
       if (c.id === env.stopAt) { capture(iso, env); break; }
       drawClipped(c, iso, baseAlpha, env);
     }
-    if (!env.done) composite(target, iso, l.blend, l.opacity);
-    release(iso, baseAlpha);
+    if (env.done) release(iso);
+    else finish(l, iso, target, env, null, hasStyles(l.styles) ? l.styles : null, l.blendIf?.on ? l.blendIf : null);
+    release(baseAlpha);
   }
+}
+
+/** A layer's own pixels, masked, into an empty buffer: no styles, Blend If or blending (a clipping base). */
+function drawContent(l: Layer, iso: HTMLCanvasElement, env: Env) {
+  if (l.type === 'group') renderList(l.children, iso, env);
+  else if (isPlaced(l)) {
+    drawPlaced(ctx2d(iso), l, env.doc.pool, env.view, env.nearest, env.screen);
+    ctx2d(iso).setTransform(1, 0, 0, 1, 0, 0);
+  }
+  const m = maskOn(l);
+  if (m && !env.done) applyMask(iso, m, env);
 }
 
 /**

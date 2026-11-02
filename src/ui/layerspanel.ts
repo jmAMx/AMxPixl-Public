@@ -132,6 +132,8 @@ export function layersPanel() {
   const el = h('div', { class: 'layers-panel' }, h('div', { class: 'layer-props' }, blend, opacity), list, foot);
 
   const thumbs = new Map<string, { c: HTMLCanvasElement; mask: boolean }[]>();
+  /** Per row: brings its eye and opacity badge up to date. */
+  const syncs: (() => void)[] = [];
   let sig = '';
   let thumbTimer = 0;
   let dragId: string | null = null;
@@ -203,9 +205,20 @@ export function layersPanel() {
       ? h('button', { class: 'chev-btn', type: 'button', title: l.open ? 'Collapse' : 'Expand', onclick: (e: MouseEvent) => { e.stopPropagation(); l.open = !l.open; build(); } }, icon(l.open ? 'chevron' : 'chevronR'))
       : h('span', { class: 'chev-space' });
 
-    const vis = doc.shows(l);
+    const eye = h('button', {
+      class: 'eye', type: 'button', 'aria-label': 'Toggle visibility',
+      onclick: (e: MouseEvent) => {
+        e.stopPropagation();
+        const vis = doc.shows(doc.layer(l.id) ?? l);
+        // The eye of one of several selected layers shows or hides them all.
+        const sel = doc.selectedIds();
+        if (sel.length > 1 && sel.includes(l.id)) setLayersVisible(sel, !vis);
+        else setLayerProp(l.id, { visible: !vis }, vis ? 'Hide layer' : 'Show layer');
+      },
+    });
+    const badge = h('span', { class: 'layer-badge' });
     const r = h('div', {
-      class: 'layer-row' + (isActive ? ' active' : doc.alsoSelected.includes(l.id) ? ' also' : '') + (vis ? '' : ' hidden-layer') + (l.clip ? ' clipped' : '') + (l.type === 'group' ? ' group-row' : ''),
+      class: 'layer-row' + (isActive ? ' active' : doc.alsoSelected.includes(l.id) ? ' also' : '') + (l.clip ? ' clipped' : '') + (l.type === 'group' ? ' group-row' : ''),
       role: 'treeitem', 'aria-selected': String(isActive), draggable: true, style: `padding-left:${2 + depth * 14}px`,
       // Ctrl+click adds or removes a layer, Shift+click selects a run of them (moved and transformed together).
       onclick: (e: MouseEvent) => {
@@ -214,16 +227,7 @@ export function layersPanel() {
         if (doc.activeId !== l.id || doc.alsoSelected.length) { doc.setActive(l.id, false); doc.touch('meta'); }
       },
     },
-    h('button', {
-      class: 'eye', type: 'button', title: (vis ? 'Hide layer' : 'Show layer') + (doc.anim ? ' in this frame' : ''), 'aria-label': 'Toggle visibility',
-      onclick: (e: MouseEvent) => {
-        e.stopPropagation();
-        // The eye of one of several selected layers shows or hides them all.
-        const sel = doc.selectedIds();
-        if (sel.length > 1 && sel.includes(l.id)) setLayersVisible(sel, !vis);
-        else setLayerProp(l.id, { visible: !vis }, vis ? 'Hide layer' : 'Show layer');
-      },
-    }, icon(vis ? 'eye' : 'eyeOff')),
+    eye,
     chevron,
     l.clip ? h('span', { class: 'clip-arrow', title: 'Clipped to the layer below' }, icon('clip')) : null,
     main, maskEl, name,
@@ -233,7 +237,28 @@ export function layersPanel() {
     hasStyles(l.styles) ? h('span', { class: 'layer-fx', title: 'Has layer styles' }, 'fx') : null,
     l.blendIf?.on ? h('span', { class: 'layer-fx', title: 'Blend If is on' }, 'BI') : null,
     (l.type === 'raster' && l.warp) || ((l.type === 'text' || l.type === 'shape') && l.envelope) ? h('span', { class: 'layer-type', title: 'Warped (lossless)' }, icon('warp')) : null,
-    l.blend !== 'normal' && l.blend !== 'pass-through' || l.opacity < 1 ? h('span', { class: 'layer-badge' }, l.opacity < 1 ? `${Math.round(l.opacity * 100)}%` : '', l.blend !== 'normal' && l.blend !== 'pass-through' ? ' fx' : '') : null);
+    badge);
+
+    // Visibility and opacity change in place (dragging the opacity slider or playing an animation would otherwise
+    // rebuild the list and redraw every thumbnail many times a second).
+    let shown: boolean | null = null;
+    const sync = () => {
+      // Undo can swap in a new copy of the layer without changing anything that rebuilds the row.
+      const c = doc.layer(l.id) ?? l;
+      const vis = doc.shows(c);
+      if (vis !== shown) {
+        shown = vis;
+        r.classList.toggle('hidden-layer', !vis);
+        eye.title = (vis ? 'Hide layer' : 'Show layer') + (doc.anim ? ' in this frame' : '');
+        eye.replaceChildren(icon(vis ? 'eye' : 'eyeOff'));
+      }
+      const fx = c.blend !== 'normal' && c.blend !== 'pass-through';
+      const text = (c.opacity < 1 ? `${Math.round(c.opacity * 100)}%` : '') + (fx ? ' fx' : '');
+      if (badge.textContent !== text) badge.textContent = text;
+      badge.hidden = !text;
+    };
+    sync();
+    syncs.push(sync);
 
     r.addEventListener('contextmenu', (e) => {
       e.preventDefault();
@@ -280,6 +305,7 @@ export function layersPanel() {
     const doc = app.doc;
     el.classList.toggle('disabled', !doc);
     thumbs.clear();
+    syncs.length = 0;
     if (!doc) { list.replaceChildren(h('div', { class: 'empty-note' }, 'No image open')); return; }
     list.replaceChildren(...[...doc.layers].reverse().flatMap((l) => row(l, 0)));
     const a = doc.active;
@@ -295,14 +321,27 @@ export function layersPanel() {
   const signature = () => {
     const d = app.doc;
     if (!d) return '';
-    const s = (ls: Layer[]): unknown => ls.map((l) => [l.id, l.name, d.shows(l), l.opacity, l.blend, l.type, !!l.clip, l.mask ? [l.mask.key, l.mask.enabled] : 0,
+    const s = (ls: Layer[]): unknown => ls.map((l) => [l.id, l.name, l.blend, l.type, !!l.clip, l.mask ? [l.mask.key, l.mask.enabled] : 0,
       hasStyles(l.styles), !!l.blendIf?.on, l.type === 'raster' && !!l.model, l.type === 'raster' && !!l.depth, (l.type === 'raster' && !!l.warp) || ((l.type === 'text' || l.type === 'shape') && !!l.envelope), l.type === 'group' ? [l.open, s(l.children)] : 0]);
     return JSON.stringify([d.activeId, d.alsoSelected, d.maskEdit, s(d.layers)]);
   };
 
+  /** What the rows show without a rebuild, and which doesn't change the thumbnails: visibility and opacity. */
+  const looks = () => {
+    const d = app.doc;
+    return d ? d.all().map((l) => `${+d.shows(l)}${l.opacity}`).join() : '';
+  };
+  let look = '';
+
   const update = (kind: string) => {
-    const s = signature();
-    if (s !== sig || kind === 'docs') { sig = s; build(); return; }
+    const s = signature(), lk = looks();
+    if (s !== sig || kind === 'docs') { sig = s; look = lk; build(); return; }
+    if (lk !== look) {
+      look = lk;
+      for (const f of syncs) f();
+      opacity.setValue(app.doc?.active?.opacity ?? 1);
+      if (kind === 'meta') return;
+    }
     clearTimeout(thumbTimer);
     thumbTimer = window.setTimeout(refreshThumbs, kind === 'pixels' ? 350 : 120);
   };

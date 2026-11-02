@@ -25,11 +25,24 @@ const PRESETS: [string, number, number][] = [
   ['Letter @ 300 ppi 2550 × 3300', 2550, 3300],
 ];
 
+/** The largest image a canvas can hold: no side over 32,767 px and no more than 16,384 × 16,384 pixels in all. */
+const MAX_SIDE = 32767, MAX_AREA = 16384 * 16384;
+
+/** Shows why an image of w × h can't be made and returns true (the dialog then stays open), or false if it can. */
+function tooBig(w: number, h: number): boolean {
+  w = Math.round(w); h = Math.round(h);
+  if (w <= MAX_SIDE && h <= MAX_SIDE && w * h <= MAX_AREA) return false;
+  toast(w > MAX_SIDE || h > MAX_SIDE
+    ? `${w} × ${h} px is too big: an image can be at most ${MAX_SIDE.toLocaleString()} px wide or tall.`
+    : `${w} × ${h} px is ${Math.round((w * h) / 1e6)} megapixels, too big: the most an image can have is ${Math.round(MAX_AREA / 1e6)} (16,384 × 16,384).`, 'error');
+  return true;
+}
+
 export function newDocDialog() {
   let w = 1920, hh = 1080, bg: 'white' | 'black' | 'transparent' | 'bgcolor' = 'white';
   const name = h('input', { type: 'text', value: nextUntitled(), spellcheck: false });
-  const wf = numField('Width', w, (v) => { w = v; }, { unit: 'px', min: 1, max: 30000 });
-  const hf = numField('Height', hh, (v) => { hh = v; }, { unit: 'px', min: 1, max: 30000 });
+  const wf = numField('Width', w, (v) => { w = v; }, { unit: 'px', min: 1, max: MAX_SIDE });
+  const hf = numField('Height', hh, (v) => { hh = v; }, { unit: 'px', min: 1, max: MAX_SIDE });
   const preset = h('select', {
     onchange: () => {
       const p = PRESETS[Number(preset.value)];
@@ -51,6 +64,7 @@ export function newDocDialog() {
       { label: 'Cancel' },
       {
         label: 'Create', primary: true, onClick: () => {
+          if (tooBig(w, hh)) return false;
           const fill = bg === 'white' ? '#ffffff' : bg === 'black' ? '#000000' : bg === 'bgcolor' ? app.bg : null;
           createDoc(name.value.trim() || nextUntitled(), Math.round(w), Math.round(hh), fill);
         },
@@ -63,8 +77,8 @@ export function imageSizeDialog() {
   const doc = app.doc; if (!doc) return;
   const W = doc.width, H = doc.height;
   let w = W, hh = H, link = true, resample = doc.resample;
-  const wf = numField('Width', w, (v) => { w = Math.round(v); if (link) { hh = Math.max(1, Math.round((w * H) / W)); hf.set(hh); } pct(); }, { unit: 'px', min: 1, max: 30000 });
-  const hf = numField('Height', hh, (v) => { hh = Math.round(v); if (link) { w = Math.max(1, Math.round((hh * W) / H)); wf.set(w); } pct(); }, { unit: 'px', min: 1, max: 30000 });
+  const wf = numField('Width', w, (v) => { w = Math.round(v); if (link) { hh = Math.max(1, Math.round((w * H) / W)); hf.set(hh); } pct(); }, { unit: 'px', min: 1, max: MAX_SIDE });
+  const hf = numField('Height', hh, (v) => { hh = Math.round(v); if (link) { w = Math.max(1, Math.round((hh * W) / H)); wf.set(w); } pct(); }, { unit: 'px', min: 1, max: MAX_SIDE });
   const pctF = numField('Scale', 100, (v) => { w = Math.max(1, Math.round((W * v) / 100)); hh = Math.max(1, Math.round((H * v) / 100)); wf.set(w); hf.set(hh); }, { unit: '%', min: 1, max: 1000, decimals: 1 });
   const pct = () => pctF.set((w / W) * 100);
   dialog({
@@ -76,7 +90,7 @@ export function imageSizeDialog() {
       resampleField(resample, (v) => { resample = v; }),
       h('p', { class: 'dialog-note' }, 'Lossless: every layer keeps its original pixels, so you can resize down and back up with no quality loss. Pixels are only resampled once, when you export. Nearest neighbour keeps pixel art blocky (best at 200%, 300%, 400%…).'),
     ],
-    buttons: [{ label: 'Cancel' }, { label: 'Resize', primary: true, onClick: () => { if (w !== W || hh !== H || resample !== doc.resample) resizeImage(w, hh, resample); } }],
+    buttons: [{ label: 'Cancel' }, { label: 'Resize', primary: true, onClick: () => { if (tooBig(w, hh)) return false; if (w !== W || hh !== H || resample !== doc.resample) resizeImage(w, hh, resample); } }],
   });
 }
 
@@ -101,12 +115,12 @@ export function canvasSizeDialog() {
     title: 'Canvas size', width: 440,
     body: [
       h('p', { class: 'dialog-msg' }, `Currently ${doc.width} × ${doc.height} px. Changes the canvas around your layers without scaling them.`),
-      h('div', { class: 'row' }, numField('Width', w, (v) => { w = Math.round(v); }, { unit: 'px', min: 1, max: 30000 }), numField('Height', hh, (v) => { hh = Math.round(v); }, { unit: 'px', min: 1, max: 30000 })),
+      h('div', { class: 'row' }, numField('Width', w, (v) => { w = Math.round(v); }, { unit: 'px', min: 1, max: MAX_SIDE }), numField('Height', hh, (v) => { hh = Math.round(v); }, { unit: 'px', min: 1, max: MAX_SIDE })),
       h('div', { class: 'field wide' }, h('span', null, 'Anchor'), grid),
     ],
     buttons: [
       { label: 'Crop to content', onClick: () => { void cropToContent(); } },
-      { label: 'Cancel' }, { label: 'Apply', primary: true, onClick: () => resizeCanvas(w, hh, ax, ay) },
+      { label: 'Cancel' }, { label: 'Apply', primary: true, onClick: () => { if (tooBig(w, hh)) return false; resizeCanvas(w, hh, ax, ay); } },
     ],
   });
 }
@@ -130,7 +144,7 @@ export function exportDialog() {
       q, sc, resampleField(resample, (v) => { resample = v; }), info,
       h('p', { class: 'dialog-note' }, 'Exports are resampled straight from each layer\'s originals for the sharpest result. Save as .pixl to keep layers.'),
     ],
-    buttons: [{ label: 'Cancel' }, { label: 'Export', primary: true, onClick: () => { exportImage(doc, { format, quality, scale, nearest: resample === 'nearest' }).catch((e) => toast(`Export failed: ${e.message}`, 'error')); } }],
+    buttons: [{ label: 'Cancel' }, { label: 'Export', primary: true, onClick: () => { if (tooBig(doc.width * scale, doc.height * scale)) return false; exportImage(doc, { format, quality, scale, nearest: resample === 'nearest' }).catch((e) => toast(`Export failed: ${e.message}`, 'error')); } }],
   });
 }
 

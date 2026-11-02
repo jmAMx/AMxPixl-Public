@@ -52,13 +52,16 @@ const ROTATE_CURSOR = `url("data:image/svg+xml,${encodeURIComponent('<svg xmlns=
 
 function boxPoint(b: Rect, u: number, v: number): Pt { return { x: b.x + u * b.w, y: b.y + v * b.h }; }
 
+/** Redraws the box once a content box is worked out (one function, so waiting callers don't pile up). */
+const boxReady = () => view.requestOverlay();
+
 /** The selected layers' bounding box, or null when nothing placed is selected (or a content box is still loading). */
 function currentFrame(): Frame | null {
   const doc = app.doc;
   if (!doc) return null;
   const layers = doc.selectedPlaced();
   if (!layers.length) return null;
-  const mode = app.opts.move.box, ready = () => view.requestOverlay();
+  const mode = app.opts.move.box, ready = boxReady;
   if (layers.length === 1) {
     const b = layerBox(layers[0], doc.pool, mode, ready);
     return b && { m: layerMatrix(layers[0]), box: b, layers };

@@ -11,7 +11,7 @@ export interface FilterDef {
 }
 
 /** Copy with edge pixels stretched outward, so blurs don't fade to transparent at the borders. */
-function padEdges(src: HTMLCanvasElement, pad: number) {
+export function padEdges(src: HTMLCanvasElement, pad: number) {
   const w = src.width, h = src.height;
   const c = newCanvas(w + pad * 2, h + pad * 2);
   const x = ctx2d(c);
@@ -56,8 +56,10 @@ function motionBlur(src: HTMLCanvasElement, angle: number, distance: number) {
   for (let i = 0; i < passes; i++) {
     const next = newCanvas(cur.width, cur.height);
     const x = ctx2d(next);
-    x.drawImage(cur, (-Math.cos(rad) * step) / 2, (Math.sin(rad) * step) / 2);
+    // Half of each copy, added: an even average that also holds for transparent pixels.
     x.globalAlpha = 0.5;
+    x.globalCompositeOperation = 'lighter';
+    x.drawImage(cur, (-Math.cos(rad) * step) / 2, (Math.sin(rad) * step) / 2);
     x.drawImage(cur, (Math.cos(rad) * step) / 2, (-Math.sin(rad) * step) / 2);
     cur = next;
     step *= 2;

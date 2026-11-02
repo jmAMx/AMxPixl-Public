@@ -70,7 +70,9 @@ export function propertiesPanel() {
     const doc = app.doc!;
     // X, Y, W and H describe the layer's bounding box (the Move tool's Box setting: its visible pixels by default),
     // so they give the element's real size and place on the canvas.
-    const b = () => layerBox(l, doc.pool, app.opts.move.box, () => refresh()) ?? localBounds(l, doc.pool);
+    // One callback for every box lookup (a new one each time would pile up, and multiply, while the box is worked out).
+    const later = () => refresh();
+    const b = () => layerBox(l, doc.pool, app.opts.move.box, later) ?? localBounds(l, doc.pool);
     const corner = () => { const bb = b(); return apply(layerMatrix(l), bb.x, bb.y); };
     const size = () => {
       if (l.type === 'shape' && l.shape.kind !== 'path' && app.opts.move.box !== 'custom') return { w: Math.abs(l.shape.w), h: Math.abs(l.shape.h) };
@@ -124,9 +126,10 @@ export function propertiesPanel() {
    */
   const multiTransformSection = (layers: PlacedLayer[], title: string) => {
     const doc = app.doc!;
+    const later = () => refresh();
     const box = () => {
       let u: Rect | null = null;
-      for (const l of layers) u = union(u, mapRect(layerMatrix(l), layerBox(l, doc.pool, app.opts.move.box, () => refresh()) ?? localBounds(l, doc.pool)));
+      for (const l of layers) u = union(u, mapRect(layerMatrix(l), layerBox(l, doc.pool, app.opts.move.box, later) ?? localBounds(l, doc.pool)));
       return u!;
     };
     const move = (dx: number, dy: number) => {
