@@ -9,6 +9,10 @@ import { ADJ_LABELS, HSL_BANDS, curveTable, histogram, type Histogram } from '..
 import type { Doc } from '../core/document';
 import { canMove, DEFAULT_MOTION, fxDef } from '../core/effects';
 import { colorInput, fxParamControl } from './fxcontrols';
+import { view } from './canvasview';
+
+/** The effect layer whose centre is being placed by clicking the picture (Properties › Place centre), if any. */
+let centreFor: string | null = null;
 import { layerBox } from '../core/bounds';
 import { envelopeLabel } from '../core/envelope';
 import { warpDialog } from './warpdialog';
@@ -473,6 +477,26 @@ export function propertiesPanel() {
     const e = edit(l, def.label);
     const set = (key: string, v: number | string | boolean, final: boolean) => { l.fx = { ...l.fx, v: { ...l.fx.v, [key]: v } }; e.live(); if (final) e.done(); };
     const kids = def.params.map((p) => fxParamControl(p, l.fx.v[p.key] ?? p.value, set, e.done));
+    // A filter with a centre (spin, zoom, twirl, pinch): a button to place it by clicking or dragging on the picture.
+    if (centreFor && centreFor !== l.id) { view.pick = null; centreFor = null; }
+    if (def.params.some((p) => p.key === 'cx')) {
+      const doc = app.doc!;
+      const placing = centreFor === l.id;
+      kids.push(h('div', { class: 'btn-row' }, h('button', {
+        class: 'btn small' + (placing ? ' on' : ''), type: 'button', title: 'Then click or drag on the picture',
+        onclick: () => {
+          if (centreFor === l.id) { view.pick = null; centreFor = null; build(true); return; }
+          centreFor = l.id;
+          view.pick = (pt, fin) => {
+            const c = (v: number, size: number) => Math.round(Math.max(0, Math.min(100, (v / size) * 100)) * 10) / 10;
+            l.fx = { ...l.fx, v: { ...l.fx.v, cx: c(pt.x, doc.width), cy: c(pt.y, doc.height) } };
+            e.live();
+            if (fin) { e.done(); view.pick = null; centreFor = null; build(true); }
+          };
+          build(true);
+        },
+      }, placing ? 'Click the picture…' : 'Place centre on the picture')));
+    }
     const hasDepth = flatLayers(app.doc!.layers).some(isDepth);
     return section(def.label,
       def.depth ? h('div', { class: 'props-note' }, hasDepth

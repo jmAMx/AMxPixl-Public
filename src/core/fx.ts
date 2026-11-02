@@ -92,6 +92,7 @@ class FXEngine {
   private edged = document.createElement('canvas');
   private padded = document.createElement('canvas');
   private auxOut = document.createElement('canvas');
+  private targets: { tex: WebGLTexture; fb: WebGLFramebuffer; w: number; h: number }[] = [];
   maxSize = 4096;
 
   constructor() {
@@ -107,6 +108,7 @@ class FXEngine {
     if (!gl) return;
     this.gl = gl;
     this.progs.clear();
+    this.targets = [];
     const buf = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, buf);
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
@@ -164,12 +166,52 @@ class FXEngine {
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
   }
 
-  private run(prog: Prog, w: number, h: number, env: FxEnv & { doc: [number, number, number, number]; time: number }, seed: number, uni: Record<string, number[]>) {
+  /** Pass `i`'s render target (two, used in turn) at w × h: a texture to draw into and read back in the next pass. */
+  private target(i: number, w: number, h: number) {
+    const gl = this.gl!;
+    let t = this.targets[i];
+    if (!t) {
+      const tex = gl.createTexture()!;
+      gl.bindTexture(gl.TEXTURE_2D, tex);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      t = this.targets[i] = { tex, fb: gl.createFramebuffer()!, w: 0, h: 0 };
+    }
+    if (t.w !== w || t.h !== h) {
+      gl.bindTexture(gl.TEXTURE_2D, t.tex);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, t.fb);
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, t.tex, 0);
+      t.w = w; t.h = h;
+    }
+    return t;
+  }
+
+  /**
+   * Draws the effect into the canvas: in one go, or as a chain of passes (FxDef.passes) where each reads what the
+   * one before drew. Their textures share the uploaded image's orientation, so `src` reads them the same way.
+   */
+  private draw(prog: Prog, w: number, h: number, env: FxEnv & { doc: [number, number, number, number]; time: number }, seed: number, uni: Record<string, number[]>, passes?: Record<string, number[]>[]) {
+    const gl = this.gl!;
+    if (!passes || passes.length < 2) { this.run(prog, w, h, env, seed, { ...uni, ...passes?.[0] }); return; }
+    let read = this.srcTex;
+    passes.forEach((p, i) => {
+      const t = i < passes.length - 1 ? this.target(i % 2, w, h) : null;
+      gl.bindFramebuffer(gl.FRAMEBUFFER, t ? t.fb : null);
+      this.run(prog, w, h, env, seed, { ...uni, ...p }, read);
+      if (t) read = t.tex;
+    });
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  }
+
+  private run(prog: Prog, w: number, h: number, env: FxEnv & { doc: [number, number, number, number]; time: number }, seed: number, uni: Record<string, number[]>, srcTex = this.srcTex) {
     const gl = this.gl!;
     gl.viewport(0, 0, w, h);
     gl.useProgram(prog.p);
     gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, this.srcTex);
+    gl.bindTexture(gl.TEXTURE_2D, srcTex);
     gl.activeTexture(gl.TEXTURE1);
     gl.bindTexture(gl.TEXTURE_2D, this.auxTex);
     gl.activeTexture(gl.TEXTURE2);
@@ -270,14 +312,10 @@ class FXEngine {
     if (depth) this.upload(this.depthTex, depth, 2);
     if (def.aux) {
       const radius = Math.max(0.5, def.aux.radius(fx.v) * scale);
-      if (def.aux.clamp) {
-        this.upload(this.auxTex, this.blurredClamped(src, docRect, radius), 1);
-        this.run(prog, w, h, env, seed, def.uniforms(fx.v) as Record<string, number[]>);
-        return this.canvas;
-      }
       let auxSrc: HTMLCanvasElement = src;
       const thr = def.aux.threshold?.(fx.v);
-      if (thr !== undefined) {
+      if (def.aux.clamp) this.upload(this.auxTex, this.blurredClamped(src, docRect, radius), 1);
+      else if (thr !== undefined) {
         const ex = this.program('__extract', EXTRACT);
         if (!ex) return null;
         this.run(ex, w, h, env, seed, { uThreshold: [thr] });
@@ -288,10 +326,11 @@ class FXEngine {
         sx.drawImage(this.canvas, 0, 0);
         auxSrc = this.stage;
       }
-      this.upload(this.auxTex, this.blurred(auxSrc, radius), 1);
+      if (!def.aux.clamp) this.upload(this.auxTex, this.blurred(auxSrc, radius), 1);
     }
     const uni = def.uniforms(fx.v) as Record<string, number[]>;
-    this.run(prog, w, h, env, seed, uni);
+    const passes = def.passes?.(fx.v, { scale, w: docRect.w, h: docRect.h }) as Record<string, number[]>[] | undefined;
+    this.draw(prog, w, h, env, seed, uni, passes);
     return this.canvas;
   }
 }

@@ -20,7 +20,7 @@ export interface FxEnv {
 }
 
 type V = Record<string, FxValue>;
-type Uniforms = Partial<Record<'uA' | 'uB' | 'uC', [number, number, number, number]> & Record<'uCol1' | 'uCol2', [number, number, number]>>;
+export type Uniforms = Partial<Record<'uA' | 'uB' | 'uC', [number, number, number, number]> & Record<'uCol1' | 'uCol2', [number, number, number]>>;
 
 export interface FxDef {
   kind: string;
@@ -40,6 +40,11 @@ export interface FxDef {
   aux?: { radius: (v: V) => number; threshold?: (v: V) => number; clamp?: boolean };
   /** How far (document pixels) it reads around each pixel, beyond any `aux` blur; Infinity for anywhere. */
   margin?: (v: V) => number;
+  /**
+   * Run as a chain of passes, each reading what the one before drew: one set of extra uniforms per pass (merged over
+   * `uniforms`). Gets the output scale and the canvas's size in output pixels, to pick how many passes are needed.
+   */
+  passes?: (v: V, out: { scale: number; w: number; h: number }) => Uniforms[];
   uniforms: (v: V) => Uniforms;
   /**
    * How far past the canvas edge the effect reads, as a fraction of the canvas size. The image is then rendered with

@@ -48,6 +48,14 @@ class CanvasView {
   private antsOffset = 0;
   private antsTimer = 0;
   private panning: { x: number; y: number; px: number; py: number } | null = null;
+  /**
+   * While set, pressing and dragging on the canvas picks points (in the image) instead of using the tool: a filter's
+   * centre, say. `done` is true on letting go.
+   */
+  private pickFn: ((p: Pt, done: boolean) => void) | null = null;
+  private picking = false;
+  get pick() { return this.pickFn; }
+  set pick(f: ((p: Pt, done: boolean) => void) | null) { this.pickFn = f; this.picking = false; if (this.doc) this.updateCursor(); }
   private down = false;
   private downId = -1;
   private spaceHeld = false;
@@ -856,6 +864,7 @@ class CanvasView {
       this.updateCursor();
       return;
     }
+    if (this.pick && p.button === 0) { this.picking = true; this.pick({ x: p.x, y: p.y }, false); return; }
     if (p.button !== 0 || app.busy) { this.restoreTool(); return; }
     // A link chip beside an artboard's name: switches whether saving saves it to its own file too.
     const chip = this.chipAt(p.sx, p.sy);
@@ -922,6 +931,7 @@ class CanvasView {
       return;
     }
     if (this.guideDrag) { this.moveGuide(p); return; }
+    if (this.picking) { this.pick?.({ x: p.x, y: p.y }, false); return; }
     if (this.down && this.activeTool) {
       const t = this.activeTool;
       const evs = typeof e.getCoalescedEvents === 'function' ? e.getCoalescedEvents() : [];
@@ -938,6 +948,7 @@ class CanvasView {
     if (this.down && e.pointerId !== this.downId) return;
     if (this.panning) { this.panning = null; this.updateCursor(); return; }
     if (this.guideDrag) { this.endGuide(this.info(e)); this.updateCursor(); return; }
+    if (this.picking) { this.picking = false; const p = this.info(e); this.pick?.({ x: p.x, y: p.y }, true); return; }
     if (!this.down) { this.restoreTool(); return; }
     this.down = false;
     const t = this.activeTool;
@@ -972,7 +983,8 @@ class CanvasView {
     let c = 'default';
     const hv = this.hover;
     const g = this.guideDrag ? this.guideDrag.axis : hv ? (this.overRuler(hv.sx, hv.sy) ?? (this.guideAt(hv.sx, hv.sy) >= 0 ? this.doc!.guides[this.guideAt(hv.sx, hv.sy)].axis : null)) : null;
-    if (this.panning) c = 'grabbing';
+    if (this.pick && !this.spaceHeld) c = 'crosshair';
+    else if (this.panning) c = 'grabbing';
     else if (g) c = g === 'x' ? 'col-resize' : 'row-resize';
     else if (this.spaceHeld || app.tool?.id === 'hand') c = 'grab';
     else if (hv && (this.chipAt(hv.sx, hv.sy) || (app.tool?.id !== 'artboard' && this.boardAt(hv.sx, hv.sy)?.label))) c = 'pointer';

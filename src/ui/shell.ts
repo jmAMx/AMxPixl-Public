@@ -5,7 +5,7 @@ import { clearRecent, recentList } from '../core/recent';
 import { glfx } from '../core/glfx';
 import { TAB_DRAG, view } from './canvasview';
 import { colorPanel } from './colorpanel';
-import { aboutDialog, animExportDialog, canvasSizeDialog, colorRangeDialog, exportDialog, filterDialog, imageSizeDialog, modifySelectionDialog, newArtboardDialog, newDocDialog, newGuideDialog, renameArtboardDialog, shortcutsDialog, updateDialog } from './dialogs';
+import { aboutDialog, animExportDialog, canvasSizeDialog, colorRangeDialog, exportDialog, filterDialog, imageSizeDialog, lastFilterLabel, repeatFilter, modifySelectionDialog, newArtboardDialog, newDocDialog, newGuideDialog, renameArtboardDialog, shortcutsDialog, updateDialog } from './dialogs';
 import { h, isTyping } from './dom';
 import { historyPanel } from './historypanel';
 import { adjustmentMenuItems, artboardMenuItems, effectMenuItems, layersPanel, looksMenuItems, maskMenuItems } from './layerspanel';
@@ -232,6 +232,9 @@ const MENUS: MenuDef[] = [
   },
   {
     title: 'Filter', items: [
+      { label: () => (lastFilterLabel() ? `Repeat ${lastFilterLabel()}` : 'Repeat Last Filter'), accel: 'Ctrl+F', run: () => repeatFilter(), enabled: () => !!lastFilterLabel() && !!app.doc?.active },
+      { label: () => (lastFilterLabel() ? `Adjust and Repeat ${lastFilterLabel()}…` : 'Adjust and Repeat Last Filter…'), accel: 'Ctrl+Alt+F', run: () => repeatFilter(true), enabled: () => !!lastFilterLabel() && !!app.doc?.active },
+      'sep',
       { label: 'Looks', sub: looksMenuItems },
       { label: 'Effect Layer (editable)', sub: effectMenuItems },
       { label: 'Adjustment Layer (editable)', sub: adjustmentMenuItems },

@@ -1,4 +1,4 @@
-import type { FxDef, FxValue } from './effects';
+import type { FxDef, FxValue, Uniforms } from './effects';
 
 /**
  * The classic filters (blur, sharpen, noise, distort, stylize, render) as effects: each works as an editable effect
@@ -12,6 +12,36 @@ const hex3 = (h: FxValue): [number, number, number] => {
   const x = parseInt(String(h).slice(1), 16) || 0;
   return [((x >> 16) & 255) / 255, ((x >> 8) & 255) / 255, (x & 255) / 255];
 };
+/**
+ * Blurs along a line, an arc or towards a centre, as passes of TAPS samples each (uC.x = their spacing): each pass's
+ * samples are TAPS times closer together than the last's, so together they make TAPS^n evenly spaced samples (a
+ * perfectly even spread) for TAPS × n reads a pixel. `total` is the whole spread (in whatever the shader steps by)
+ * and `px` about how many output pixels it covers at most, which picks n (up to 3: 512 samples).
+ */
+const TAPS = 8;
+function spread(total: number, px: number): Uniforms[] {
+  const passes = Math.max(1, Math.min(3, Math.ceil(Math.log(Math.max(px, 1)) / Math.log(TAPS))));
+  return Array.from({ length: passes }, (_, j) => ({ uC: [total / TAPS ** (j + 1), 0, 0, 0] }));
+}
+/** The farthest a canvas corner is from a centre at (cx, cy) %, in output pixels. */
+const reachFrom = (v: Record<string, FxValue>, w: number, h: number) =>
+  Math.hypot(Math.max(n(v.cx), 100 - n(v.cx)) / 100 * w, Math.max(n(v.cy), 100 - n(v.cy)) / 100 * h);
+/** Samples for the spiral of a soft blur of radius R output pixels: fewer for a small one. */
+const SPIRAL = `
+float spiralCount(float R, float most) { return clamp(floor(R * R * 0.8), 12.0, most); }`;
+
+/** The 25-sample median network (Paeth's), checked for every input: each pair puts the smaller value first. */
+const MEDIAN25 = [
+  [0, 1], [3, 4], [2, 4], [2, 3], [6, 7], [5, 7], [5, 6], [9, 10], [8, 10], [8, 9], [12, 13], [11, 13], [11, 12], [15, 16],
+  [14, 16], [14, 15], [18, 19], [17, 19], [17, 18], [21, 22], [20, 22], [20, 21], [23, 24], [2, 5], [3, 6], [0, 6], [0, 3],
+  [4, 7], [1, 7], [1, 4], [11, 14], [8, 14], [8, 11], [12, 15], [9, 15], [9, 12], [13, 16], [10, 16], [10, 13], [20, 23],
+  [17, 23], [17, 20], [21, 24], [18, 24], [18, 21], [19, 22], [8, 17], [9, 18], [0, 18], [0, 9], [10, 19], [1, 19], [1, 10],
+  [11, 20], [2, 20], [2, 11], [12, 21], [3, 21], [3, 12], [13, 22], [4, 22], [4, 13], [14, 23], [5, 23], [5, 14], [15, 24],
+  [6, 24], [6, 15], [7, 16], [7, 19], [13, 21], [15, 23], [7, 13], [7, 15], [1, 9], [3, 11], [5, 17], [11, 17], [9, 17],
+  [4, 10], [6, 12], [7, 14], [4, 6], [4, 7], [12, 14], [10, 14], [6, 7], [10, 12], [6, 10], [6, 17], [12, 17], [7, 17],
+  [7, 10], [12, 18], [7, 12], [10, 18], [12, 20], [10, 20], [10, 12],
+].map(([a, b]) => `s2(m[${a}], m[${b}])`).join(' ');
+
 const centre = [
   { key: 'cx', label: 'Centre across', type: 'range', min: 0, max: 100, value: 50, unit: '%' },
   { key: 'cy', label: 'Centre down', type: 'range', min: 0, max: 100, value: 50, unit: '%' },
@@ -34,52 +64,46 @@ vec4 fx(vec2 p, vec2 d) { return aux(p); }`,
       { key: 'distance', label: 'Distance', type: 'range', min: 1, max: 1000, value: 30, unit: 'px' },
     ],
     margin: (v) => n(v.distance) / 2,
-    uniforms: (v) => ({ uA: [Math.cos(n(v.angle) * RAD), Math.sin(n(v.angle) * RAD), n(v.distance), 0] }),
+    uniforms: (v) => ({ uA: [Math.cos(n(v.angle) * RAD), Math.sin(n(v.angle) * RAD), 0, 0] }),
+    passes: (v, o) => spread(n(v.distance) * o.scale, n(v.distance) * o.scale),
     glsl: `
 vec4 fx(vec2 p, vec2 d) {
-  vec2 len = vec2(uA.x, -uA.y) * uA.z * uScale;
-  float k = clamp(ceil(length(len)), 1.0, 160.0);
+  vec2 st = vec2(uA.x, -uA.y) * uC.x;
   vec4 acc = vec4(0.0);
-  for (int i = 0; i < 160; i++) {
-    if (float(i) >= k) break;
-    acc += pm(srcC(p + len * ((float(i) + 0.5) / k - 0.5)));
-  }
-  return unpm(acc / k);
+  for (int i = 0; i < 8; i++) acc += pm(srcC(p + st * (float(i) - 3.5)));
+  return unpm(acc / 8.0);
 }`,
   },
   {
     kind: 'spinblur', label: 'Radial Blur (Spin)', group: 'Blur',
     params: [{ key: 'amount', label: 'Turn', type: 'range', min: 0, max: 90, step: 0.5, value: 10, unit: '°' }, ...centre],
     margin: () => Infinity,
-    uniforms: (v) => ({ uA: [n(v.amount) * RAD, n(v.cx) / 100, n(v.cy) / 100, 0] }),
+    uniforms: (v) => ({ uA: [0, n(v.cx) / 100, n(v.cy) / 100, 0] }),
+    passes: (v, o) => spread(n(v.amount) * RAD, n(v.amount) * RAD * reachFrom(v, o.w, o.h)),
     glsl: `
 vec4 fx(vec2 p, vec2 d) {
   vec2 c = fromDoc(docSize() * uA.yz), v = p - c;
-  float k = clamp(ceil(length(v) * uA.x), 1.0, 160.0);
   vec4 acc = vec4(0.0);
-  for (int i = 0; i < 160; i++) {
-    if (float(i) >= k) break;
-    float a = uA.x * ((float(i) + 0.5) / k - 0.5), s = sin(a), co = cos(a);
+  for (int i = 0; i < 8; i++) {
+    float a = uC.x * (float(i) - 3.5), s = sin(a), co = cos(a);
     acc += pm(srcC(c + vec2(v.x * co - v.y * s, v.x * s + v.y * co)));
   }
-  return unpm(acc / k);
+  return unpm(acc / 8.0);
 }`,
   },
   {
     kind: 'zoomblur', label: 'Zoom Blur', group: 'Blur',
     params: [{ key: 'amount', label: 'Amount', type: 'range', min: 0, max: 100, value: 20, unit: '%' }, ...centre],
     margin: () => Infinity,
-    uniforms: (v) => ({ uA: [n(v.amount) / 100, n(v.cx) / 100, n(v.cy) / 100, 0] }),
+    uniforms: (v) => ({ uA: [0, n(v.cx) / 100, n(v.cy) / 100, 0] }),
+    // Evenly spread in how much it's scaled (log scale), so the passes multiply up exactly; 100% stops at a twentieth.
+    passes: (v, o) => spread(-Math.log(1 - 0.95 * n(v.amount) / 100), n(v.amount) / 100 * reachFrom(v, o.w, o.h)),
     glsl: `
 vec4 fx(vec2 p, vec2 d) {
   vec2 c = fromDoc(docSize() * uA.yz), v = p - c;
-  float k = clamp(ceil(length(v) * uA.x), 1.0, 160.0);
   vec4 acc = vec4(0.0);
-  for (int i = 0; i < 160; i++) {
-    if (float(i) >= k) break;
-    acc += pm(srcC(c + v * (1.0 - uA.x * (float(i) + 0.5) / k)));
-  }
-  return unpm(acc / k);
+  for (int i = 0; i < 8; i++) acc += pm(srcC(c + v * exp(-uC.x * float(i))));
+  return unpm(acc / 8.0);
 }`,
   },
   {
@@ -90,16 +114,17 @@ vec4 fx(vec2 p, vec2 d) {
     ],
     margin: (v) => n(v.radius),
     uniforms: (v) => ({ uA: [n(v.radius), n(v.threshold) / 255, 0, 0] }),
-    glsl: `
+    glsl: SPIRAL + `
 vec4 fx(vec2 p, vec2 d) {
   vec4 c = srcC(p);
   float R = uA.x * uScale;
   if (R < 0.75) return c;
   // Averages the pixels around that are close in colour (within the threshold), so edges stay sharp.
   vec4 acc = pm(c);
-  float ws = 1.0;
+  float ws = 1.0, N = spiralCount(R, 64.0);
   for (int i = 0; i < 64; i++) {
-    float f = (float(i) + 0.5) / 64.0, a = float(i) * 2.39996;
+    if (float(i) >= N) break;
+    float f = (float(i) + 0.5) / N, a = float(i) * 2.39996;
     vec4 s = srcC(p + vec2(cos(a), sin(a)) * R * sqrt(f));
     vec3 df = abs(s.rgb - c.rgb);
     float w = max(0.0, 1.0 - max(df.r, max(df.g, df.b)) / (2.5 * uA.y));
@@ -116,13 +141,15 @@ vec4 fx(vec2 p, vec2 d) {
       { key: 'amount', label: 'Amount', type: 'range', min: 1, max: 500, value: 100, unit: '%' },
       { key: 'radius', label: 'Radius', type: 'range', min: 0.1, max: 50, step: 0.1, value: 1.5, unit: 'px' },
       { key: 'threshold', label: 'Threshold', type: 'range', min: 0, max: 255, value: 0, unit: 'lv' },
+      { key: 'lum', label: 'Brightness only (no colour fringes)', type: 'bool', value: true },
     ],
     aux: { radius: (v) => n(v.radius), clamp: true },
-    uniforms: (v) => ({ uA: [n(v.amount) / 100, n(v.threshold) / 255, 0, 0] }),
+    uniforms: (v) => ({ uA: [n(v.amount) / 100, n(v.threshold) / 255, v.lum === false ? 0 : 1, 0] }),
     glsl: `
 vec4 fx(vec2 p, vec2 d) {
   vec4 c = src(p);
   vec3 df = c.rgb - aux(p).rgb;
+  if (uA.z > 0.5) df = vec3(lum(df));
   return vec4(c.rgb + df * uA.x * step(uA.y * 0.5, abs(df)), c.a);
 }`,
   },
@@ -169,16 +196,17 @@ vec4 fx(vec2 p, vec2 d) {
       const s = n(v.strength) / 100;
       return { uA: [1 + 5 * s, 0.015 + 0.18 * s * (1 - 0.85 * n(v.detail) / 100), 0, 0] };
     },
-    glsl: `
+    glsl: SPIRAL + `
 vec4 fx(vec2 p, vec2 d) {
   vec4 c = srcC(p);
   float R = uA.x * uScale;
   if (R < 0.75) return c;
   // A bilateral blur: near pixels count most, and only those of a similar colour.
   vec4 acc = pm(c);
-  float ws = 1.0, k = 1.0 / (2.0 * uA.y * uA.y);
+  float ws = 1.0, k = 1.0 / (2.0 * uA.y * uA.y), N = spiralCount(R, 48.0);
   for (int i = 0; i < 48; i++) {
-    float f = (float(i) + 0.5) / 48.0, a = float(i) * 2.39996;
+    if (float(i) >= N) break;
+    float f = (float(i) + 0.5) / N, a = float(i) * 2.39996;
     vec4 s = srcC(p + vec2(cos(a), sin(a)) * R * sqrt(f));
     vec3 df = s.rgb - c.rgb;
     float w = exp(-dot(df, df) / 3.0 * k - 2.0 * f);
@@ -194,8 +222,9 @@ vec4 fx(vec2 p, vec2 d) {
     margin: (v) => n(v.radius),
     uniforms: (v) => ({ uA: [n(v.radius), 0, 0, 0] }),
     glsl: `
-// The middle value (per channel) of 3 × 3 samples across the radius, by a fixed network of swaps (Paeth's, as
-// McGuire's shader does it): specks and scratches smaller than the radius go, edges stay.
+// The middle value (per channel) of the samples across the radius, by fixed networks of swaps (Paeth's, as McGuire's
+// shader does them): 3 × 3 for a small radius, 5 × 5 for a bigger one. Specks and scratches smaller than the radius
+// go, edges stay.
 #define s2(a, b) t = min(a, b); b = max(a, b); a = t;
 #define mn3(a, b, c) s2(a, b); s2(a, c);
 #define mx3(a, b, c) s2(b, c); s2(a, c);
@@ -206,10 +235,17 @@ vec4 fx(vec2 p, vec2 d) {
 vec4 fx(vec2 p, vec2 d) {
   float r = uA.x * uScale;
   if (r < 0.5) return src(p);
+  vec4 t;
+  if (r >= 1.5) {
+    // (Filled at fixed places, not in a loop, so the graphics driver can keep them all in registers.)
+    vec4 m[25];
+    ${Array.from({ length: 25 }, (_, k) => `m[${k}] = srcC(p + vec2(${(k % 5) - 2}.0, ${Math.floor(k / 5) - 2}.0) * r * 0.5);`).join(' ')}
+    ${MEDIAN25}
+    return m[12];
+  }
   vec4 v0 = srcC(p + vec2(-r, -r)), v1 = srcC(p + vec2(0.0, -r)), v2 = srcC(p + vec2(r, -r));
   vec4 v3 = srcC(p + vec2(-r, 0.0)), v4 = srcC(p), v5 = srcC(p + vec2(r, 0.0));
   vec4 v6 = srcC(p + vec2(-r, r)), v7 = srcC(p + vec2(0.0, r)), v8 = srcC(p + vec2(r, r));
-  vec4 t;
   mnmx6(v0, v1, v2, v3, v4, v5);
   mnmx5(v1, v2, v3, v4, v6);
   mnmx4(v2, v3, v4, v7);

@@ -14,7 +14,8 @@ import { fxEngine } from '../core/fx';
 import { inTiles } from '../core/gpu';
 import { cropCanvas, newCanvas } from '../core/layers';
 import { effectReach } from '../core/render';
-import { isFilter, type FxParams } from '../core/types';
+import { isFilter, type FxParams, type PixelTarget } from '../core/types';
+import { apply, invert, xformMatrix } from '../core/math';
 import { fxParamControl } from './fxcontrols';
 import { h } from './dom';
 import { paintableTarget } from '../tools/paint';
@@ -224,17 +225,53 @@ export function exportDialog(all = false) {
 }
 
 /** `img` with the effect applied at full size, in pieces if it's bigger than the graphics card takes; null if it can't. */
-function applyFilter(img: HTMLCanvasElement, fx: FxParams): HTMLCanvasElement | null {
+function applyFilter(img: HTMLCanvasElement, fx: FxParams, scale: number): HTMLCanvasElement | null {
   const w = img.width, h = img.height;
   const out = newCanvas(w, h);
   if (w <= fxEngine.maxSize && h <= fxEngine.maxSize) {
-    const r = fxEngine.apply(img, fx, 1, { x: 0, y: 0, w, h });
+    const r = fxEngine.apply(img, fx, scale, { x: 0, y: 0, w, h });
     if (!r) return null;
     ctx2d(out).drawImage(r, 0, 0);
     return out;
   }
-  return inTiles(w, h, fxEngine.maxSize, effectReach(fx) + 2, (r) => fxEngine.apply(cropCanvas(img, r), fx, 1, { x: -r.x, y: -r.y, w, h }), out) ? out : null;
+  return inTiles(w, h, fxEngine.maxSize, effectReach(fx) * scale + 2, (r) => fxEngine.apply(cropCanvas(img, r), fx, scale, { x: -r.x, y: -r.y, w, h }), out) ? out : null;
 }
+
+/** Each filter's settings as last used (for the rest of the session), and which filter was used last. */
+const lastSettings = new Map<string, FxParams>();
+let lastFilter: string | null = null;
+const settingsFor = (kind: string): FxParams => {
+  const s = lastSettings.get(kind);
+  return s ? { ...s, v: { ...s.v } } : defaultFx(kind);
+};
+const remember = (fx: FxParams) => { lastSettings.set(fx.kind, { ...fx, v: { ...fx.v } }); lastFilter = fx.kind; };
+
+/** The filter used last, for Filter › Repeat (null if none yet). */
+export const lastFilterLabel = () => (lastFilter ? fxDef(lastFilter)?.label ?? null : null);
+
+/**
+ * Filter › Repeat: the last filter with its last settings, applied straight away (or, with `ask`, its dialog opened
+ * with them). A layer without pixels gets it as an editable effect layer, as in the dialog.
+ */
+export function repeatFilter(ask = false) {
+  if (!lastFilter) return;
+  if (ask) { filterDialog(lastFilter); return; }
+  const doc = app.doc; const def = fxDef(lastFilter); if (!doc || !def) return;
+  const fx = settingsFor(lastFilter);
+  const a = doc.active;
+  if (a && !isFilter(a) && !doc.paintTarget()) { newEffectOn(fx, a.id); return; }
+  const pt = paintableTarget(doc); if (!pt) return;
+  const src = doc.canvasOf(pt.target), before = cloneCanvas(src);
+  const r = applyFilter(before, fx, pixelsPerDocPixel(pt.target));
+  if (!r) { toast(`Couldn't run ${def.label} on the graphics card.`, 'error'); return; }
+  const x = ctx2d(src);
+  x.save(); x.globalCompositeOperation = 'copy'; x.drawImage(maskedMerge(before, r, doc.maskForLayer(pt.target)), 0, 0); x.restore();
+  doc.markPixels(pt.target.key);
+  doc.commit(def.label, [{ key: pt.target.key, rect: { x: 0, y: 0, w: src.width, h: src.height }, before, after: null }]);
+}
+
+/** A layer's (or mask's) own pixels per canvas pixel: filters measure in canvas pixels, so a scaled layer gets the same look. */
+const pixelsPerDocPixel = (t: PixelTarget) => 1 / (Math.sqrt(Math.abs(t.t.sx * t.t.sy)) || 1);
 
 /**
  * A filter (Filter menu) applied to the selected layer's pixels, inside the selection if there is one, with a live
@@ -245,7 +282,9 @@ export function filterDialog(kind: string) {
   const doc = app.doc; const def = fxDef(kind); if (!doc || !def) return;
   const a = doc.active;
   if (a && !isFilter(a) && !doc.paintTarget()) {
-    newEffectOn(defaultFx(kind), a.id);
+    const fx = settingsFor(kind);
+    remember(fx);
+    newEffectOn(fx, a.id);
     toast(`${def.label} added as an editable effect layer on "${a.name}" (its settings are in Properties).`);
     return;
   }
@@ -256,7 +295,8 @@ export function filterDialog(kind: string) {
   const key = layer.key;
   const backup = cloneCanvas(src);
   const mask = doc.maskForLayer(layer);
-  const fx = defaultFx(kind);
+  const scale = pixelsPerDocPixel(layer);
+  const fx = settingsFor(kind);
   let preview = true;
   let pending = 0;
   const show = (c: HTMLCanvasElement) => {
@@ -267,7 +307,7 @@ export function filterDialog(kind: string) {
     x.restore();
     doc.markPixels(key);
   };
-  const run = () => { const r = applyFilter(backup, fx); return r && maskedMerge(backup, r, mask); };
+  const run = () => { const r = applyFilter(backup, fx, scale); return r && maskedMerge(backup, r, mask); };
   let failed = false;
   const schedule = () => {
     cancelAnimationFrame(pending);
@@ -278,17 +318,34 @@ export function filterDialog(kind: string) {
       failed = true;
     });
   };
-  app.busy = true;
-  schedule();
-  const done = () => { app.busy = false; cancelAnimationFrame(pending); };
+  // Clicking (or dragging on) the picture places the centre of a filter that has one.
+  const hasCentre = def.params.some((p) => p.key === 'cx') && def.params.some((p) => p.key === 'cy');
+  const toLayer = invert(xformMatrix(layer.t));
+  const controls = h('div', { class: 'filter-controls' });
   const set = (k: string, v: FxValue) => { fx.v = { ...fx.v, [k]: v }; schedule(); };
+  const build = () => controls.replaceChildren(...def.params.map((p) => fxParamControl(p, fx.v[p.key] ?? p.value, set, () => {})));
+  build();
+  app.busy = true;
+  if (hasCentre) {
+    view.pick = (pt) => {
+      const q = apply(toLayer, pt.x, pt.y);
+      const c = (v: number, size: number) => Math.round(Math.max(0, Math.min(100, (v / size) * 100)) * 10) / 10;
+      fx.v = { ...fx.v, cx: c(q.x, src.width), cy: c(q.y, src.height) };
+      build();
+      schedule();
+    };
+  }
+  schedule();
+  const done = () => { app.busy = false; cancelAnimationFrame(pending); if (hasCentre) view.pick = null; };
   dialog({
     title: def.label, width: 380, modeless: true,
     body: [
-      ...def.params.map((p) => fxParamControl(p, fx.v[p.key] ?? p.value, set, () => {})),
+      controls,
       h('div', { class: 'row' },
         checkbox('Preview', true, (v) => { preview = v; schedule(); }),
-        def.seeded ? h('button', { class: 'btn small', type: 'button', title: 'Re-roll the random pattern', onclick: () => { fx.seed = Math.floor(Math.random() * 1000); schedule(); } }, icon('dice'), 'New variation') : null),
+        def.seeded ? h('button', { class: 'btn small', type: 'button', title: 'Re-roll the random pattern', onclick: () => { fx.seed = Math.floor(Math.random() * 1000); schedule(); } }, icon('dice'), 'New variation') : null,
+        h('button', { class: 'btn small', type: 'button', title: 'Back to the starting settings', onclick: () => { fx.v = defaultFx(kind).v; build(); schedule(); } }, 'Reset')),
+      hasCentre ? h('p', { class: 'dialog-note' }, 'Click or drag on the picture to place the centre.') : null,
       mask ? h('p', { class: 'dialog-note' }, pt.isMask ? 'Applies to the mask, inside the selection only.' : 'Applies inside the selection only.')
         : pt.isMask ? h('p', { class: 'dialog-note' }, 'Applies to the mask.') : null,
       onLayer ? h('p', { class: 'dialog-note' }, 'Keep editable adds it as an effect layer on just this layer instead, to change or remove later.') : null,
@@ -296,12 +353,13 @@ export function filterDialog(kind: string) {
     onCancel: () => { done(); show(backup); },
     buttons: [
       { label: 'Cancel', onClick: () => { done(); show(backup); } },
-      ...(onLayer ? [{ label: 'Keep editable', onClick: () => { done(); show(backup); newEffectOn(fx, onLayer.id); } }] : []),
+      ...(onLayer ? [{ label: 'Keep editable', onClick: () => { done(); show(backup); remember(fx); newEffectOn(fx, onLayer.id); } }] : []),
       {
         label: 'Apply', primary: true, onClick: () => {
           const r = run();
           if (!r) { toast(`Couldn't run ${def.label} on the graphics card.`, 'error'); return false; }
           done();
+          remember(fx);
           show(r);
           doc.commit(def.label, [{ key, rect: { x: 0, y: 0, w: src.width, h: src.height }, before: backup, after: null }]);
           return undefined;
