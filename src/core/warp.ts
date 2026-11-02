@@ -37,6 +37,14 @@ function curve(xs: number[], s: number) {
 /** Where the point (u, v) of the original layer (0..1 each way) ends up, in the layer's own pixels. */
 export function warpPoint(w: Warp, u: number, v: number): Pt {
   if (w.kind === 'perspective') return homography(w.pts)(u, v);
+  if (w.kind === 'liquify') {
+    // Straight between the grid's points (it's fine enough not to need curves).
+    const n = w.n, x = Math.min(Math.max(u, 0), 1) * (n - 1), y = Math.min(Math.max(v, 0), 1) * (n - 1);
+    const j = Math.min(n - 2, Math.floor(x)), i = Math.min(n - 2, Math.floor(y)), fx = x - j, fy = y - i;
+    const at = (r: number, c: number, k: number) => w.pts[(r * n + c) * 2 + k];
+    const lerp = (k: number) => (at(i, j, k) * (1 - fx) + at(i, j + 1, k) * fx) * (1 - fy) + (at(i + 1, j, k) * (1 - fx) + at(i + 1, j + 1, k) * fx) * fy;
+    return { x: lerp(0), y: lerp(1) };
+  }
   const n = w.n;
   const colX: number[] = [], colY: number[] = [];
   for (let i = 0; i < n; i++) {
@@ -66,7 +74,8 @@ export function initWarp(kind: Warp['kind'], box: Rect, prev?: Warp | null): War
     const c = [at(0, 0), at(1, 0), at(1, 1), at(0, 1)];
     return { kind, n: 2, pts: c.flatMap((p) => [p.x, p.y]) };
   }
-  const n = 4;
+  // Liquify: a point about every 12 pixels of the layer, 17 to 129 a side.
+  const n = kind === 'liquify' ? Math.max(17, Math.min(129, Math.round(Math.max(box.w, box.h) / 12) + 1)) : 4;
   const pts: number[] = [];
   for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) { const p = at(j / (n - 1), i / (n - 1)); pts.push(p.x, p.y); }
   return { kind, n, pts };
@@ -133,7 +142,7 @@ class WarpGL {
    * and blend mode. `img` may be a reduced preview: scaled up by `f` it covers the layer's `fullW` x `fullH` pixels.
    */
   draw(ctx: CanvasRenderingContext2D, img: HTMLCanvasElement, f: number, fullW: number, fullH: number, w: Warp, m: Mat) {
-    this.drawMapped(ctx, img, f, fullW, fullH, (u, v) => warpPoint(w, u, v), m, w.kind === 'perspective' ? 20 : 28);
+    this.drawMapped(ctx, img, f, fullW, fullH, (u, v) => warpPoint(w, u, v), m, w.kind === 'perspective' ? 20 : w.kind === 'liquify' ? w.n - 1 : 28);
   }
 
   /**

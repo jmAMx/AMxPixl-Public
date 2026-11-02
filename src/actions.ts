@@ -2046,6 +2046,8 @@ export function ensureWarp(kind: Warp['kind']): RasterLayer | null {
   if (!doc || !l) return null;
   if (l.type !== 'raster') { toast(l.type === 'text' || l.type === 'shape' ? 'Rasterize this layer to warp it.' : 'Select an image layer to warp.'); return null; }
   if (l.model) { toast('3D layers turn with Rotate 3D instead. Rasterize it first to warp it.'); return null; }
+  // A liquify's fine detail would be lost in a coarser warp, so it's kept until applied or removed.
+  if (l.warp?.kind === 'liquify' && kind !== 'liquify') { toast('This layer is liquified. Apply the liquify (Layer › Transform › Apply Warp) or remove it first to warp it another way.'); return null; }
   if (l.warp?.kind !== kind) { l.warp = initWarp(kind, rasterBox(doc, l), l.warp); doc.touch('meta'); }
   return l;
 }

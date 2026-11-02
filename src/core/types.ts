@@ -113,9 +113,10 @@ export interface BlendIf { on: boolean; self: [number, number, number, number]; 
 
 /**
  * Lossless warp of a raster layer, as control points in the layer's own pixel space. Perspective: 4 corners
- * (TL, TR, BR, BL). Mesh: an n x n grid, row by row.
+ * (TL, TR, BR, BL). Mesh: an n x n grid, row by row, with smooth curves between. Liquify: a fine n x n grid (a point
+ * every dozen or so pixels) pushed around by the Liquify tool, straight lines between.
  */
-export interface Warp { kind: 'perspective' | 'mesh'; n: number; pts: number[] }
+export interface Warp { kind: 'perspective' | 'mesh' | 'liquify'; n: number; pts: number[] }
 
 export interface Guide { axis: 'x' | 'y'; pos: number }
 

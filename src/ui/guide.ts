@@ -24,6 +24,7 @@ const TOPICS: [string, string[]][] = [
   ['Selections and painting', [
     'Select with the **marquee**, **lasso** or **magic wand**, by **Colour Range**, or Ctrl+click a layer\'s thumbnail to select its shape. Shift adds, Alt subtracts. **Quick Mask** (Q) lets you paint a selection.',
     'The **Brush**, **Eraser**, **Clone Stamp** and **Healing Brush** paint on the selected layer; [ and ] change the size, and a pen tablet\'s pressure works (Edit › Pen Tablet). Alt+click picks a colour.',
+    '**Liquify** (with Blur, Sharpen and Smudge) pushes the picture around with a brush, or pinches, bloats, twirls, smooths or restores it. Like every warp it\'s lossless: the layer\'s pixels only change when you apply it (Properties › Apply, or Layer › Transform › Apply Warp).',
   ]],
   ['Artboards', [
     'One file can hold several **artboards**, each a canvas of its own size (File › New › Add artboard, or Image › Artboards). Use the **Artboard tool** (V) to move them, resize them by their edges, or draw new ones; they snap to each other.',

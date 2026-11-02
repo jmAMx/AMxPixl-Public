@@ -34,6 +34,9 @@ Artboards (several canvases, each its own size, in one file), filters that stay 
 - **Export to TIFF**: 8 bits a channel with transparency, compressed losslessly.
 - **Export to BMP and ICO**: BMP keeps transparency. ICO makes a Windows icon holding every common size from 16 to 256 pixels, with the picture fitted and centred in each; Nearest neighbour keeps pixel-art icons crisp.
 - **File › Quick Export** (Ctrl+Alt+E) exports again with the last export's format and settings, asking only where to save.
+- **Liquify tool** (R, with Blur, Sharpen and Smudge): push the picture around with a brush, or pinch, bloat, twirl, smooth or restore it.
+  - Hold still to keep pinching, bloating or twirling; Alt reverses them. Each stroke is one undo step.
+  - It's lossless like every warp: the layer keeps its pixels until you apply it. Restore all takes it back, and Pin edges keeps the layer's edges in place.
 - **Start from** on the start screen: a new image in one click.
   - Full HD, Square post, Story, Thumbnail, a see-through Logo, and A4 print.
   - A **Social set** of three artboards: square, portrait and story.

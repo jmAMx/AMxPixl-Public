@@ -111,8 +111,11 @@ export function propertiesPanel() {
       const pct = Math.round(Math.abs(l.t.sx) * 100);
       note = h('div', null,
         h('p', { class: 'props-note' }, `Original pixels: ${c.width} × ${c.height}${pct !== 100 ? ` · shown at ${pct}%` : ''}. Scaling never touches the original.`),
-        l.warp ? h('div', { class: 'btn-row' }, h('span', { class: 'dim' }, `${l.warp.kind === 'mesh' ? 'Warped' : 'Perspective'} (lossless)`),
-          h('button', { class: 'btn small', type: 'button', onclick: () => { app.setTool('move'); app.opts.move.mode = l.warp!.kind === 'mesh' ? 'warp' : 'perspective'; app.emit('tool'); } }, 'Edit'),
+        l.warp ? h('div', { class: 'btn-row' }, h('span', { class: 'dim' }, `${l.warp.kind === 'mesh' ? 'Warped' : l.warp.kind === 'liquify' ? 'Liquified' : 'Perspective'} (lossless)`),
+          h('button', { class: 'btn small', type: 'button', onclick: () => {
+            if (l.warp!.kind === 'liquify') { app.setTool('liquify'); return; }
+            app.setTool('move'); app.opts.move.mode = l.warp!.kind === 'mesh' ? 'warp' : 'perspective'; app.emit('tool');
+          } }, 'Edit'),
           h('button', { class: 'btn small', type: 'button', onclick: applyWarp }, 'Apply'),
           h('button', { class: 'btn small', type: 'button', onclick: removeWarp }, 'Remove')) : null);
     }
