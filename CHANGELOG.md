@@ -34,6 +34,10 @@ Artboards (several canvases, each its own size, in one file), filters that stay 
 - **Export to TIFF**: 8 bits a channel with transparency, compressed losslessly.
 - **Export to BMP and ICO**: BMP keeps transparency. ICO makes a Windows icon holding every common size from 16 to 256 pixels, with the picture fitted and centred in each; Nearest neighbour keeps pixel-art icons crisp.
 - **File › Quick Export** (Ctrl+Alt+E) exports again with the last export's format and settings, asking only where to save.
+- **Preferences** (Edit › Preferences, Ctrl+K), in two tabs:
+  - **General**: theme, glow, tool names, where the tool options go, how often to keep a crash-recovery copy of unsaved work (every 1 to 10 minutes, or never), and buttons that reset the panel sizes and the tool order.
+  - **Shortcuts**: change the shortcut of any menu command or tool. Click its keys and press the new ones, Backspace for none. Taking a shortcut another command has asks first. Each change can be put back, or all of them at once, and Help › Keyboard Shortcuts shows them.
+- Filters remember their settings between sessions too, and Filter › Repeat works after a restart.
 - **File › New from Clipboard** (Ctrl+Alt+N) opens what's on the clipboard as a new image of its own size (a screenshot, say). Paste still adds it as a layer.
 - Opening a Photoshop file now keeps its layers' Blend If settings.
 - **Open animated GIFs and video to edit frame by frame.** An animated GIF, Animated PNG or animated WebP opens with each frame as a layer and a Timeline frame showing it, keeping each frame's timing. A video (MP4, MOV, WebM, MKV) opens the same way: first pick the part to open, how many frames a second and the size, and Pixl shows what it will take in memory. Export Animation saves the result as GIF, Animated PNG or video again. Very long or very large animations ask first, and above what fits in memory Pixl offers to open the first frames only. Dropping an animated GIF or a video on Pixl opens it too.

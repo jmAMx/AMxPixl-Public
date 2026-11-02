@@ -10,10 +10,11 @@ import { h, isTyping } from './dom';
 import { historyPanel } from './historypanel';
 import { adjustmentMenuItems, artboardMenuItems, effectMenuItems, layersPanel, looksMenuItems, maskMenuItems } from './layerspanel';
 import { FX_DEFS, FX_GROUPS } from '../core/effects';
+import { preferencesDialog, type ShortcutRow } from './prefsdialog';
 import { tabletMenuItems } from '../tools/pressure';
 import { propertiesPanel } from './properties';
 import { canvasScrollbars } from './scrollbars';
-import { optionsBar, toolbox, toolboxGrip } from './toolbox';
+import { optionsBar, toolbox, toolboxGrip, toolKey } from './toolbox';
 import { warpDialog } from './warpdialog';
 import { timelinePanel, togglePlay } from './timeline';
 import { pathsPanel, strokePathDialog } from './pathspanel';
@@ -23,7 +24,7 @@ import { isDesktop, readMeters } from '../core/platform';
 // ---------- menus & shortcuts ----------
 
 /** A menu command; `label` can be worked out when the menu opens (e.g. "Undo Brush"). */
-interface Cmd { label: string | (() => string); accel?: string; alt?: string; run: () => void; enabled?: () => boolean; checked?: () => boolean; native?: boolean }
+interface Cmd { label: string | (() => string); accel?: string; alt?: string; run: () => void; enabled?: () => boolean; checked?: () => boolean; native?: boolean; id?: string }
 type MenuDef = { title: string; items: (Cmd | 'sep' | { label: string; sub: () => MenuItem[] })[] };
 
 const hasDoc = () => !!app.doc;
@@ -61,7 +62,7 @@ const MENUS: MenuDef[] = [
       { label: 'Export Artboards…', run: () => exportDialog(true), enabled: () => (app.project?.boards.length ?? 0) > 1 },
       { label: 'Export as Photoshop (.psd)…', run: () => exportDialog(false, 'psd'), enabled: hasDoc },
       { label: () => { const f = A.lastExportFormat(); return f ? `Quick Export as ${f === 'jpeg' ? 'JPEG' : f.toUpperCase()}…` : 'Quick Export…'; },
-        accel: 'Ctrl+Alt+E', run: async () => { if (!(await A.quickExport())) exportDialog(); }, enabled: hasDoc },
+        id: 'File › Quick Export', accel: 'Ctrl+Alt+E', run: async () => { if (!(await A.quickExport())) exportDialog(); }, enabled: hasDoc },
       { label: 'Export Animation (GIF / Video)…', accel: 'Ctrl+Alt+Shift+E', run: animExportDialog, enabled: hasDoc },
       'sep',
       { label: 'Close', accel: 'Ctrl+W', run: () => A.closeDoc(), enabled: hasDoc },
@@ -70,8 +71,8 @@ const MENUS: MenuDef[] = [
   {
     title: 'Edit', items: [
       // Named after the step they'd undo or redo, like "Undo Brush".
-      { label: () => (app.doc?.canUndo ? `Undo ${app.doc.entries[app.doc.index - 1].label}` : 'Undo'), accel: 'Ctrl+Z', run: A.undo, enabled: () => !!app.doc?.canUndo },
-      { label: () => (app.doc?.canRedo ? `Redo ${app.doc.entries[app.doc.index].label}` : 'Redo'), accel: 'Ctrl+Shift+Z', alt: 'Ctrl+Y', run: A.redo, enabled: () => !!app.doc?.canRedo },
+      { label: () => (app.doc?.canUndo ? `Undo ${app.doc.entries[app.doc.index - 1].label}` : 'Undo'), id: 'Edit › Undo', accel: 'Ctrl+Z', run: A.undo, enabled: () => !!app.doc?.canUndo },
+      { label: () => (app.doc?.canRedo ? `Redo ${app.doc.entries[app.doc.index].label}` : 'Redo'), id: 'Edit › Redo', accel: 'Ctrl+Shift+Z', alt: 'Ctrl+Y', run: A.redo, enabled: () => !!app.doc?.canRedo },
       'sep',
       { label: 'Cut', accel: 'Ctrl+X', run: () => A.copy(false, true), enabled: hasLayer },
       { label: 'Copy', accel: 'Ctrl+C', run: () => A.copy(), enabled: hasLayer },
@@ -87,6 +88,7 @@ const MENUS: MenuDef[] = [
       { label: 'Free Transform', accel: 'Ctrl+T', run: () => app.setTool('move'), enabled: hasLayer },
       'sep',
       { label: 'Pen Tablet', sub: tabletMenuItems },
+      { label: 'Preferences…', accel: 'Ctrl+K', run: () => preferencesDialog(shortcutRows, accelOf) },
     ],
   },
   {
@@ -237,8 +239,8 @@ const MENUS: MenuDef[] = [
   },
   {
     title: 'Filter', items: [
-      { label: () => (lastFilterLabel() ? `Repeat ${lastFilterLabel()}` : 'Repeat Last Filter'), accel: 'Ctrl+F', run: () => repeatFilter(), enabled: () => !!lastFilterLabel() && !!app.doc?.active },
-      { label: () => (lastFilterLabel() ? `Adjust and Repeat ${lastFilterLabel()}…` : 'Adjust and Repeat Last Filter…'), accel: 'Ctrl+Alt+F', run: () => repeatFilter(true), enabled: () => !!lastFilterLabel() && !!app.doc?.active },
+      { label: () => (lastFilterLabel() ? `Repeat ${lastFilterLabel()}` : 'Repeat Last Filter'), id: 'Filter › Repeat Last Filter', accel: 'Ctrl+F', run: () => repeatFilter(), enabled: () => !!lastFilterLabel() && !!app.doc?.active },
+      { label: () => (lastFilterLabel() ? `Adjust and Repeat ${lastFilterLabel()}…` : 'Adjust and Repeat Last Filter…'), id: 'Filter › Adjust and Repeat Last Filter', accel: 'Ctrl+Alt+F', run: () => repeatFilter(true), enabled: () => !!lastFilterLabel() && !!app.doc?.active },
       'sep',
       { label: 'Looks', sub: looksMenuItems },
       { label: 'Effect Layer (editable)', sub: effectMenuItems },
@@ -286,32 +288,60 @@ const MENUS: MenuDef[] = [
 ];
 
 const extraShortcuts: [string, string][] = [
-  ['V', 'Move & transform'], ['M', 'Rectangle / ellipse select'], ['L', 'Lasso'], ['W', 'Magic wand'],['Ctrl + click layer thumbnail', 'Select layer shape'], ['C', 'Crop'], ['I', 'Eyedropper'],
-  ['B', 'Brush'], ['E', 'Eraser'], ['S', 'Clone stamp (Alt+click sets the source)'], ['J', 'Healing brush'], ['O', 'Dodge / burn (Alt flips)'], ['R', 'Blur / sharpen / smudge'], ['P', 'Paths (pen / freehand)'],['G', 'Gradient / paint bucket'], ['T', 'Text'], ['U', 'Shape'], ['H', 'Hand'], ['Z', 'Zoom'],
+  ['Ctrl + click layer thumbnail', 'Select layer shape'],
   ['X', 'Swap colours'], ['D', 'Default colours'], ['[ / ]', 'Brush size'], ['Space (hold)', 'Pan'], ['Ctrl + wheel', 'Zoom at cursor'],
   ['Alt + click (brush)', 'Pick colour'], ['Shift + drag', 'Add to selection / constrain'], ['Alt + drag', 'Subtract from selection'],
 ];
 
+/** A menu command's id, for its shortcut in Preferences: its menu and name (or its own id, when the name changes). */
+const cmdId = (m: MenuDef, it: Cmd) => it.id ?? `${m.title} › ${typeof it.label === 'string' ? it.label.replace('…', '') : ''}`;
+/** A menu command's shortcut: the one set in Preferences, if any ('' = none), else its own. */
+const accelFor = (m: MenuDef, it: Cmd) => app.prefs.shortcuts?.[cmdId(m, it)] ?? it.accel;
+
+/** Every command with a shortcut (or room for one), for Help › Keyboard Shortcuts and Preferences › Shortcuts. */
+function shortcutRows(): ShortcutRow[] {
+  const rows: ShortcutRow[] = [];
+  // Tools first: those sharing a key go together, as pressing it again switches between them.
+  for (const t of app.tools) rows.push({ id: `tool:${t.id}`, group: 'Tools', label: t.name, keys: toolKey(t), own: t.key, single: true });
+  for (const m of MENUS) for (const it of m.items) {
+    if (it === 'sep' || 'sub' in it) continue;
+    // (A name that changes as you work, like "Undo Brush", is listed by its id's plain one.)
+    const label = it.id ? it.id.split(' › ').pop()! : (it.label as string).replace('…', '');
+    rows.push({ id: cmdId(m, it), group: m.title, label, keys: accelFor(m, it) ?? '', own: it.accel ?? '', fixed: it.native });
+  }
+  return rows;
+}
+
 function showShortcuts() {
   const rows: [string, string][] = [];
-  for (const m of MENUS) for (const it of m.items) if (it !== 'sep' && 'accel' in it && it.accel) rows.push([it.accel, `${m.title} › ${(typeof it.label === 'string' ? it.label : it.label().split(' ')[0]).replace('…', '')}`]);
-  shortcutsDialog([...extraShortcuts, ...rows]);
+  const tools = new Map<string, string[]>();
+  for (const t of app.tools) { const k = toolKey(t); if (k) tools.set(k, [...(tools.get(k) ?? []), t.name]); }
+  for (const [k, names] of tools) rows.push([k, names.join(' / ')]);
+  for (const r of shortcutRows()) if (r.keys && !r.single) rows.push([r.keys, `${r.group} › ${r.label}`]);
+  shortcutsDialog([...rows.slice(0, tools.size), ...extraShortcuts, ...rows.slice(tools.size)]);
 }
 
 function menuItems(def: MenuDef): MenuItem[] {
   return def.items.map((it) => {
     if (it === 'sep') return { sep: true };
     if ('sub' in it) return { label: it.label, sub: it.sub() };
-    return { label: typeof it.label === 'string' ? it.label : it.label(), accel: it.accel, disabled: it.enabled ? !it.enabled() : false, checked: it.checked?.(), onClick: it.run };
+    return { label: typeof it.label === 'string' ? it.label : it.label(), accel: accelFor(def, it) || undefined, disabled: it.enabled ? !it.enabled() : false, checked: it.checked?.(), onClick: () => it.run() };
   });
 }
 
+/** Shortcut → command, with Preferences' changes (a command given a new shortcut loses its second one too). */
 const accelMap = new Map<string, Cmd>();
-for (const m of MENUS) for (const it of m.items) {
-  if (it === 'sep' || 'sub' in it || it.native) continue;
-  if (it.accel) accelMap.set(it.accel, it);
-  if (it.alt) accelMap.set(it.alt, it);
-}
+const buildAccels = () => {
+  accelMap.clear();
+  for (const m of MENUS) for (const it of m.items) {
+    if (it === 'sep' || 'sub' in it || it.native) continue;
+    const a = accelFor(m, it);
+    if (a) accelMap.set(a, it);
+    if (it.alt && a === it.accel && !accelMap.has(it.alt)) accelMap.set(it.alt, it);
+  }
+};
+buildAccels();
+app.on('prefs', buildAccels);
 const arrangeKeys: Record<string, () => void> = {
   'Ctrl+]': () => A.arrange('up'), 'Ctrl+[': () => A.arrange('down'),
   'Ctrl+Shift+]': () => A.arrange('top'), 'Ctrl+Shift+[': () => A.arrange('bottom'),
@@ -379,7 +409,7 @@ function onKey(e: KeyboardEvent) {
   const key = accel.replace('Shift+', '');
   if (key === 'X') { const f = app.fg; app.setColor('fg', app.bg); app.setColor('bg', f); return; }
   if (key === 'D') { app.setColor('fg', '#000000'); app.setColor('bg', '#ffffff'); return; }
-  const group = app.tools.filter((t) => t.key === key);
+  const group = app.tools.filter((t) => toolKey(t) === key);
   if (group.length) {
     e.preventDefault();
     const i = group.indexOf(app.tool);

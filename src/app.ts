@@ -31,6 +31,13 @@ export interface Prefs {
   panelHeights?: Record<string, number>;
   /** The tools' height in the toolbox when the tool options are beside them (dragged); unset = all the tools. */
   toolGridH?: number;
+  /**
+   * Shortcuts changed in Preferences: a menu command's id ("File › Save", or its own id) or "tool:<id>" to its keys
+   * ('' for none). Anything not here keeps its own.
+   */
+  shortcuts?: Record<string, string>;
+  /** Minutes between crash-recovery copies of unsaved work (0 = off); unset = every minute. */
+  autosaveMin?: number;
   /** Readouts in the status bar (View › Status Bar); missing in settings saved before they existed. */
   meters?: Meter[];
   /** Drawing tablet settings (Edit › Pen Tablet), shared by every painting tool. */

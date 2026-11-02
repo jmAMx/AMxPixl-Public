@@ -273,7 +273,7 @@ function toolButton(t: Tool, group: string[] | undefined) {
   const on = group ? group.includes(app.tool.id) : t === app.tool;
   const more = group ? ` · right-click or hold for ${group.length - 1} more` : '';
   const b = h('button', {
-    class: 'tool' + (group ? ' grouped' : '') + (on ? ' on' : ''), type: 'button', title: `${t.name} (${t.key})${more}`, 'aria-label': t.name,
+    class: 'tool' + (group ? ' grouped' : '') + (on ? ' on' : ''), type: 'button', title: `${t.name}${toolKey(t) ? ` (${toolKey(t)})` : ''}${more}`, 'aria-label': t.name,
     onclick: () => app.setTool(t.id),
   }, icon(t.icon), h('span', { class: 'tool-name' }, t.name));
   const openMenu = (x: number, y: number) => popupMenu(toolMenu(t), x, y);
@@ -293,6 +293,9 @@ function toolButton(t: Tool, group: string[] | undefined) {
 }
 
 // ---------- the toolbox ----------
+
+/** A tool's shortcut key: the one set in Preferences › Shortcuts, if any ('' = none), else its own. */
+export const toolKey = (t: Tool) => app.prefs.shortcuts?.[`tool:${t.id}`] ?? t.key;
 
 /**
  * The edge between the tools and the tool options below them (with the options in the side bar): dragging it makes

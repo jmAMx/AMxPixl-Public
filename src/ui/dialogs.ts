@@ -17,6 +17,7 @@ import { effectReach } from '../core/render';
 import { isFilter, type FxParams, type PixelTarget } from '../core/types';
 import { apply, invert, xformMatrix } from '../core/math';
 import { fxParamControl } from './fxcontrols';
+import { setSetting } from '../core/settings';
 import { h } from './dom';
 import { paintableTarget } from '../tools/paint';
 import { checkbox, dialog, icon, numField, seg, slider, toast } from './widgets';
@@ -244,14 +245,22 @@ function applyFilter(img: HTMLCanvasElement, fx: FxParams, scale: number): HTMLC
   return inTiles(w, h, fxEngine.maxSize, effectReach(fx) * scale + 2, (r) => fxEngine.apply(cropCanvas(img, r), fx, scale, { x: -r.x, y: -r.y, w, h }), out) ? out : null;
 }
 
-/** Each filter's settings as last used (for the rest of the session), and which filter was used last. */
+/** Each filter's settings as last used, and which filter was used last (kept between sessions). */
+const FILTER_KEY = 'amxpixl.filters';
 const lastSettings = new Map<string, FxParams>();
 let lastFilter: string | null = null;
+try {
+  const saved = JSON.parse(localStorage.getItem(FILTER_KEY) || 'null') as { last: string | null; settings: Record<string, FxParams> } | null;
+  if (saved) { lastFilter = saved.last && fxDef(saved.last) ? saved.last : null; for (const [k, v] of Object.entries(saved.settings)) if (fxDef(k)) lastSettings.set(k, v); }
+} catch { /* unreadable: start afresh */ }
 const settingsFor = (kind: string): FxParams => {
   const s = lastSettings.get(kind);
   return s ? { ...s, v: { ...s.v } } : defaultFx(kind);
 };
-const remember = (fx: FxParams) => { lastSettings.set(fx.kind, { ...fx, v: { ...fx.v } }); lastFilter = fx.kind; };
+const remember = (fx: FxParams) => {
+  lastSettings.set(fx.kind, { ...fx, v: { ...fx.v } }); lastFilter = fx.kind;
+  try { setSetting(FILTER_KEY, JSON.stringify({ last: lastFilter, settings: Object.fromEntries(lastSettings) })); } catch { /* storage full: this session still has them */ }
+};
 
 /** The filter used last, for Filter › Repeat (null if none yet). */
 export const lastFilterLabel = () => (lastFilter ? fxDef(lastFilter)?.label ?? null : null);

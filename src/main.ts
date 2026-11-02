@@ -103,13 +103,17 @@ const reportFailure = (err: unknown) => {
 window.addEventListener('unhandledrejection', (e) => reportFailure(e.reason));
 window.addEventListener('error', (e) => { if (e.error) reportFailure(e.error); });
 
-// Every minute, copy files that changed since the last pass (and still have unsaved work) to the recovery store.
+// Every minute (or as often as Preferences says), copy files that changed since the last pass (and still have unsaved
+// work) to the recovery store.
 const changed = new Set<Project>();
 app.on('change', ({ doc }) => { const p = app.projectOf(doc); if (p) changed.add(p); });
-let autosaving = false;
+let autosaving = false, lastPass = Date.now();
 setInterval(async () => {
+  const every = (app.prefs.autosaveMin ?? 1) * 60_000;
+  if (!every || Date.now() - lastPass < every - 1000) return;
   if (autosaving || app.busy || view.busy) return;
   autosaving = true;
+  lastPass = Date.now();
   try {
     for (const p of [...changed]) {
       changed.delete(p);
@@ -119,7 +123,7 @@ setInterval(async () => {
       if (!p.dirty) await clearRecovery(p);
     }
   } catch { /* storage full or blocked: recovery is best-effort */ } finally { autosaving = false; }
-}, 60_000);
+}, 15_000);
 
 const openPaths = async (paths: string[]) => {
   const files = [];
