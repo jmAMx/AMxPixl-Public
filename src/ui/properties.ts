@@ -11,6 +11,7 @@ import type { Doc } from '../core/document';
 import { canMove, DEFAULT_MOTION, fxDef } from '../core/effects';
 import { colorInput, fxParamControl } from './fxcontrols';
 import { view } from './canvasview';
+import { pluginOfKind } from '../core/plugins';
 
 /** The effect layer whose centre is being placed by clicking the picture (Properties › Place centre), if any. */
 let centreFor: string | null = null;
@@ -483,7 +484,12 @@ export function propertiesPanel() {
 
   const effectSection = (l: EffectLayer) => {
     const def = fxDef(l.fx.kind);
-    if (!def) return section('Effect', h('p', { class: 'props-note' }, `Unknown effect "${l.fx.kind}".`));
+    if (!def) {
+      const from = pluginOfKind(l.fx.kind);
+      return section('Effect', h('p', { class: 'props-note' }, from
+        ? `This effect comes from the plugin "${from}", which isn't installed (or is turned off in Edit › Plugins). Until it is, this layer changes nothing; its settings are kept.`
+        : `Unknown effect "${l.fx.kind}".`));
+    }
     const e = edit(l, def.label);
     const set = (key: string, v: number | string | boolean, final: boolean) => { l.fx = { ...l.fx, v: { ...l.fx.v, [key]: v } }; e.live(); if (final) e.done(); };
     const kids = def.params.map((p) => fxParamControl(p, l.fx.v[p.key] ?? p.value, set, e.done));

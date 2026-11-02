@@ -26,7 +26,7 @@ export const adjustmentMenuItems = (): MenuItem[] => ADJ_ORDER.map((k) => ({
 
 export function adjustmentMenu(x: number, y: number) { popupMenu(adjustmentMenuItems(), x, y); }
 
-export const effectMenuItems = (): MenuItem[] => FX_GROUPS.map((g) => ({
+export const effectMenuItems = (): MenuItem[] => FX_GROUPS.filter((g) => FX_DEFS.some((d) => d.group === g)).map((g) => ({
   label: g, sub: FX_DEFS.filter((d) => d.group === g).map((d) => ({ label: d.label, disabled: !app.doc, onClick: () => newEffect(d.kind) })),
 }));
 

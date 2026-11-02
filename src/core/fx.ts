@@ -84,6 +84,8 @@ class FXEngine {
   readonly canvas = document.createElement('canvas');
   private gl: WebGL2RenderingContext | null = null;
   private progs = new Map<string, Prog | null>();
+  /** Why a shader didn't compile, by program key (for plugin effects, shown when one is installed). */
+  private errors = new Map<string, string>();
   private srcTex!: WebGLTexture;
   private auxTex!: WebGLTexture;
   private depthTex!: WebGLTexture;
@@ -151,6 +153,7 @@ class FXEngine {
       for (const n of ['uSrc', 'uAux', 'uDepth', 'uRes', 'uScale', 'uDoc', 'uSeed', 'uTime', 'uA', 'uB', 'uC', 'uCol1', 'uCol2', 'uThreshold']) prog.u.set(n, gl.getUniformLocation(p, n));
     } catch (err) {
       console.error('Effect shader failed', err);
+      this.errors.set(key, String((err as Error)?.message ?? err));
     }
     this.progs.set(key, prog);
     return prog;
@@ -227,6 +230,8 @@ class FXEngine {
     const tl = prog.u.get('uTime');
     if (tl) gl.uniform1f(tl, env.time);
     for (const [k, v] of Object.entries(uni)) {
+      // (Plugin effects have uniforms of their own, one per setting: found the first time they're set.)
+      if (!prog.u.has(k)) prog.u.set(k, gl.getUniformLocation(prog.p, k));
       const loc = prog.u.get(k);
       if (!loc) continue;
       if (v.length === 1) gl.uniform1f(loc, v[0]);
@@ -248,6 +253,13 @@ class FXEngine {
     x.drawImage(img, 0, 0, w, h);
     x.restore();
     return this.blur;
+  }
+
+  /** Why `def`'s shader doesn't compile, or null if it does (or there's no graphics card to ask). */
+  compileError(def: FxDef): string | null {
+    if (!this.gl) return null;
+    const key = progKey(def);
+    return this.program(key, def.glsl) ? null : (this.errors.get(key) ?? 'it doesn\'t compile').replace(`${key}: `, '');
   }
 
   /** `img` with what's outside the canvas (`r`, in its pixels) filled by stretching the canvas's edge pixels out. */
@@ -300,7 +312,7 @@ class FXEngine {
   apply(src: HTMLCanvasElement, fx: FxParams, scale: number, docRect: { x: number; y: number; w: number; h: number }, time = 0, depth?: HTMLCanvasElement): HTMLCanvasElement | null {
     const def: FxDef | undefined = fxDef(fx.kind);
     if (!def || !this.gl || src.width > this.maxSize || src.height > this.maxSize) return null;
-    const prog = this.program(def.kind, def.glsl);
+    const prog = this.program(progKey(def), def.glsl);
     if (!prog) return null;
     const w = src.width, h = src.height;
     if (this.canvas.width !== w || this.canvas.height !== h) { this.canvas.width = w; this.canvas.height = h; }
@@ -333,6 +345,14 @@ class FXEngine {
     this.draw(prog, w, h, env, seed, uni, passes);
     return this.canvas;
   }
+}
+
+/** A plugin effect's program is kept by its code too, so a plugin updated in place gets its new shader. */
+function progKey(def: FxDef) {
+  if (!def.plugin) return def.kind;
+  let h = 0;
+  for (let i = 0; i < def.glsl.length; i++) h = (h * 31 + def.glsl.charCodeAt(i)) | 0;
+  return `${def.kind}#${h}`;
 }
 
 export const fxEngine = new FXEngine();

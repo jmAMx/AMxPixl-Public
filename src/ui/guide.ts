@@ -43,6 +43,10 @@ const TOPICS: [string, string[]][] = [
     '**File › Export Image** (Ctrl+Shift+E) saves PNG, JPEG, WebP, TIFF, BMP, a Windows icon (ICO) or a Photoshop file with its layers (PSD), at any size. **Quick Export** (Ctrl+Alt+E) repeats the last export\'s settings.',
     'Exports are resampled straight from each layer\'s originals for the sharpest result. Pick **Nearest neighbour** to keep pixel art blocky.',
   ]],
+  ['Plugins', [
+    '**Edit › Plugins** installs a plugin from its .pixlplugin file (or drop the file on the window), and turns plugins off or removes them. Installing shows what a plugin adds and asks first. Plugins stay when Pixl updates.',
+    'This version takes **effect plugins**: new effects that appear under **Filter › Plugins** and as effect layers, working like the built-in ones. They run on the graphics card and can\'t reach your files or the internet.',
+  ]],
   ['Preferences and shortcuts', [
     '**Edit › Preferences** (Ctrl+K) sets the theme, the toolbox, how often crash-recovery copies are kept, and every **keyboard shortcut**: click a command\'s keys and press new ones. **Help › Keyboard Shortcuts** (F1) lists them all.',
   ]],

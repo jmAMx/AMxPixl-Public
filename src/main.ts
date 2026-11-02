@@ -10,6 +10,7 @@ import { penTool } from './tools/pen';
 import { blurTool, burnTool, dodgeTool, sharpenTool, smudgeTool } from './tools/retouch';
 import { liquifyTool } from './tools/liquify';
 import { spotTool } from './tools/spot';
+import { registerPlugins } from './core/plugins';
 import { ellipseSelectTool, lassoTool, rectSelectTool, wandTool } from './tools/select';
 import { handTool, shapeTool, zoomTool } from './tools/shape';
 import { textTool } from './tools/text';
@@ -25,6 +26,8 @@ import { flatten } from './core/render';
 import { mountShell } from './ui/shell';
 import { ask, toast } from './ui/widgets';
 
+// Installed plugins' effects, before any file opens (one using them should find them).
+registerPlugins();
 app.tools = [moveTool, artboardTool, rectSelectTool, ellipseSelectTool, lassoTool, wandTool, cropTool, pickerTool, brushTool, eraserTool, cloneTool, healTool, spotTool, dodgeTool, burnTool, blurTool, sharpenTool, smudgeTool, liquifyTool, gradientTool, fillTool, penTool, textTool, shapeTool, handTool, zoomTool];
 app.tool = brushTool;
 app.applyPrefs();

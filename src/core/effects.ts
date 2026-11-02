@@ -45,6 +45,8 @@ export interface FxDef {
    * `uniforms`). Gets the output scale and the canvas's size in output pixels, to pick how many passes are needed.
    */
   passes?: (v: V, out: { scale: number; w: number; h: number }) => Uniforms[];
+  /** The plugin it comes from (core/plugins.ts), for plugin effects. */
+  plugin?: string;
   uniforms: (v: V) => Uniforms;
   /**
    * How far past the canvas edge the effect reads, as a fraction of the canvas size. The image is then rendered with
@@ -759,7 +761,7 @@ vec4 fx(vec2 p, vec2 d) {
 ];
 
 /** The classic filter groups (core/filterfx.ts) first, then the looks: film, lens, screens, print and depth. */
-export const FX_GROUPS = ['Blur', 'Sharpen', 'Noise', 'Distort', 'Stylize', 'Render', 'Film', 'Lens', 'CRT & VHS', 'Damage & Print', 'Depth'] as const;
+export const FX_GROUPS = ['Blur', 'Sharpen', 'Noise', 'Distort', 'Stylize', 'Render', 'Film', 'Lens', 'CRT & VHS', 'Damage & Print', 'Depth', 'Plugins'] as const;
 
 export const fxDef = (kind: string) => FX_DEFS.find((d) => d.kind === kind);
 

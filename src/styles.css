@@ -167,6 +167,11 @@ html[data-theme="dark"] .mono.for-dark, html[data-theme="light"] .mono.for-light
 .add-size .ico { width: 13px; height: 13px; }
 .field.top { align-items: flex-start; }
 .dialog-msg.warn { color: #e8a33d; }
+/* Edit › Plugins */
+.plugin-list { display: flex; flex-direction: column; gap: 6px; max-height: 340px; overflow-y: auto; }
+.plugin-row { display: grid; grid-template-columns: 1fr auto auto; gap: 10px; align-items: center; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); }
+.plugin-row.off .plugin-info { opacity: .55; }
+.plugin-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 /* Preferences */
 .prefs-pane { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
 .prefs-pane .field.wide { grid-template-columns: 170px 1fr; }

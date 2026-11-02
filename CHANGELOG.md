@@ -34,6 +34,11 @@ Artboards (several canvases, each its own size, in one file), filters that stay 
 - **Export to TIFF**: 8 bits a channel with transparency, compressed losslessly.
 - **Export to BMP and ICO**: BMP keeps transparency. ICO makes a Windows icon holding every common size from 16 to 256 pixels, with the picture fitted and centred in each; Nearest neighbour keeps pixel-art icons crisp.
 - **File › Quick Export** (Ctrl+Alt+E) exports again with the last export's format and settings, asking only where to save.
+- **Plugins** (Edit › Plugins): install a `.pixlplugin` file from there, by opening it, or by dropping it on the window.
+  - This first step takes **effect plugins**: GPU shaders with settings that become effects like the built-in ones, under Filter › Plugins and as editable effect layers.
+  - Installing says what a plugin adds and asks first. A plugin whose shader has an error is refused, with the error shown.
+  - Plugins can be turned off or removed, and Pixl updates keep them. A file using a missing plugin's effect still opens, and that layer changes nothing until the plugin is back.
+  - An example plugin and a guide to writing them are in `examples/plugins`.
 - **Smart objects** (Layer › Smart Object): **Convert to Smart Object** puts the selected layers inside one layer that looks exactly the same, and moves, scales and takes filters as one.
   - **Edit Contents** opens what's inside in a tab of its own. Save there puts the changes back as one undo step, keeping the smart object's size and place.
   - **Rasterize Smart Object** keeps just the pixels.

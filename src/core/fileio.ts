@@ -191,7 +191,20 @@ const fsw = window as unknown as FSWindow;
 /** Layered files from other editors that AMxPixl can import. */
 export const LAYERED_EXT = ['psd', 'xcf'];
 
-export async function pickFiles(kind: 'any' | 'image', multiple = true): Promise<Picked[]> {
+export async function pickFiles(kind: 'any' | 'image' | 'plugin', multiple = true): Promise<Picked[]> {
+  if (kind === 'plugin') {
+    // A plugin is a .pixlplugin (a zip), or its plugin.json on its own.
+    if (isDesktop) {
+      const paths = await openDialog([{ name: 'Pixl plugin', extensions: ['pixlplugin', 'json'] }], multiple);
+      return Promise.all(paths.map(async (p) => ({ file: await readPath(p), ref: { name: fileName(p), path: p } })));
+    }
+    return new Promise((res) => {
+      const inp = document.createElement('input');
+      inp.type = 'file'; inp.multiple = multiple; inp.accept = '.pixlplugin,.json';
+      inp.onchange = () => res([...(inp.files ?? [])].map((f) => ({ file: f, ref: { name: f.name } })));
+      inp.click();
+    });
+  }
   if (isDesktop) {
     const filters: Filters = kind === 'image'
       ? [{ name: 'Images', extensions: IMAGE_EXT }]

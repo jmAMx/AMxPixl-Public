@@ -20,6 +20,7 @@ import { flatten, renderDoc } from './core/render';
 import { encodePsd } from './core/export/psd';
 import { encodeTiff } from './core/export/tiff';
 import { encodeBmp, encodeIco } from './core/export/bmp';
+import { installPluginFile } from './ui/pluginsdialog';
 import { layerBoxReady, trimRect } from './core/bounds';
 import { Stroke } from './core/brush';
 import { glops } from './core/glops';
@@ -149,6 +150,7 @@ export async function openFiles(files: Picked[]) {
   for (const { file, ref } of files) {
     try {
       const ext = extOf(file.name);
+      if (ext === 'pixlplugin') { await installPluginFile(file, file.name); continue; }
       let p: Project;
       let animated: Awaited<ReturnType<typeof probeAnimated>>;
       if (ext === 'pixl') {
@@ -250,7 +252,7 @@ export async function placeFiles(files: File[]) {
       const ext = extOf(f.name);
       let anim = false;
       if (ANIMATED_EXT.includes(ext)) { const a = await probeAnimated(f, ext); anim = !!a; a?.close(); }
-      if (['pixl', 'psd', 'xcf', ...VIDEO_EXT].includes(ext) || anim) { await openFiles([{ file: f, ref: { name: f.name } }]); continue; }
+      if (['pixl', 'psd', 'xcf', 'pixlplugin', ...VIDEO_EXT].includes(ext) || anim) { await openFiles([{ file: f, ref: { name: f.name } }]); continue; }
       placeCanvas(await decodeImage(f), baseName(f.name), null, true);
     } catch (e) {
       toast(`Couldn't place ${f.name}: ${(e as Error).message}`, 'error');

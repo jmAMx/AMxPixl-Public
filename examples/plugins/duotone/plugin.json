@@ -1,0 +1,31 @@
+{
+  "id": "solutions.automatrix.example-duotone",
+  "name": "Duotone & Kaleidoscope",
+  "version": "1.0.0",
+  "author": "AMx",
+  "description": "An example effect plugin: a two-colour duotone, and a kaleidoscope.",
+  "pixl": 1,
+  "effects": [
+    {
+      "kind": "duotone",
+      "label": "Duotone",
+      "params": [
+        { "key": "shadows", "label": "Shadows", "type": "color", "value": "#1d1145" },
+        { "key": "highlights", "label": "Highlights", "type": "color", "value": "#ffb000" },
+        { "key": "contrast", "label": "Contrast", "type": "range", "min": 0, "max": 300, "value": 100, "unit": "%" },
+        { "key": "amount", "label": "Amount", "type": "range", "min": 0, "max": 100, "value": 100, "unit": "%" }
+      ],
+      "glsl": "vec4 fx(vec2 p, vec2 d) {\n  vec4 c = src(p);\n  float l = clamp((lum(c.rgb) - 0.5) * u_contrast / 100.0 + 0.5, 0.0, 1.0);\n  return vec4(mix(c.rgb, mix(u_shadows, u_highlights, l), u_amount / 100.0), c.a);\n}"
+    },
+    {
+      "kind": "kaleidoscope",
+      "label": "Kaleidoscope",
+      "margin": "anywhere",
+      "params": [
+        { "key": "segments", "label": "Mirrors", "type": "range", "min": 2, "max": 24, "step": 1, "value": 6 },
+        { "key": "turn", "label": "Turn", "type": "range", "min": -180, "max": 180, "value": 0, "unit": "°" }
+      ],
+      "glslFile": "kaleidoscope.glsl"
+    }
+  ]
+}

@@ -12,6 +12,7 @@ import { adjustmentMenuItems, artboardMenuItems, effectMenuItems, layersPanel, l
 import { FX_DEFS, FX_GROUPS } from '../core/effects';
 import { preferencesDialog, type ShortcutRow } from './prefsdialog';
 import { guideDialog } from './guide';
+import { pluginsDialog } from './pluginsdialog';
 import { tabletMenuItems } from '../tools/pressure';
 import { propertiesPanel } from './properties';
 import { canvasScrollbars } from './scrollbars';
@@ -91,6 +92,7 @@ const MENUS: MenuDef[] = [
       { label: 'Free Transform', accel: 'Ctrl+T', run: () => app.setTool('move'), enabled: hasLayer },
       'sep',
       { label: 'Pen Tablet', sub: tabletMenuItems },
+      { label: 'Plugins…', run: pluginsDialog },
       { label: 'Preferences…', accel: 'Ctrl+K', run: () => preferencesDialog(shortcutRows, accelOf) },
     ],
   },
@@ -266,6 +268,7 @@ const MENUS: MenuDef[] = [
       { label: 'Adjustment Layer (editable)', sub: adjustmentMenuItems },
       'sep',
       // Every effect but the depth ones, applied to the layer (or kept editable from the dialog).
+      // (A group appears once it has something: Plugins, once a plugin with effects is installed.)
       ...FX_GROUPS.filter((g) => g !== 'Depth').map((g) => ({
         label: g, sub: () => FX_DEFS.filter((d) => d.group === g).map((d) => ({ label: `${d.label}…`, disabled: !app.doc?.active, onClick: () => filterDialog(d.kind) })),
       })),
@@ -342,10 +345,11 @@ function showShortcuts() {
 }
 
 function menuItems(def: MenuDef): MenuItem[] {
-  return def.items.map((it) => {
-    if (it === 'sep') return { sep: true };
-    if ('sub' in it) return { label: it.label, sub: it.sub() };
-    return { label: typeof it.label === 'string' ? it.label : it.label(), accel: accelFor(def, it) || undefined, disabled: it.enabled ? !it.enabled() : false, checked: it.checked?.(), onClick: () => it.run() };
+  return def.items.flatMap((it): MenuItem[] => {
+    if (it === 'sep') return [{ sep: true }];
+    // (A submenu with nothing in it, such as Filter › Plugins before any is installed, isn't shown.)
+    if ('sub' in it) { const sub = it.sub(); return sub.length ? [{ label: it.label, sub }] : []; }
+    return [{ label: typeof it.label === 'string' ? it.label : it.label(), accel: accelFor(def, it) || undefined, disabled: it.enabled ? !it.enabled() : false, checked: it.checked?.(), onClick: () => it.run() }];
   });
 }
 
