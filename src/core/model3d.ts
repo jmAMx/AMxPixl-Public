@@ -1,4 +1,5 @@
 import type { Pt, Rect } from './math';
+import { gpuRestored } from './gpu';
 
 /**
  * 3D layers: an image layer can carry a `model`, turning its picture into a lit 3D object that renders in place of
@@ -1713,6 +1714,8 @@ class ModelGL {
       this.shTex = []; this.shFbo = [];
       outCache.clear(); wallCache.clear();
     });
+    // (Set up again the next time it's needed.)
+    this.canvas.addEventListener('webglcontextrestored', () => gpuRestored());
   }
 
   /** Draws the mesh for shadows (its plainer version, if it has one) with the flat program set up. */

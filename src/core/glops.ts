@@ -1,3 +1,5 @@
+import { cropCanvas } from './layers';
+import { glLimit, gpuRestored, inTiles } from './gpu';
 import type { BlendIf } from './types';
 
 const VS = `#version 300 es
@@ -127,10 +129,13 @@ class GLOps {
   private gl: WebGL2RenderingContext | null = null;
   private progs: Record<string, Prog | null> = {};
   private texs: WebGLTexture[] = [];
+  /** The biggest image the graphics card takes in one go; bigger ones are done in pieces into `big`. */
+  maxSize = 4096;
+  private big = document.createElement('canvas');
 
   constructor() {
     this.canvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); this.gl = null; });
-    this.canvas.addEventListener('webglcontextrestored', () => this.init());
+    this.canvas.addEventListener('webglcontextrestored', () => { this.init(); gpuRestored(); });
     this.init();
   }
 
@@ -154,6 +159,7 @@ class GLOps {
       return t;
     };
     this.texs = [tex(), tex(), tex(), tex()];
+    this.maxSize = glLimit(gl);
   }
 
   private prog(name: string, fs: string): Prog | null {
@@ -189,6 +195,12 @@ class GLOps {
     const pr = this.prog(name, fs);
     if (!pr) return null;
     const w = inputs[0].width, h = inputs[0].height;
+    if (w > this.maxSize || h > this.maxSize) {
+      // Every op works pixel by pixel, so the pieces need no overlap.
+      const out = this.big;
+      if (out.width !== w || out.height !== h) { out.width = w; out.height = h; }
+      return inTiles(w, h, this.maxSize, 0, (r) => this.run(name, fs, inputs.map((c) => cropCanvas(c, r)), set), out) ? out : null;
+    }
     if (this.canvas.width !== w || this.canvas.height !== h) { this.canvas.width = w; this.canvas.height = h; }
     gl.viewport(0, 0, w, h);
     gl.useProgram(pr.p);

@@ -1,4 +1,5 @@
 import { fxDef, type FxDef, type FxEnv } from './effects';
+import { glLimit, gpuRestored } from './gpu';
 import { ctx2d } from './layers';
 import type { FxParams } from './types';
 
@@ -75,7 +76,7 @@ class FXEngine {
 
   constructor() {
     this.canvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); this.gl = null; });
-    this.canvas.addEventListener('webglcontextrestored', () => this.init());
+    this.canvas.addEventListener('webglcontextrestored', () => { this.init(); gpuRestored(); });
     this.init();
   }
 
@@ -103,7 +104,7 @@ class FXEngine {
     this.srcTex = tex();
     this.auxTex = tex();
     this.depthTex = tex();
-    this.maxSize = gl.getParameter(gl.MAX_TEXTURE_SIZE);
+    this.maxSize = glLimit(gl);
   }
 
   private program(key: string, body: string): Prog | null {

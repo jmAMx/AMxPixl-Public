@@ -1,5 +1,6 @@
 import { adjMode, buildLut, wheelOffset } from './adjustments';
 import type { AdjParams } from './types';
+import { glLimit, gpuRestored } from './gpu';
 
 const VS = `#version 300 es
 in vec2 aPos; out vec2 vUv;
@@ -113,7 +114,7 @@ export class GLFX {
 
   constructor() {
     this.canvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); this.ok = false; });
-    this.canvas.addEventListener('webglcontextrestored', () => this.init());
+    this.canvas.addEventListener('webglcontextrestored', () => { this.init(); gpuRestored(); });
     this.init();
   }
 
@@ -159,7 +160,7 @@ export class GLFX {
     for (const n of ['uSrc', 'uLut', 'uLut3', 'uMode', 'uP', 'uTint', 'uHsl', 'uGrade', 'uMix']) this.loc[n] = gl.getUniformLocation(this.prog, n);
     this.lut3Tex = null;
     this.lut3Src = null;
-    this.maxSize = gl.getParameter(gl.MAX_TEXTURE_SIZE);
+    this.maxSize = glLimit(gl);
     this.ok = true;
   }
 

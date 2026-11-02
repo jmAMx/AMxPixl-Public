@@ -1,4 +1,5 @@
 import { apply, boundsOf, type Mat, type Pt, type Rect } from './math';
+import { gpuRestored } from './gpu';
 import type { Warp } from './types';
 
 /** Projective map from the unit square to a quad (corners TL, TR, BR, BL). */
@@ -100,7 +101,7 @@ class WarpGL {
 
   constructor() {
     this.canvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); this.gl = null; });
-    this.canvas.addEventListener('webglcontextrestored', () => this.init());
+    this.canvas.addEventListener('webglcontextrestored', () => { this.init(); gpuRestored(); });
     this.init();
   }
 

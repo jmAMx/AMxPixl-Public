@@ -4,12 +4,13 @@ import { padEdges } from './filters';
 import { fxEngine } from './fx';
 import { glfx } from './glfx';
 import { glops } from './glops';
-import { ctx2d, drawPlaced, newCanvas } from './layers';
+import { cropCanvas, ctx2d, drawPlaced, newCanvas } from './layers';
 import { identity, mapRect, matScale, mul, setT, translate, xformMatrix, type Mat, type Rect } from './math';
 import { displaySource } from './pyramid';
 import { acquire, composite, gco as gcoOf, like, release } from './scratch';
 import { applyStyles, hasStyles } from './styles';
-import type { BlendIf, BlendMode, FilterLayer, Layer, LayerStyles, Mask } from './types';
+import { inTiles } from './gpu';
+import type { BlendIf, BlendMode, FilterLayer, FxParams, Layer, LayerStyles, Mask } from './types';
 import { isDepth, isFilter, isPlaced } from './types';
 import { pixelVersion } from './bounds';
 
@@ -41,7 +42,6 @@ export interface RenderOpts {
  */
 export function dirtyPad(doc: Doc): number {
   let pad = 2;
-  const n = (v: unknown) => Number(v) || 0;
   for (const l of flatLayers(doc.layers)) {
     if (l.mask && l.mask.feather > 0) pad = Math.max(pad, l.mask.feather * 3);
     const st = l.styles;
@@ -52,24 +52,32 @@ export function dirtyPad(doc: Doc): number {
       if (st.stroke.on) pad = Math.max(pad, st.stroke.size * 2);
     }
     if (l.type !== 'effect') continue;
-    const v = l.fx.v, def = fxDef(l.fx.kind);
-    if (l.fx.kind === 'distortion' || l.fx.kind === 'crt' || l.fx.kind === 'parallax') return Infinity;
-    let p = def?.aux ? def.aux.radius(v) * 3 : 0;
-    switch (l.fx.kind) {
-      case 'grain': p += n(v.size) * 2; break;
-      case 'chromatic': p += n(v.amount) * 1.5; break;
-      case 'vhs': p += n(v.shift) + 12 * 24 + 80; break;
-      case 'glitch': p += n(v.offset) * 1.5 + n(v.split) + 40; break;
-      case 'halftone': p += n(v.size) * 2.5; break;
-      case 'dither': p += n(v.pixel) * 2; break;
-      case 'compression': p += n(v.block) * 4; break;
-      case 'videodeg': p += n(v.size) * 2; break;
-      case 'depthblur': p += n(v.amount) * 1.2; break;
-      case 'relief': p += n(v.smooth) + 2; break;
-    }
-    pad = Math.max(pad, p + 4);
+    const p = effectReach(l.fx);
+    if (!Number.isFinite(p)) return Infinity;
+    pad = Math.max(pad, p);
   }
   return pad;
+}
+
+/** How far (document pixels) an effect reads around each pixel; Infinity when it can pull pixels from anywhere. */
+function effectReach(fx: FxParams): number {
+  const n = (v: unknown) => Number(v) || 0;
+  const v = fx.v, def = fxDef(fx.kind);
+  if (fx.kind === 'distortion' || fx.kind === 'crt' || fx.kind === 'parallax') return Infinity;
+  let p = def?.aux ? def.aux.radius(v) * 3 : 0;
+  switch (fx.kind) {
+    case 'grain': p += n(v.size) * 2; break;
+    case 'chromatic': p += n(v.amount) * 1.5; break;
+    case 'vhs': p += n(v.shift) + 12 * 24 + 80; break;
+    case 'glitch': p += n(v.offset) * 1.5 + n(v.split) + 40; break;
+    case 'halftone': p += n(v.size) * 2.5; break;
+    case 'dither': p += n(v.pixel) * 2; break;
+    case 'compression': p += n(v.block) * 4; break;
+    case 'videodeg': p += n(v.size) * 2; break;
+    case 'depthblur': p += n(v.amount) * 1.2; break;
+    case 'relief': p += n(v.smooth) + 2; break;
+  }
+  return p + 4;
 }
 
 /** Seconds into the animation at the start of `frame` (frames can have their own length). */
@@ -201,9 +209,28 @@ function applyMask(c: HTMLCanvasElement, m: Mask, env: Env) {
 
 // ---------- filter layers (adjustments + effects) ----------
 
-function filterResult(l: FilterLayer, target: HTMLCanvasElement, env: Env): HTMLCanvasElement | null {
-  if (l.type === 'adjust') return glfx.apply(target, l.adj, (k) => env.doc.pool.get(k));
-  return fxEngine.apply(target, l.fx, env.scale, env.docRect, env.time, fxDef(l.fx.kind)?.depth ? depthMap(env, target) : undefined);
+/**
+ * The filter layer's result over `target`, and whether it's a scratch buffer to release. An image bigger than the
+ * graphics card takes is done in pieces: adjustments work pixel by pixel; effects get a margin of the image around
+ * each piece as wide as they read (those that can pull pixels from anywhere, such as lens distortion, get a wide one).
+ */
+function filterResult(l: FilterLayer, target: HTMLCanvasElement, env: Env): { c: HTMLCanvasElement; scratch: boolean } | null {
+  const depth = l.type === 'effect' && fxDef(l.fx.kind)?.depth ? depthMap(env, target) : undefined;
+  const run = (src: HTMLCanvasElement, docRect: Rect, dep?: HTMLCanvasElement) => l.type === 'adjust'
+    ? glfx.apply(src, l.adj, (k) => env.doc.pool.get(k))
+    : fxEngine.apply(src, l.fx, env.scale, docRect, env.time, dep);
+  const max = l.type === 'adjust' ? glfx.maxSize : fxEngine.maxSize;
+  if (target.width <= max && target.height <= max) {
+    const c = run(target, env.docRect, depth);
+    return c && { c, scratch: false };
+  }
+  const margin = l.type === 'adjust' ? 0 : effectReach(l.fx) * env.scale + 2;
+  const out = like(target);
+  const ok = inTiles(target.width, target.height, max, margin, (r) => run(cropCanvas(target, r),
+    { ...env.docRect, x: env.docRect.x - r.x, y: env.docRect.y - r.y }, depth && cropCanvas(depth, r)), out);
+  if (ok) return { c: out, scratch: true };
+  release(out);
+  return null;
 }
 
 /** target = mix(target, result, opacity × mask), done with premultiplied adds so transparency stays exact. */
@@ -238,8 +265,9 @@ function drawFilter(l: FilterLayer, target: HTMLCanvasElement, env: Env) {
   }
   const m = maskOn(l);
   const mc = m ? maskInTarget(m, target, env) : null;
-  mergeFiltered(target, res, l.opacity, mc);
+  mergeFiltered(target, res.c, l.opacity, mc);
   if (mc) release(mc);
+  if (res.scratch) release(res.c);
 }
 
 // ---------- layers, groups, clipping ----------
@@ -452,26 +480,13 @@ function overscan(doc: Doc, out: HTMLCanvasElement, view: Mat, opts: RenderOpts)
   }
   if (!reach) return 0;
   const pad = Math.ceil(Math.min(reach, 0.5) * Math.max(doc.width, doc.height) * matScale(view));
-  const room = Math.floor((fxEngine.maxSize - Math.max(out.width, out.height)) / 2);
-  return Math.max(0, Math.min(pad, room, 2048));
-}
-
-/**
- * The largest side (pixels) the graphics card can apply `doc`'s adjustment and effect layers at, or null if it has
- * none showing (in any frame). An export bigger than that would leave them out.
- */
-export function filterSizeLimit(doc: Doc): number | null {
-  let limit: number | null = null;
-  const frames = doc.anim ? doc.anim.frames.length : 1;
-  for (const l of flatLayers(doc.layers)) {
-    if (!isFilter(l)) continue;
-    let shown = false;
-    for (let f = 0; f < frames && !shown; f++) shown = doc.shows(l, doc.anim ? f : doc.frame);
-    if (!shown) continue;
-    const max = l.type === 'adjust' ? glfx.maxSize : fxEngine.maxSize;
-    limit = limit === null ? max : Math.min(limit, max);
-  }
-  return limit;
+  // Kept within what the graphics card takes in one go, so the effect isn't split into pieces for the margin. An
+  // image already too big for that is done in pieces anyway, and only has to stay within what a canvas can hold.
+  const side = Math.max(out.width, out.height);
+  const big = side > fxEngine.maxSize;
+  let p = Math.max(0, Math.min(pad, Math.floor(((big ? 32767 : fxEngine.maxSize) - side) / 2), 2048));
+  while (big && p > 0 && (out.width + p * 2) * (out.height + p * 2) > 16384 * 16384) p = Math.floor(p / 2);
+  return p;
 }
 
 /** Full-resolution flattened image of the document (optionally scaled). */

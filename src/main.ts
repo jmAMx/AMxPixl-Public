@@ -11,6 +11,7 @@ import { ellipseSelectTool, lassoTool, rectSelectTool, wandTool } from './tools/
 import { handTool, shapeTool, zoomTool } from './tools/shape';
 import { textTool } from './tools/text';
 import type { Doc } from './core/document';
+import { onGpuRestored } from './core/gpu';
 import { fileName, isDesktop, onOpenFiles, readPath, takeLaunchFiles } from './core/platform';
 import { autosave, clearRecovery, listRecovery, restoreRecovery } from './core/recovery';
 import { flushSettings } from './core/settings';
@@ -81,6 +82,10 @@ async function offerRecovery() {
     } else if (r === 'discard') await clearRecovery(it.uid);
   }
 }
+
+// After a graphics reset, draw again what was drawn without the graphics card (adjustment, effect and 3D layers, and
+// their thumbnails). Other open images redraw when they're switched to.
+onGpuRestored(() => app.doc?.touch('meta'));
 
 // Every minute, copy documents that changed since the last pass (and still have unsaved work) to the recovery store.
 const changed = new Set<Doc>();
