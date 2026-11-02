@@ -136,8 +136,10 @@ export async function saveDoc(doc: Doc | null = app.doc, saveAs = false) {
   if (!doc) return false;
   const isPixl = doc.name.toLowerCase().endsWith('.pixl');
   const existing = !saveAs && isPixl ? doc.file : null;
-  // The history step being saved. Edits made while the file is written aren't in it, so they stay unsaved.
+  // The history step being saved. Edits made while the file is written aren't in it, so they stay unsaved: nothing is
+  // folded into it any more (a nudge a moment later would otherwise count as saved).
   const saving = doc.entries[doc.index - 1];
+  if (saving) saving.merge = undefined;
   try {
     const blob = await encodePixl(doc);
     const ref = await saveBlob(blob, `${baseName(doc.name)}.pixl`, existing, PIXL_ACCEPT);

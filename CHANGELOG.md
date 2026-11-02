@@ -2,6 +2,49 @@
 
 Each version's section becomes its release notes (`scripts/release.ps1` copies it to the download page).
 
+## 0.8.6
+
+Fixes from a full review of the app, and faster saving.
+
+Work that could be lost:
+
+- **Edits made while a save is writing stay unsaved**, so closing doesn't drop them. This includes an arrow-key nudge pressed during the save.
+- **A recovered image keeps its recovery copy** until it's saved or closed, so a second crash can't lose it. An autosave that fails to write is tried again.
+- **Closing Pixl offers Save and Save all**, as well as Close without saving. During a filter preview, it asks you to apply or cancel the filter first, so a filter you never applied can't be saved.
+- **Enter in a dialog uses the number you just typed.** With two dialogs open, only the top one answers Enter and Escape. Text being typed in Properties is kept when you switch images or close Pixl.
+- **Shortcuts wait while you drag.** Undo and other commands are ignored mid-drag. So are a tool's own keys: an arrow key doesn't nudge the layer you're moving, and Enter doesn't crop while you're still drawing the box. The [ and ] brush-size keys still work.
+- **Escape cancels a drag** without an undo step. This covers Move and Transform (warp points, 3D turn, light), Gradient, Shape, marquee, lasso, the crop box, and brush, eraser, clone, heal and retouch strokes.
+
+Matches the export:
+
+- **Clipping:** clipped layers show through the base layer's own pixels. The base's styles, Blend If, blend mode and opacity apply to the whole clipping group. This changes how existing files look: a base layer's Colour Overlay, inner glow or inside stroke now covers the layers clipped to it too.
+- **Mask feather** no longer fades a layer along the canvas edges.
+- **Motion Blur** blurs transparent edges evenly on both sides.
+- **Zoomed in, effects near the view's edge are drawn correctly.** Styles and mask feathers there no longer show false strokes or fades.
+- **Exports too big for the graphics card keep their effects.** Adjustment layers, styles and effect layers are applied in pieces and joined.
+- **After a graphics reset, everything redraws by itself**, including 3D layers, thumbnails and the timeline.
+
+Other fixes:
+
+- The eyedropper picks up glows, shadows, strokes and effect layers.
+- The blend mode dropdown lets go of focus after you choose, so shortcuts work again.
+- Opening a .pixl made by a newer Pixl says so, instead of opening it wrongly. Opening a .pixl that's already open switches to it.
+- New image, Image Size, Canvas Size and Export refuse sizes a canvas can't hold: over 32,767 px a side, or 268 megapixels.
+- Brush, eraser, clone, heal and retouch keep their strength in a soft selection.
+- Holding an arrow key to nudge makes one undo step.
+- Cut, Smudge with pressure-to-size, Export Animation's resample setting, Warp, Colour Range, the tab close button and thin marquee drags have also been fixed.
+- 3D: no wall shadow when the light is behind the object.
+- Errors that went unnoticed now show a message.
+
+Faster, measured on older hardware:
+
+- **Saving takes about a quarter less time** (1.25 s instead of 1.7 s for six 3000×2000 layers). Layers are now turned into PNG in background workers, several at once.
+- **Opening is faster**: layers are decoded several at a time.
+- **Dragging a layer's opacity in the Layers panel is about 30× faster.**
+- **The healing brush is about 3× faster.** Importing 8-bit PSD files is also about 3× faster.
+- **Turning Inflate and Revolve shapes is a little faster**, because a second 3D drawing pass is skipped.
+- **A big export no longer keeps memory** for the rest of the session.
+
 ## 0.8.5
 
 Shadows and a light you can move.

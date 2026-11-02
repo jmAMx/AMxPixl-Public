@@ -141,6 +141,8 @@ if (isDesktop) {
     const win = getCurrentWindow();
     win.onCloseRequested(async (e) => {
       e.preventDefault();
+      // (During a filter preview the layer holds the previewed pixels: saving now would keep a filter never applied.)
+      if (app.busy) { toast('Apply or cancel the filter first.'); return; }
       // A field still being typed in commits first, so its edit counts as unsaved work.
       (document.activeElement as HTMLElement | null)?.blur?.();
       const dirty = app.docs.filter((d) => d.dirty);

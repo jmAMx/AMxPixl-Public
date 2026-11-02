@@ -129,9 +129,8 @@ class GLOps {
   private gl: WebGL2RenderingContext | null = null;
   private progs: Record<string, Prog | null> = {};
   private texs: WebGLTexture[] = [];
-  /** The biggest image the graphics card takes in one go; bigger ones are done in pieces into `big`. */
+  /** The biggest image the graphics card takes in one go; bigger ones are done in pieces into a canvas of their own. */
   maxSize = 4096;
-  private big = document.createElement('canvas');
 
   constructor() {
     this.canvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); this.gl = null; });
@@ -197,8 +196,9 @@ class GLOps {
     const w = inputs[0].width, h = inputs[0].height;
     if (w > this.maxSize || h > this.maxSize) {
       // Every op works pixel by pixel, so the pieces need no overlap.
-      const out = this.big;
-      if (out.width !== w || out.height !== h) { out.width = w; out.height = h; }
+      // (Made for this one: kept, an export-sized canvas would hold hundreds of MB for the rest of the session.)
+      const out = document.createElement('canvas');
+      out.width = w; out.height = h;
       return inTiles(w, h, this.maxSize, 0, (r) => this.run(name, fs, inputs.map((c) => cropCanvas(c, r)), set), out) ? out : null;
     }
     if (this.canvas.width !== w || this.canvas.height !== h) { this.canvas.width = w; this.canvas.height = h; }

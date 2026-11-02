@@ -2,6 +2,7 @@ import { Doc, flatLayers, newId } from './document';
 import { ctx2d, newCanvas } from './layers';
 import { fileName, isDesktop, openDialog, readPath, saveDialog, writePath, type Filters } from './platform';
 import type { Layer, Meta } from './types';
+import { WorkerPool } from './workers/pool';
 
 const MAGIC = 'PIXL';
 const FORMAT_VERSION = 1;
@@ -47,8 +48,8 @@ export function docFromCanvas(name: string, c: HTMLCanvasElement): Doc {
 }
 
 /**
- * Runs `f` on each item, four at a time, results in order. Encoding and decoding images run on the browser's other
- * cores, so layers done together save about 3x faster and open about 2.5x faster on a 4-core PC; only a few at a
+ * Runs `f` on each item, four at a time, results in order. Decoding images runs on the browser's other cores, and
+ * encoding does in workers (see pngOf), so layers done together open and save faster on a 4-core PC; only a few at a
  * time, so a document with many large layers doesn't need every layer's working copy in memory together.
  */
 export async function fewAtOnce<T, R>(items: T[], f: (item: T) => Promise<R>): Promise<R[]> {
@@ -62,6 +63,24 @@ export async function fewAtOnce<T, R>(items: T[], f: (item: T) => Promise<R>): P
 const canvasBlob = (c: HTMLCanvasElement, type = 'image/png', q?: number) =>
   new Promise<Blob>((res, rej) => c.toBlob((b) => (b ? res(b) : rej(new Error('Encoding failed'))), type, q));
 
+/** Up to four PNG workers (see pngworker.ts), started on the first save; null where workers can't encode. */
+let pngPool: WorkerPool<{ bitmap: ImageBitmap }, { blob: Blob }> | null | undefined;
+
+/** A canvas as PNG, encoded in a worker (or on the page if that fails). Same file as canvasBlob. */
+async function pngOf(c: HTMLCanvasElement): Promise<Blob> {
+  if (pngPool === undefined) {
+    pngPool = typeof Worker !== 'undefined' && typeof OffscreenCanvas !== 'undefined'
+      ? new WorkerPool(() => new Worker(new URL('./workers/pngworker.ts', import.meta.url), { type: 'module' }), 4) : null;
+  }
+  if (pngPool && c.width && c.height) {
+    try {
+      const bitmap = await createImageBitmap(c);
+      return (await pngPool.run({ bitmap }, [bitmap])).blob;
+    } catch { /* fall back below */ }
+  }
+  return canvasBlob(c);
+}
+
 /** .pixl: "PIXL" + u32 version + u32 header length + JSON header + PNG blobs for each raster layer. */
 export async function encodePixl(doc: Doc): Promise<Blob> {
   const meta = doc.snapshot();
@@ -73,7 +92,7 @@ export async function encodePixl(doc: Doc): Promise<Blob> {
     l.type === 'raster' ? l.key : null, l.mask?.key ?? null, l.type === 'adjust' && l.adj.kind === 'lut' ? l.adj.key : null,
     l.type === 'raster' ? l.model?.texture?.key ?? null : null,
   ]))].filter((k): k is string => !!k);
-  const encoded = await fewAtOnce(keys, (k) => canvasBlob(doc.pool.get(k)!));
+  const encoded = await fewAtOnce(keys, (k) => pngOf(doc.pool.get(k)!));
   for (const [i, key] of keys.entries()) {
     const b = encoded[i];
     index[key] = [offset, b.size];
