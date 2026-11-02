@@ -34,6 +34,10 @@ Artboards (several canvases, each its own size, in one file), filters that stay 
 - **Export to TIFF**: 8 bits a channel with transparency, compressed losslessly.
 - **Export to BMP and ICO**: BMP keeps transparency. ICO makes a Windows icon holding every common size from 16 to 256 pixels, with the picture fitted and centred in each; Nearest neighbour keeps pixel-art icons crisp.
 - **File › Quick Export** (Ctrl+Alt+E) exports again with the last export's format and settings, asking only where to save.
+- **Start from** on the start screen: a new image in one click.
+  - Full HD, Square post, Story, Thumbnail, a see-through Logo, and A4 print.
+  - A **Social set** of three artboards: square, portrait and story.
+- **Help › User Guide**: a short guide to Pixl by topic (getting started, layers, filters, selections and painting, artboards, animation, 3D, exporting, preferences). It's also linked from the start screen.
 - **Preferences** (Edit › Preferences, Ctrl+K), in two tabs:
   - **General**: theme, glow, tool names, where the tool options go, how often to keep a crash-recovery copy of unsaved work (every 1 to 10 minutes, or never), and buttons that reset the panel sizes and the tool order.
   - **Shortcuts**: change the shortcut of any menu command or tool. Click its keys and press the new ones, Backspace for none. Taking a shortcut another command has asks first. Each change can be put back, or all of them at once, and Help › Keyboard Shortcuts shows them.

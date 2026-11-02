@@ -11,6 +11,7 @@ import { historyPanel } from './historypanel';
 import { adjustmentMenuItems, artboardMenuItems, effectMenuItems, layersPanel, looksMenuItems, maskMenuItems } from './layerspanel';
 import { FX_DEFS, FX_GROUPS } from '../core/effects';
 import { preferencesDialog, type ShortcutRow } from './prefsdialog';
+import { guideDialog } from './guide';
 import { tabletMenuItems } from '../tools/pressure';
 import { propertiesPanel } from './properties';
 import { canvasScrollbars } from './scrollbars';
@@ -280,6 +281,7 @@ const MENUS: MenuDef[] = [
   },
   {
     title: 'Help', items: [
+      { label: 'User Guide', run: guideDialog },
       { label: 'Keyboard Shortcuts', accel: 'F1', run: showShortcuts },
       { label: 'Check for Updates…', run: () => updateDialog() },
       { label: 'About AMxPixl', run: aboutDialog },
@@ -489,7 +491,9 @@ function welcome() {
       h('div', { class: 'welcome-actions' },
         h('button', { class: 'btn primary', type: 'button', onclick: newDocDialog }, icon('plus'), 'New image'),
         h('button', { class: 'btn', type: 'button', onclick: open }, icon('folder'), 'Open…')),
-      h('p', { class: 'dim small' }, 'or drop images here · Ctrl+V pastes from the clipboard'),
+      h('p', { class: 'dim small' }, 'or drop images here · Ctrl+V pastes from the clipboard · ',
+        h('button', { class: 'link-btn', type: 'button', onclick: guideDialog }, 'New to Pixl? Read the guide')),
+      templateRow(),
       recentGrid),
     // The AMx family tie, kept quiet.
     h('div', { class: 'amx-credit' },
@@ -502,6 +506,30 @@ function welcome() {
   sync();
   drawRecentGrid();
   return el;
+}
+
+/** Start from: common sizes in one click (white, or see-through for a logo), and a set of artboards for social posts. */
+const TEMPLATES: { name: string; w: number; h: number; bg: string | null; boards?: { w: number; h: number }[] }[] = [
+  { name: 'Full HD', w: 1920, h: 1080, bg: '#ffffff' },
+  { name: 'Square post', w: 1080, h: 1080, bg: '#ffffff' },
+  { name: 'Story', w: 1080, h: 1920, bg: '#ffffff' },
+  { name: 'Thumbnail', w: 1280, h: 720, bg: '#ffffff' },
+  { name: 'Logo', w: 1024, h: 1024, bg: null },
+  { name: 'A4 print', w: 2480, h: 3508, bg: '#ffffff' },
+  { name: 'Social set', w: 1080, h: 1080, bg: '#ffffff', boards: [{ w: 1080, h: 1080 }, { w: 1080, h: 1350 }, { w: 1080, h: 1920 }] },
+];
+
+function templateRow() {
+  const tile = (t: typeof TEMPLATES[number]) => {
+    const shapes = t.boards ?? [{ w: t.w, h: t.h }];
+    const k = 34 / Math.max(...shapes.map((s) => Math.max(s.w, s.h)));
+    return h('button', {
+      class: 'template', type: 'button', title: `${t.name}: ${shapes.map((s) => `${s.w} × ${s.h}`).join(', ')} px${t.bg ? '' : ', see-through'}`,
+      onclick: () => A.createDoc(A.nextUntitled(), t.w, t.h, t.bg, t.boards ?? 1),
+    }, h('span', { class: 'template-shapes' }, ...shapes.map((s) => h('span', { class: 'template-shape' + (t.bg ? '' : ' clear'), style: `width:${Math.round(s.w * k)}px;height:${Math.round(s.h * k)}px` }))),
+      h('span', { class: 'template-name' }, t.name));
+  };
+  return h('div', { class: 'templates' }, h('div', { class: 'recent-head' }, h('span', null, 'Start from')), h('div', { class: 'template-row' }, ...TEMPLATES.map(tile)));
 }
 
 const recentGrid = h('div', { class: 'recent-grid' });
