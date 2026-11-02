@@ -156,7 +156,13 @@ interface PlacedBase extends LayerBase { t: Xform; box?: Rect | null }
  * `depth`: a depth layer, greys saying how far things are (white near, black far). It isn't part of the picture: depth
  * layers together make the document's depth map, which depth effects (blur, fog, relief, parallax) read.
  */
-export interface RasterLayer extends PlacedBase { type: 'raster'; key: string; warp?: Warp | null; model?: Model3D | null; depth?: boolean }
+/**
+ * `link`: a linked layer (File › Place Linked) shows another file (a .pixl or an image), kept in step with it: the
+ * file's place, name and a hash of what it held when last read. The file keeps a copy of the picture, so it opens
+ * without the other file.
+ */
+export interface RasterLayer extends PlacedBase { type: 'raster'; key: string; warp?: Warp | null; model?: Model3D | null; depth?: boolean; link?: LayerLink | null }
+export interface LayerLink { name: string; path: string; hash: string }
 /** `envelope`: a warp preset (arc, flag, bulge...) bending the text or shape; it stays editable and refits to edits. */
 export interface TextLayer extends PlacedBase { type: 'text'; text: TextProps; envelope?: Envelope | null }
 export interface ShapeLayer extends PlacedBase { type: 'shape'; shape: ShapeProps; envelope?: Envelope | null }

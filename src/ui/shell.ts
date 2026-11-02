@@ -56,6 +56,7 @@ const MENUS: MenuDef[] = [
       { label: 'Open…', accel: 'Ctrl+O', run: open },
       { label: 'Open Recent', sub: recentMenuItems },
       { label: 'Place Image as Layer…', accel: 'Ctrl+Shift+O', run: place, enabled: hasDoc },
+      { label: 'Place Linked…', run: () => { void A.placeLinked(); }, enabled: hasDoc },
       'sep',
       { label: 'Save', accel: 'Ctrl+S', run: () => A.saveDoc(), enabled: hasDoc },
       { label: 'Save As…', accel: 'Ctrl+Shift+S', run: () => A.saveDoc(app.doc, true), enabled: hasDoc },
@@ -159,6 +160,14 @@ const MENUS: MenuDef[] = [
       { label: 'Ungroup', accel: 'Ctrl+Shift+G', run: A.ungroup, enabled: hasLayer },
       { label: 'Create/Release Clipping Mask', accel: 'Ctrl+Alt+G', run: A.toggleClip, enabled: hasLayer },
       { label: 'Layer Mask', sub: () => (app.doc?.active ? maskMenuItems() : [{ label: 'Select a layer first', disabled: true }]) },
+      { label: 'Linked Layer', sub: () => {
+        const linked = !!app.doc?.activeRaster?.link;
+        return [
+          { label: 'Edit Original', disabled: !linked, onClick: () => { void A.editLinked(); } },
+          { label: 'Update Linked Layers', onClick: () => { void A.updateLinkedLayers(); } },
+          { label: 'Unlink', disabled: !linked, onClick: A.unlinkLayer },
+        ];
+      } },
       { label: 'Layer Style', sub: styleMenuItems },
       'sep',
       { label: 'Merge Down', accel: 'Ctrl+E', run: A.mergeDown, enabled: hasLayer },

@@ -34,6 +34,10 @@ Artboards (several canvases, each its own size, in one file), filters that stay 
 - **Export to TIFF**: 8 bits a channel with transparency, compressed losslessly.
 - **Export to BMP and ICO**: BMP keeps transparency. ICO makes a Windows icon holding every common size from 16 to 256 pixels, with the picture fitted and centred in each; Nearest neighbour keeps pixel-art icons crisp.
 - **File › Quick Export** (Ctrl+Alt+E) exports again with the last export's format and settings, asking only where to save.
+- **Linked layers** (File › Place Linked): place a .pixl or an image as a layer that stays linked to its file.
+  - **Edit Original** (Layer › Linked Layer, or Properties) opens the file. Saving it updates the layer at once, in every open file that uses it, keeping its size and place.
+  - Opening a file whose linked files changed since it was saved offers to update them, and Update Linked Layers checks them all. Unlink keeps the picture and stops following.
+  - The file keeps a copy of each linked picture, so it opens without the other files.
 - **Content-Aware Fill** (Edit menu, Shift+F5): select something to remove, loosely, and Pixl fills it from what's around it, carrying on textures and lines like brickwork, grass or sky.
   - It runs in the background, taking about half a second for a typical object, and blends through soft selection edges.
   - It works on a layer or a mask, and is one undo step.

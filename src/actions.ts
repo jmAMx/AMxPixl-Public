@@ -2,7 +2,7 @@ import { app } from './app';
 import { defaultAdj, ADJ_LABELS } from './core/adjustments';
 import { Doc, flatLayers, newId } from './core/document';
 import { defaultFx, fxDef } from './core/effects';
-import { baseName, canvasBlob, decodeImage, decodePixl, docFromCanvas, docFromMeta, encodePixl, extOf, hashOf, layerKeys, pickFiles, PIXL_ACCEPT, saveBlob, type Picked } from './core/fileio';
+import { baseName, canvasBlob, decodeImage, decodePixl, docFromCanvas, docFromMeta, encodePixl, extOf, hashOf, IMAGE_EXT, layerKeys, pickFiles, PIXL_ACCEPT, saveBlob, type Picked } from './core/fileio';
 import { importPsd } from './core/import/psd';
 import { ANIMATED_EXT, FRAMES_MAX, FRAMES_WARN, frameBytes, probeAnimated, probeVideo, VIDEO_EXT, type Frames } from './core/import/animated';
 import { videoImportDialog } from './ui/dialogs';
@@ -28,7 +28,7 @@ import { shapePoints } from './core/layers';
 import { invertSel, mapSel, maskSelection, selBounds } from './core/selection';
 import { colorRangeMask, combine, layerAlphaMask, modifyMask, sampleSource, wandMask, type Modify, type SelMode } from './core/selops';
 import { defaultStyles } from './core/styles';
-import type { AdjKind, AdjParams, Anim, AnimFrame, BlendIf, FxParams, GroupLayer, Guide, Layer, LayerStyles, Mask, PathPoint, PlacedLayer, RasterLayer, ShapeLayer, SubPath, TextLayer, VPath, Warp } from './core/types';
+import type { AdjKind, AdjParams, Anim, AnimFrame, BlendIf, FxParams, GroupLayer, Guide, Layer, LayerLink, LayerStyles, Mask, PathPoint, PlacedLayer, RasterLayer, ShapeLayer, SubPath, TextLayer, VPath, Warp } from './core/types';
 import { initWarp, warpBounds } from './core/warp';
 import { envelopeMesh, shapeFit, type Envelope } from './core/envelope';
 import { loadFont, outlineText } from './core/outline';
@@ -158,6 +158,7 @@ export async function openFiles(files: Picked[]) {
         p.name = file.name;
         p.file = ref.path || ref.handle ? ref : null;
         p = await refreshLinked(p);
+        void Promise.resolve().then(() => offerLinkUpdates(p));
         app.addProject(p);
       } else if (ext === 'psd' || ext === 'psb') {
         const boards = await importPsd(await file.arrayBuffer(), file.name);
@@ -257,15 +258,110 @@ export async function placeFiles(files: File[]) {
   }
 }
 
-export function placeCanvas(c: HTMLCanvasElement, name: string, at: Pt | null, fit = false) {
+export function placeCanvas(c: HTMLCanvasElement, name: string, at: Pt | null, fit = false, link?: LayerLink) {
   const doc = app.doc!;
   let s = 1;
   if (fit && (c.width > doc.width || c.height > doc.height)) s = Math.min(doc.width / c.width, doc.height / c.height);
   const pos = at ?? { x: Math.round((doc.width - c.width * s) / 2), y: Math.round((doc.height - c.height * s) / 2) };
-  const l: RasterLayer = { id: newId(), type: 'raster', name, visible: true, opacity: 1, blend: 'normal', key: doc.addCanvas(c), t: { x: pos.x, y: pos.y, sx: s, sy: s, rot: 0 } };
+  const l: RasterLayer = { id: newId(), type: 'raster', name, visible: true, opacity: 1, blend: 'normal', key: doc.addCanvas(c), t: { x: pos.x, y: pos.y, sx: s, sy: s, rot: 0 }, ...(link ? { link } : {}) };
   doc.insertLayer(l);
-  doc.commit(`Place ${name}`);
+  doc.commit(link ? `Place linked ${name}` : `Place ${name}`);
   if (s < 1) toast(`Placed at ${Math.round(s * 100)}% to fit. The full-size original is kept, so scaling it up later loses nothing.`);
+}
+
+// ---------- linked layers ----------
+
+/** What a linked layer shows of its file: a .pixl's (first) artboard as it looks, or the image. */
+async function linkedPicture(file: Blob, name: string): Promise<HTMLCanvasElement> {
+  if (extOf(name) === 'pixl') return flatten((await decodePixl(file, baseName(name))).boards[0].doc);
+  return decodeImage(file);
+}
+
+/**
+ * File › Place Linked: a .pixl or an image placed as a layer that stays linked to its file. Edit Original opens the
+ * file; when it's saved (or changed elsewhere and this file is opened again), the layer updates. Desktop only, as it
+ * keeps the file's place on disk.
+ */
+export async function placeLinked(picked?: Picked[]) {
+  const doc = need(); if (!doc) return;
+  if (!isDesktop) { toast('Linked layers need the desktop app: they keep track of the file on disk.'); return; }
+  for (const { file, ref } of picked ?? await pickFiles('any')) {
+    try {
+      if (!ref.path) continue;
+      if (!['pixl', ...IMAGE_EXT].includes(extOf(file.name))) { toast(`${file.name}: link a .pixl or an image (open other files to edit them).`); continue; }
+      placeCanvas(await linkedPicture(file, file.name), baseName(file.name), null, true, { name: file.name, path: ref.path, hash: await hashOf(file) });
+    } catch (e) { toast(`Couldn't place ${file.name}: ${(e as Error).message}`, 'error'); }
+  }
+}
+
+/** Linked layers in `docs` whose files changed (optionally only those linked to `path`), each with the file now. */
+async function changedLinks(docs: Doc[], path?: string) {
+  const out: { d: Doc; l: RasterLayer; f: File; hash: string }[] = [];
+  const missing = new Set<string>();
+  for (const d of docs) for (const l of d.all()) {
+    if (l.type !== 'raster' || !l.link || (path && l.link.path !== path)) continue;
+    try {
+      const f = await readPath(l.link.path), hash = await hashOf(f);
+      if (hash !== l.link.hash) out.push({ d, l, f, hash });
+    } catch { missing.add(l.link.name); }
+  }
+  return { changed: out, missing: [...missing] };
+}
+
+/**
+ * Brings linked layers up to date with their files: the new picture fills the same box on the canvas (a warp made
+ * for the old one is dropped if the size changed). One undo step per artboard. Returns how many layers changed.
+ */
+async function applyLinks(changed: Awaited<ReturnType<typeof changedLinks>>['changed']) {
+  const byDoc = new Map<Doc, typeof changed>();
+  for (const c of changed) byDoc.set(c.d, [...(byDoc.get(c.d) ?? []), c]);
+  for (const [d, list] of byDoc) {
+    for (const { l, f, hash } of list) {
+      const c = await linkedPicture(f, l.link!.name), old = d.canvasOf(l);
+      if (c.width !== old.width || c.height !== old.height) {
+        l.t = { ...l.t, sx: (l.t.sx * old.width) / c.width, sy: (l.t.sy * old.height) / c.height };
+        l.warp = null;
+      }
+      l.key = d.addCanvas(c);
+      l.link = { ...l.link!, hash };
+    }
+    d.commit(list.length === 1 ? `Update ${list[0].l.name}` : 'Update linked layers');
+  }
+  return changed.length;
+}
+
+/** Layer › Linked › Update: every linked layer in the open files whose file changed. */
+export async function updateLinkedLayers() {
+  const { changed, missing } = await changedLinks(app.projects.flatMap((p) => p.docs));
+  const n = await applyLinks(changed);
+  toast((n ? `Updated ${n} linked layer${n === 1 ? '' : 's'}.` : 'Linked layers are up to date.') + (missing.length ? ` Not found: ${missing.join(', ')}.` : ''));
+}
+
+/** A file just opened: offers to update its linked layers whose files changed since it was saved. */
+async function offerLinkUpdates(p: Project) {
+  if (!isDesktop) return;
+  const { changed } = await changedLinks(p.docs);
+  if (!changed.length) return;
+  const names = [...new Set(changed.map((c) => c.l.link!.name))];
+  const r = await ask('Linked files changed', `${names.join(', ')} ${names.length === 1 ? 'was' : 'were'} changed since ${p.name} was saved. Update the linked ${changed.length === 1 ? 'layer' : 'layers'} to match?`,
+    [{ id: 'keep', label: 'Leave as they are' }, { id: 'update', label: 'Update', primary: true }]);
+  if (r === 'update') await applyLinks(changed);
+}
+
+/** Layer › Linked › Edit Original: opens the linked layer's file, to edit it (saving it updates the layer). */
+export async function editLinked() {
+  const l = app.doc?.activeRaster;
+  if (!l?.link) { toast('Select a linked layer (File › Place Linked).'); return; }
+  try { await openFiles([{ file: await readPath(l.link.path), ref: { name: l.link.name, path: l.link.path } }]); }
+  catch { toast(`${l.link.name} isn't at ${l.link.path} any more.`, 'error'); }
+}
+
+/** Layer › Linked › Unlink: the layer keeps its picture and stops following the file. */
+export function unlinkLayer() {
+  const doc = need(); const l = doc?.activeRaster;
+  if (!doc || !l?.link) return;
+  l.link = null;
+  doc.commit(`Unlink ${l.name}`);
 }
 
 /**
@@ -336,6 +432,11 @@ export async function saveDoc(doc: Doc | null = app.doc, saveAs = false) {
     else toast(`Saved ${p.name}` + (originals.length ? ` and ${originals.length === 1 ? 'its linked file' : `${originals.length} linked files`}` : ''));
     if (stored) { addRecent(ref, thumbOf(p.active)); app.emit('recent'); }
     if (!p.dirty) clearRecovery(p).catch(() => {});
+    // Layers in other open files linked to this one follow it.
+    if (isDesktop && p.file?.path) {
+      const path = p.file.path;
+      void changedLinks(app.projects.filter((q) => q !== p).flatMap((q) => q.docs), path).then(({ changed }) => applyLinks(changed)).then((n) => { if (n) toast(`Updated ${n} linked layer${n === 1 ? '' : 's'} from ${p.name}.`); });
+    }
     return true;
   } catch (e) {
     toast(`Save failed: ${(e as Error).message}`, 'error');

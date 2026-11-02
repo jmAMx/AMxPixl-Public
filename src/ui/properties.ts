@@ -2,6 +2,7 @@ import { app } from '../app';
 import {
   applyMask, applyWarp, clearStyles, createAnimation, deleteMask, depthFrom3D, editBlendIf, editStyles, flipLayer, invertMask, loadLut, newDepthLayer,
   rasterize3D, rasterizeLayer, removeTexture, removeWarp, resetTransform, setMaskProp, setPlacedTransform, textureFromFile, textureFromLayer, toggleDepthLayer,
+  editLinked, unlinkLayer,
 } from '../actions';
 import { flatLayers } from '../core/document';
 import { defaultStyles } from '../core/styles';
@@ -111,6 +112,9 @@ export function propertiesPanel() {
       const pct = Math.round(Math.abs(l.t.sx) * 100);
       note = h('div', null,
         h('p', { class: 'props-note' }, `Original pixels: ${c.width} × ${c.height}${pct !== 100 ? ` · shown at ${pct}%` : ''}. Scaling never touches the original.`),
+        l.link ? h('div', { class: 'btn-row' }, h('span', { class: 'dim', title: l.link.path }, `Linked to ${l.link.name}`),
+          h('button', { class: 'btn small', type: 'button', title: 'Open the file to edit it: saving it updates this layer', onclick: () => { void editLinked(); } }, 'Edit original'),
+          h('button', { class: 'btn small', type: 'button', title: 'Keep the picture, stop following the file', onclick: unlinkLayer }, 'Unlink')) : null,
         l.warp ? h('div', { class: 'btn-row' }, h('span', { class: 'dim' }, `${l.warp.kind === 'mesh' ? 'Warped' : l.warp.kind === 'liquify' ? 'Liquified' : 'Perspective'} (lossless)`),
           h('button', { class: 'btn small', type: 'button', onclick: () => {
             if (l.warp!.kind === 'liquify') { app.setTool('liquify'); return; }
