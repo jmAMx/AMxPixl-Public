@@ -4,7 +4,7 @@ import { Doc, flatLayers, newId } from '../core/document';
 import type { PInfo, Tool } from '../tools/tool';
 import { cropCanvas, ctx2d, newCanvas } from '../core/layers';
 import { installedPlugins, PERMISSIONS, type InstalledPlugin } from '../core/plugins';
-import type { RasterLayer } from '../core/types';
+import { BLEND_MODES, type BlendMode, type Layer, type RasterLayer } from '../core/types';
 import { h } from './dom';
 import { applyEffect } from './dialogs';
 import { icon, toast, type MenuItem } from './widgets';
@@ -27,10 +27,14 @@ const BOOTSTRAP = `(() => {
   let seq = 0; const waiting = new Map(), commands = new Map(), handlers = { open: new Map(), export: new Map() }, tools = new Map();
   const call = (method, args) => new Promise((res, rej) => { const id = ++seq; waiting.set(id, { res, rej }); parent.postMessage({ pixl: 1, type: 'call', id, method, args }, '*'); });
   const img = (v) => v && new ImageData(v.data, v.width, v.height);
+  // What goes wrong is shown in Pixl (a plugin's own console can't be seen): its script's errors, a tool's, a command's.
+  const fail = (what, err) => parent.postMessage({ pixl: 1, type: 'failed', what, error: String((err && err.message) || err) }, '*');
+  addEventListener('error', (e) => fail('its script', e.error || e.message));
+  addEventListener('unhandledrejection', (e) => fail('its script', e.reason));
   addEventListener('message', async (e) => {
     const m = e.data; if (e.source !== parent || !m || m.pixl !== 1) return;
     if (m.type === 'result') { const w = waiting.get(m.id); if (!w) return; waiting.delete(m.id); if (m.ok) w.res(m.value); else w.rej(new Error(m.error)); }
-    if (m.type === 'tool') { const t = tools.get(m.id); if (t && t[m.event]) { try { await t[m.event](m.point); } catch (err) { console.error(err); } } return; }
+    if (m.type === 'tool') { const t = tools.get(m.id); if (t && t[m.event]) { try { await t[m.event](m.point); } catch (err) { fail('the tool "' + m.id + '"', err); } } return; }
     if (m.type === 'request') {
       // Pixl asks: open a file of one of its formats (bytes in, layers out), or export the picture (bytes out).
       const reply = (ok, value) => parent.postMessage({ pixl: 1, type: 'response', id: m.id, ok, ...(ok ? { value } : { error: value }) }, '*');
@@ -44,7 +48,7 @@ const BOOTSTRAP = `(() => {
     if (m.type === 'command') {
       const f = commands.get(m.id);
       try { if (!f) throw new Error('nothing handles "' + m.id + '"'); await f(); }
-      catch (err) { parent.postMessage({ pixl: 1, type: 'failed', command: m.id, error: String((err && err.message) || err) }, '*'); }
+      catch (err) { fail('the command "' + m.id + '"', err); }
     }
   });
   window.pixl = Object.freeze({
@@ -55,6 +59,7 @@ const BOOTSTRAP = `(() => {
     image: () => call('image'),
     pixels: async (layerId, rect) => { const v = await call('pixels', { layerId, rect }); return v && Object.assign(img(v), { x: v.x, y: v.y }); },
     setPixels: (layerId, image, x = 0, y = 0, label) => call('setPixels', { layerId, x, y, width: image.width, height: image.height, data: image.data, label }),
+    setLayer: (layerId, props) => call('setLayer', { layerId, props }),
     addLayer: (name, image) => call('addLayer', { name, width: image && image.width, height: image && image.height, data: image && image.data }),
     selection: async () => { const v = await call('selection'); return v && img(v); },
     run: (command, args) => call('run', { command, args }),
@@ -310,6 +315,22 @@ async function handle(p: InstalledPlugin, method: string, a: Record<string, unkn
       d.commit(`${name}: ${String(a.label ?? 'change pixels').slice(0, 60)}`, [{ key: l.key, rect: r, before, after: null }]);
       return true;
     }
+    case 'setLayer': {
+      // A layer's name, eye, opacity and blend mode (the layers panel's own settings), as one undo step.
+      need(p, 'pixels:write');
+      const d = theDoc(), id = String(a.layerId), q = (a.props ?? {}) as Record<string, unknown>;
+      if (!d.layer(id)) throw new Error('there\'s no such layer');
+      const patch: Partial<Pick<Layer, 'name' | 'visible' | 'opacity' | 'blend'>> = {};
+      if (q.name !== undefined) patch.name = String(q.name).slice(0, 60);
+      if (q.visible !== undefined) patch.visible = !!q.visible;
+      if (q.opacity !== undefined) patch.opacity = Math.max(0, Math.min(1, Number(q.opacity) || 0));
+      if (q.blend !== undefined) {
+        if (!BLEND_MODES.some(([b]) => b === q.blend)) throw new Error(`there's no blend mode "${q.blend}" (try: ${BLEND_MODES.map(([b]) => b).join(', ')})`);
+        patch.blend = q.blend as BlendMode;
+      }
+      A.setLayerProp(id, patch, `${name}: layer settings`);
+      return true;
+    }
     case 'addLayer': {
       need(p, 'pixels:write');
       const d = theDoc(), l = d.newRasterLayer(String(a.name ?? name).slice(0, 60));
@@ -350,10 +371,10 @@ async function handle(p: InstalledPlugin, method: string, a: Record<string, unkn
 
 window.addEventListener('message', (e) => {
   const f = [...frames.values()].find((x) => x.iframe.contentWindow === e.source);
-  const m = e.data as { pixl?: number; type?: string; id?: number; method?: string; args?: Record<string, unknown>; command?: string; error?: string } | null;
+  const m = e.data as { pixl?: number; type?: string; id?: number; method?: string; args?: Record<string, unknown>; what?: string; error?: string } | null;
   if (!f || !m || m.pixl !== 1) return;
   if (m.type === 'ready') { f.onReady(); return; }
-  if (m.type === 'failed') { toast(`${f.p.manifest.name}: ${m.command} failed: ${m.error}`, 'error'); return; }
+  if (m.type === 'failed') { toast(`${f.p.manifest.name}: ${m.what} failed: ${m.error}`, 'error'); return; }
   if (m.type === 'response') {
     const w = requests.get(Number(m.id));
     if (!w || w.frame !== f) return;

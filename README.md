@@ -66,6 +66,7 @@ One-time setup: `winget install GitHub.cli`, then `gh auth login`, and a `public
 - **Opens GIMP and Photoshop files:** `.xcf` (GIMP 2.10 and 3, including GIMP 3's non-destructive filters and linear-light layer blending) and `.psd` (layers, groups, masks, clipping, blend modes). Anything that can't be carried over editably is listed when the file opens.
 - **Motion:** a Timeline with frames (one per layer, or a loop), onion skinning and playback. Effect layers can animate: grain, dust and glitches re-roll, scanlines and VHS tracking roll, light leaks drift, halftone dots drift, turn, pulse or ripple. Export as GIF, animated PNG, MP4 or WebM.
 - **Pixel art:** anti-aliasing can be turned off for the brush, eraser, text, shapes and selections; nearest-neighbour resampling in Image Size and Export keeps scaled pixels blocky; a pixel grid appears from 600% zoom.
+- **Plugins:** effects (GPU shaders), commands, panels, tools and file formats, installed from a `.pixlplugin` file. Script plugins run in a sandbox and can only do what their permissions allow. To write one, see [examples/plugins/GUIDE.md](examples/plugins/GUIDE.md).
 - **Safe work:** autosave with crash recovery, recent files, and `.pixl` files open by double-clicking them in Explorer.
 - **Bounding boxes** that fit the visible pixels (or the whole layer, or a box you set), with several layers transformed together.
 - **Lossless warp & perspective** for image layers, plus rulers, guides and snapping.

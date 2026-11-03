@@ -190,6 +190,35 @@ fn write_settings(app: tauri::AppHandle, json: String) -> Result<(), String> {
   write_safely(&path, json.as_bytes()).map_err(|e| e.to_string())
 }
 
+/// Installed plugins: one file each (<id>.json, the checked plugin with its scripts and shaders) in the app's data
+/// folder, so they don't fill the web view's storage or get written out again with every settings change.
+fn plugins_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
+  app.path().app_data_dir().map(|d| d.join("plugins")).map_err(|e| e.to_string())
+}
+
+/// Every installed plugin's file.
+#[tauri::command]
+fn plugins_read(app: tauri::AppHandle) -> Result<Vec<String>, String> {
+  let Ok(rd) = std::fs::read_dir(plugins_dir(&app)?) else { return Ok(Vec::new()) };
+  Ok(rd.flatten().filter(|e| e.path().extension().is_some_and(|x| x == "json"))
+    .filter_map(|e| std::fs::read_to_string(e.path()).ok()).collect())
+}
+
+#[tauri::command]
+fn plugin_write(app: tauri::AppHandle, id: String, json: String) -> Result<(), String> {
+  let dir = plugins_dir(&app)?;
+  std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+  write_safely(&dir.join(format!("{}.json", plain(&id)?)), json.as_bytes()).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn plugin_delete(app: tauri::AppHandle, id: String) -> Result<(), String> {
+  match std::fs::remove_file(plugins_dir(&app)?.join(format!("{}.json", plain(&id)?))) {
+    Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.to_string()),
+    _ => Ok(()),
+  }
+}
+
 /// The status bar's readouts: [GPU Pixl %, GPU PC %, CPU Pixl %, CPU PC %, memory Pixl MB, memory PC %], each null
 /// if it can't be read, or null altogether until the first reading. See meters.rs.
 #[tauri::command]
@@ -232,7 +261,7 @@ pub fn run() {
       Ok(())
     })
     .invoke_handler(tauri::generate_handler![take_open_files, read_file, write_file, read_settings, write_settings, font_files, open_release_page, meters,
-      recovery_write, recovery_read, recovery_list, recovery_delete])
+      recovery_write, recovery_read, recovery_list, recovery_delete, plugins_read, plugin_write, plugin_delete])
     .run(tauri::generate_context!())
     .expect("error while running AMxPixl");
 }

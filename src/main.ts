@@ -10,7 +10,7 @@ import { penTool } from './tools/pen';
 import { blurTool, burnTool, dodgeTool, sharpenTool, smudgeTool } from './tools/retouch';
 import { liquifyTool } from './tools/liquify';
 import { spotTool } from './tools/spot';
-import { registerPlugins } from './core/plugins';
+import { installedPlugins, registerPlugins, removePlugin } from './core/plugins';
 import { openPluginPanel, refreshPluginTools, runPluginCommand } from './ui/pluginhost';
 import { ellipseSelectTool, lassoTool, rectSelectTool, wandTool } from './tools/select';
 import { handTool, shapeTool, zoomTool } from './tools/shape';
@@ -200,4 +200,4 @@ if (isDesktop) {
 
 // Dev/test hook (harmless in production): lets automated checks drive the editor.
 (window as unknown as Record<string, unknown>).__pixl = { app, actions: A, view, recovery: { autosave, restoreRecovery, clearRecovery }, flatten, filterDialog,
-  plugins: { run: runPluginCommand, panel: openPluginPanel } };
+  plugins: { run: runPluginCommand, panel: openPluginPanel, installed: installedPlugins, remove: removePlugin } };

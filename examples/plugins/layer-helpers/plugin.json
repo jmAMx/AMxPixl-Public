@@ -1,0 +1,15 @@
+{
+  "id": "solutions.automatrix.example-layer-helpers",
+  "name": "Layer Helpers",
+  "version": "1.0.0",
+  "author": "AMx",
+  "description": "An example automation plugin: commands that run Pixl's own steps and change layers' settings.",
+  "pixl": 1,
+  "permissions": ["pixels:write", "commands"],
+  "main": "main.js",
+  "commands": [
+    { "id": "soft-glow", "label": "Soft Glow" },
+    { "id": "solo", "label": "Show Only the Selected Layer" },
+    { "id": "show-all", "label": "Show All Layers" }
+  ]
+}

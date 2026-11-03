@@ -41,7 +41,10 @@ Artboards (several canvases, each its own size, in one file), filters that stay 
   - **Script plugins** add commands (Filter › Plugins) and panels of their own. A script runs in a sandbox, cut off from Pixl, your files, the internet and new windows.
   - Scripts work through Pixl's plugin API: read and change layers' pixels (each change one undo step), add layers, read the selection, run Pixl's own commands, and set colours. Each of these needs a permission, which is listed in plain words when the plugin is installed.
   - Script plugins can also add **tools** to the toolbox (they get presses, drags and releases on the canvas) and **file formats** that File › Open reads into layers and Export writes. A format plugin sees only the files you choose to open or export, and can't take over Pixl's own formats.
-  - Example plugins and a guide to writing them are in `examples/plugins`.
+  - Scripts can also change layers' settings (name, visibility, opacity, blend mode), so automation can do what the layers panel does.
+  - An error in a plugin's script, command, tool or file format shows as a message naming the plugin.
+  - Installed plugins are kept as files in the app's data folder, outside the web view's storage, so large plugins don't crowd your settings. Plugins installed before this move there by themselves.
+  - Writing plugins: a step-by-step guide (`examples/plugins/GUIDE.md`), a full reference, four example plugins, type definitions for editors, and a script that packs a plugin folder into a `.pixlplugin`.
 - **Smart objects** (Layer › Smart Object): **Convert to Smart Object** puts the selected layers inside one layer that looks exactly the same, and moves, scales and takes filters as one.
   - **Edit Contents** opens what's inside in a tab of its own. Save there puts the changes back as one undo step, keeping the smart object's size and place.
   - **Rasterize Smart Object** keeps just the pixels.

@@ -13,6 +13,9 @@ function refresh() { for (const p of app.projects) for (const d of p.docs) d.tou
  * Installs a .pixlplugin (from Edit › Plugins, opening it, or dropping it on the window): reads and checks it, tries
  * its shaders on the graphics card, then says what it adds and asks first. Returns whether it was installed.
  */
+/** A plugin change that couldn't be written to disk still holds until Pixl closes; say so. */
+const kept = (change: Promise<void>) => change.catch((err) => toast(`Couldn't save that change to your plugins (it lasts until Pixl closes): ${(err as Error)?.message ?? err}`, 'error'));
+
 export async function installPluginFile(file: Blob, name: string): Promise<boolean> {
   let m: PluginManifest;
   try { m = await readPlugin(file); } catch (e) { toast(`Couldn't install ${name}: ${(e as Error).message}.`, 'error'); return false; }
@@ -42,7 +45,7 @@ export async function installPluginFile(file: Blob, name: string): Promise<boole
     [{ id: 'cancel', label: 'Cancel' }, { id: 'install', label: old ? 'Update' : 'Install', primary: true }]);
   if (r !== 'install') return false;
   closeFrame(m.id); // (an update's script starts afresh)
-  installPlugin(m);
+  void kept(installPlugin(m));
   refresh();
   toast(`${old ? 'Updated' : 'Installed'} ${m.name}${menu ? ': find it under Filter › Plugins' : ''}.`);
   return true;
@@ -65,11 +68,11 @@ export function pluginsDialog() {
           m.formats?.length ? `Formats: ${m.formats.map((f) => f.label).join(', ')}` : '',
           m.main ? `Permissions: ${m.permissions.length ? m.permissions.join(', ') : 'none'}` : '',
         ].filter(Boolean).join(' · '))),
-      checkbox('On', p.enabled, (v) => { if (!v) closeFrame(m.id); setPluginEnabled(m.id, v); refresh(); render(); }, 'Turn it off to hide what it adds (layers using its effects show nothing until it\'s on again)'),
+      checkbox('On', p.enabled, (v) => { if (!v) closeFrame(m.id); void kept(setPluginEnabled(m.id, v)); refresh(); render(); }, 'Turn it off to hide what it adds (layers using its effects show nothing until it\'s on again)'),
       h('button', { class: 'btn small', type: 'button', onclick: async () => {
         const a = await ask(`Remove ${m.name}?`, 'Effect layers using its effects stay in your files, showing nothing, until it\'s installed again.',
           [{ id: 'no', label: 'Cancel' }, { id: 'yes', label: 'Remove', primary: true, danger: true }]);
-        if (a === 'yes') { closeFrame(m.id); removePlugin(m.id); refresh(); render(); toast(`Removed ${m.name}.`); }
+        if (a === 'yes') { closeFrame(m.id); void kept(removePlugin(m.id)); refresh(); render(); toast(`Removed ${m.name}.`); }
       } }, 'Remove'));
   };
   const render = () => {

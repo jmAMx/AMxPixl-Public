@@ -1,12 +1,15 @@
-# Pixl plugins
+# Pixl plugins: reference
+
+New to writing plugins? Start with [GUIDE.md](GUIDE.md). This page lists everything a plugin can have and do.
 
 A plugin is a `.pixlplugin` file: a zip of a folder holding `plugin.json` (and any files it names), or a
 `plugin.json` on its own. Install it from **Edit › Plugins**, or drop it on the Pixl window. Plugins are kept per
 user and survive updates.
 
-This version of Pixl takes **effect plugins**: GPU shaders with settings. Each becomes an effect like the built-in
-ones, under **Filter › Plugins** (applied to a layer, or kept editable) and **Layer › New Effect Layer › Plugins**.
-A shader runs on the graphics card and can't reach files or the internet, so effect plugins need no permissions.
+A plugin can have **effects** (GPU shaders with settings) and a **script** (commands, a panel, tools and file
+formats). Each effect becomes one like the built-in ones, under **Filter › Plugins** (applied to a layer, or kept
+editable) and **Layer › New Effect Layer › Plugins**. A shader runs on the graphics card and can't reach files or the
+internet, so effects need no permissions.
 
 ## plugin.json
 
@@ -51,7 +54,7 @@ every effect:
 - `docSize()`, `toDoc(p)`, `fromDoc(d)`, `uScale`, `uTime`, `uSeed`
 - `lum(rgb)`, `hash(vec2)`, `vnoise(vec2)`, `fbm(vec2, octaves)`, `pm()`/`unpm()` (averaging see-through colours)
 
-The `duotone` folder here is a working example: zip it and rename the zip to `.pixlplugin`.
+The `duotone` folder here is a working example. Pack any of the examples with `node pack.mjs duotone`.
 
 ## Script plugins
 
@@ -64,7 +67,7 @@ in plain words, when it's installed):
 | permission | lets it |
 |---|---|
 | `pixels:read` | read layers' pixels and the selection |
-| `pixels:write` | change layers and add new ones (each change is a step you can undo) |
+| `pixels:write` | change layers' pixels and settings, and add new layers (each change is a step you can undo) |
 | `commands` | run Pixl's own commands |
 | `files` | open and export files in its own formats (the person chooses the files; it sees only their contents) |
 
@@ -88,7 +91,9 @@ The `pixl` API (every call returns a promise):
 - `pixl.pixels(layerId, rect?)`: an image layer's own pixels as an `ImageData` (with its `x`, `y`). Needs `pixels:read`.
 - `pixl.selection()`: the selection as an `ImageData` the image's size (alpha: how selected), or null. Needs `pixels:read`.
 - `pixl.setPixels(layerId, imageData, x, y, label)`: puts pixels back, as one undo step. Needs `pixels:write`.
-- `pixl.addLayer(name, imageData?)`: a new image layer; returns its id. Needs `pixels:write`.
+- `pixl.setLayer(layerId, { name?, visible?, opacity?, blend? })`: a layer's settings in the layers panel (`opacity`
+  0 to 1, `blend` a mode such as `'multiply'` or `'screen'`), as one undo step. Needs `pixels:write`.
+- `pixl.addLayer(name, imageData?)`: a new image layer above the selected one; returns its id. Needs `pixels:write`.
 - `pixl.run(command, args)`: one of Pixl's commands. Needs `commands`. They are `newLayer`, `newGroup`,
   `duplicateLayer`, `deleteLayer`, `mergeDown`, `flatten`, `selectAll`, `deselect`, `invertSelection`,
   `fill` (`{ with: 'fg' | 'bg' }`), `undo`, `redo`, `selectLayer` (`{ id }`), and `filter`
@@ -101,7 +106,15 @@ The `pixl` API (every call returns a promise):
 - `pixl.onExport(id, (image) => bytes)`: turns the flattened picture (an `ImageData`) into the file's bytes
   (a `Uint8Array` or `ArrayBuffer`).
 
-Handlers may be `async`; throwing shows the person your error's message.
+Handlers may be `async`. An error (thrown by a handler, or by the script as it starts) shows in Pixl as an error
+message naming the plugin.
 
-The `pixel-tools` folder is a working example of a script plugin with commands and a panel; `ppm-and-stamp` has a
-tool and a file format.
+[pixl.d.ts](pixl.d.ts) has types for the whole API, for editors that read TypeScript declarations.
+
+Working examples: `pixel-tools` (commands and a panel), `layer-helpers` (automation with `pixl.run` and
+`pixl.setLayer`) and `ppm-and-stamp` (a tool and a file format).
+
+## Where plugins are kept
+
+In the desktop app each installed plugin is a file in the app's data folder (`plugins<id>.json`, under
+`%APPDATA%solutions.automatrix.amxpixl` on Windows). Pixl updates leave them alone.

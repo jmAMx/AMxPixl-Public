@@ -1,12 +1,15 @@
 import { FX_DEFS, hex3, type FxDef, type FxParam, type FxValue } from './effects';
-import { setSetting } from './settings';
+import { isDesktop } from './platform';
+import { saveSettingsSoon, setSetting } from './settings';
 import { unzip } from './unzip';
 
 /**
- * Plugins, installed per user from a .pixlplugin file: a zip holding plugin.json (or plugin.json on its own). This
- * version takes effect plugins: GPU shaders with settings, which become effects like the built-in ones (Filter ›
- * Plugins, and editable effect layers). A shader runs in the graphics card's own sandbox, with no access to files.
- * Kept with the other settings (mirrored to the settings file), so updates keep them.
+ * Plugins, installed per user from a .pixlplugin file: a zip holding plugin.json (or plugin.json on its own). Effects
+ * are GPU shaders with settings, which become effects like the built-in ones (Filter › Plugins, and editable effect
+ * layers); a shader runs in the graphics card's own sandbox, with no access to files. A script (commands, a panel,
+ * tools, file formats) runs in a sandboxed page: see ui/pluginhost.ts.
+ * In the desktop app each is a file in the app's data folder (the web view's own storage is small, and settings are
+ * written out often); in a browser they're kept in localStorage. Either way, updates keep them.
  */
 
 /** The plugin API version this Pixl speaks; a plugin says which it needs ("pixl"). */
@@ -45,9 +48,28 @@ export interface PluginManifest {
 export interface InstalledPlugin { manifest: PluginManifest; enabled: boolean; installed: number }
 
 const KEY = 'amxpixl.plugins';
-let installed: InstalledPlugin[] = (() => {
+let installed: InstalledPlugin[] = [];
+const fromStorage = () => {
   try { return (JSON.parse(localStorage.getItem(KEY) || '[]') as InstalledPlugin[]).filter((p) => p?.manifest?.id); } catch { return []; }
-})();
+};
+const tauri = () => import('@tauri-apps/api/core');
+
+/**
+ * Reads the installed plugins, at startup (before the app's own code runs, so files using their effects find them).
+ * Plugins kept in localStorage by earlier versions move to their files here.
+ */
+export async function loadPlugins() {
+  if (!isDesktop) { installed = fromStorage(); return; }
+  try {
+    const { invoke } = await tauri();
+    const files = (await invoke<string[]>('plugins_read')).flatMap((t) => { try { return [JSON.parse(t) as InstalledPlugin]; } catch { return []; } });
+    installed = files.filter((p) => p?.manifest?.id);
+    const old = fromStorage().filter((p) => !installed.some((q) => q.manifest.id === p.manifest.id));
+    for (const p of old) { await invoke('plugin_write', { id: p.manifest.id, json: JSON.stringify(p) }); installed.push(p); }
+    if (localStorage.getItem(KEY) !== null) { localStorage.removeItem(KEY); saveSettingsSoon(); }
+    installed.sort((a, b) => a.installed - b.installed);
+  } catch { installed = fromStorage(); /* the folder can't be read: what localStorage has, for this session */ }
+}
 
 export const installedPlugins = (): readonly InstalledPlugin[] => installed;
 export const effectKind = (pluginId: string, kind: string) => `plugin:${pluginId}:${kind}`;
@@ -193,17 +215,25 @@ export function registerPlugins() {
   for (const p of installed) if (p.enabled) for (const e of p.manifest.effects) FX_DEFS.push(pluginFx(p.manifest.id, e));
 }
 
-const save = () => { try { setSetting(KEY, JSON.stringify(installed)); } catch { /* storage full: kept for this session */ } };
+/** Keeps a plugin's change (its file, or the list in a browser). Throws if it can't, the change then lasting only this session. */
+async function save(id: string) {
+  if (!isDesktop) { setSetting(KEY, JSON.stringify(installed)); return; }
+  const { invoke } = await tauri();
+  const p = installed.find((x) => x.manifest.id === id);
+  await (p ? invoke('plugin_write', { id, json: JSON.stringify(p) }) : invoke('plugin_delete', { id }));
+}
 
 /** Installs a plugin (replacing one with the same id) and turns it on. */
 export function installPlugin(m: PluginManifest) {
   installed = [...installed.filter((p) => p.manifest.id !== m.id), { manifest: m, enabled: true, installed: Date.now() }];
-  save(); registerPlugins();
+  registerPlugins();
+  return save(m.id);
 }
 
-export function removePlugin(id: string) { installed = installed.filter((p) => p.manifest.id !== id); save(); registerPlugins(); }
+export function removePlugin(id: string) { installed = installed.filter((p) => p.manifest.id !== id); registerPlugins(); return save(id); }
 
 export function setPluginEnabled(id: string, on: boolean) {
   installed = installed.map((p) => (p.manifest.id === id ? { ...p, enabled: on } : p));
-  save(); registerPlugins();
+  registerPlugins();
+  return save(id);
 }
