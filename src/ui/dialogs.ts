@@ -288,6 +288,26 @@ export function repeatFilter(ask = false) {
   doc.commit(def.label, [{ key: pt.target.key, rect: { x: 0, y: 0, w: src.width, h: src.height }, before, after: null }]);
 }
 
+/**
+ * An effect (built in, or a plugin's) applied straight to the selected layer, with `settings` over its starting ones:
+ * what a plugin's run('filter', { kind, settings }) does. Throws if it can't (for the plugin to hear why).
+ */
+export function applyEffect(kind: string, settings: Record<string, FxValue>) {
+  const doc = app.doc, def = fxDef(kind);
+  if (!doc || !def) throw new Error(`there's no effect "${kind}"`);
+  const pt = doc.paintTarget();
+  if (!pt) throw new Error('the selected layer has no pixels to change (an image layer or a mask)');
+  const fx = defaultFx(kind);
+  for (const p of def.params) if (p.key in settings) fx.v[p.key] = settings[p.key];
+  const src = doc.canvasOf(pt.target), before = cloneCanvas(src);
+  const r = applyFilter(before, fx, pixelsPerDocPixel(pt.target));
+  if (!r) throw new Error(`${def.label} couldn't run on the graphics card`);
+  const x = ctx2d(src);
+  x.save(); x.globalCompositeOperation = 'copy'; x.drawImage(maskedMerge(before, r, doc.maskForLayer(pt.target)), 0, 0); x.restore();
+  doc.markPixels(pt.target.key);
+  doc.commit(def.label, [{ key: pt.target.key, rect: { x: 0, y: 0, w: src.width, h: src.height }, before, after: null }]);
+}
+
 /** Content-aware fill runs in a worker (core/inpaint.ts): one at a time, started the first time it's used. */
 let inpaintPool: WorkerPool<InpaintJob, { rgba: Uint8ClampedArray }> | null = null;
 

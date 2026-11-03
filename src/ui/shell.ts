@@ -13,6 +13,7 @@ import { FX_DEFS, FX_GROUPS } from '../core/effects';
 import { preferencesDialog, type ShortcutRow } from './prefsdialog';
 import { guideDialog } from './guide';
 import { pluginsDialog } from './pluginsdialog';
+import { pluginCommandItems } from './pluginhost';
 import { tabletMenuItems } from '../tools/pressure';
 import { propertiesPanel } from './properties';
 import { canvasScrollbars } from './scrollbars';
@@ -270,7 +271,11 @@ const MENUS: MenuDef[] = [
       // Every effect but the depth ones, applied to the layer (or kept editable from the dialog).
       // (A group appears once it has something: Plugins, once a plugin with effects is installed.)
       ...FX_GROUPS.filter((g) => g !== 'Depth').map((g) => ({
-        label: g, sub: () => FX_DEFS.filter((d) => d.group === g).map((d) => ({ label: `${d.label}…`, disabled: !app.doc?.active, onClick: () => filterDialog(d.kind) })),
+        label: g, sub: () => [
+          ...FX_DEFS.filter((d) => d.group === g).map((d) => ({ label: `${d.label}…`, disabled: !app.doc?.active, onClick: () => filterDialog(d.kind) })),
+          // Script plugins' commands and panels go with the plugin effects.
+          ...(g === 'Plugins' ? pluginCommandItems() : []),
+        ],
       })),
     ],
   },

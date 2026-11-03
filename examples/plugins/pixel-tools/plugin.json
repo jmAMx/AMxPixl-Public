@@ -1,0 +1,15 @@
+{
+  "id": "solutions.automatrix.example-pixel-tools",
+  "name": "Pixel Tools",
+  "version": "1.0.0",
+  "author": "AMx",
+  "description": "An example script plugin: commands that change pixels, and a panel.",
+  "pixl": 1,
+  "permissions": ["pixels:read", "pixels:write", "commands"],
+  "main": "main.js",
+  "commands": [
+    { "id": "invert", "label": "Invert (inside the selection)" },
+    { "id": "noise-layer", "label": "Add a noise layer" }
+  ],
+  "panel": { "title": "Pixel Tools", "width": 280, "height": 220 }
+}

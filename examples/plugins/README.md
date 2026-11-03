@@ -51,4 +51,41 @@ every effect:
 - `docSize()`, `toDoc(p)`, `fromDoc(d)`, `uScale`, `uTime`, `uSeed`
 - `lum(rgb)`, `hash(vec2)`, `vnoise(vec2)`, `fbm(vec2, octaves)`, `pm()`/`unpm()` (averaging see-through colours)
 
-The `duotone` folder here is a working example: zip what's inside it and rename the zip to `.pixlplugin`.
+The `duotone` folder here is a working example: zip it and rename the zip to `.pixlplugin`.
+
+## Script plugins
+
+A plugin can also have a script (`"main": "main.js"`): **commands** (listed under Filter › Plugins) and a **panel** (a
+floating window showing the script's own page). The script runs in a sandbox: its own page, cut off from Pixl, your
+files, the network and new windows. It works only through `pixl`, and only as far as its `permissions` allow (shown,
+in plain words, when it's installed):
+
+| permission | lets it |
+|---|---|
+| `pixels:read` | read layers' pixels and the selection |
+| `pixels:write` | change layers and add new ones (each change is a step you can undo) |
+| `commands` | run Pixl's own commands |
+
+```json
+"permissions": ["pixels:read", "pixels:write"],
+"main": "main.js",
+"commands": [{ "id": "invert", "label": "Invert" }],
+"panel": { "title": "My Panel", "width": 280, "height": 220 }
+```
+
+The `pixl` API (every call returns a promise):
+
+- `pixl.onCommand(id, async () => { … })`: what a command does.
+- `pixl.image()`: the open image: `name`, `width`, `height`, `activeLayer`, `selection` (true/false) and `layers`
+  (`id`, `name`, `type`, `visible`, `opacity`, `blend`, bottom to top).
+- `pixl.pixels(layerId, rect?)`: an image layer's own pixels as an `ImageData` (with its `x`, `y`). Needs `pixels:read`.
+- `pixl.selection()`: the selection as an `ImageData` the image's size (alpha: how selected), or null. Needs `pixels:read`.
+- `pixl.setPixels(layerId, imageData, x, y, label)`: puts pixels back, as one undo step. Needs `pixels:write`.
+- `pixl.addLayer(name, imageData?)`: a new image layer; returns its id. Needs `pixels:write`.
+- `pixl.run(command, args)`: one of Pixl's commands. Needs `commands`. They are `newLayer`, `newGroup`,
+  `duplicateLayer`, `deleteLayer`, `mergeDown`, `flatten`, `selectAll`, `deselect`, `invertSelection`,
+  `fill` (`{ with: 'fg' | 'bg' }`), `undo`, `redo`, `selectLayer` (`{ id }`), and `filter`
+  (`{ kind, settings }`, any effect: `{ kind: 'gblur', settings: { radius: 4 } }`).
+- `pixl.toast(text)`, `pixl.colors()`, `pixl.setColors(fg, bg)`.
+
+The `pixel-tools` folder is a working example of a script plugin with commands and a panel.

@@ -11,8 +11,15 @@ import { unzip } from './unzip';
 
 /** The plugin API version this Pixl speaks; a plugin says which it needs ("pixl"). */
 export const PLUGIN_API = 1;
-/** Permissions a plugin may ask for in this version (shaders need none; scripts and panels come later). */
-const PERMISSIONS: string[] = [];
+/**
+ * Permissions a script plugin may ask for, and what each lets it do (shown when installing). Shaders need none; a
+ * script with none can still show its panel, read the image's size and layer list, and show messages.
+ */
+export const PERMISSIONS: Record<string, string> = {
+  'pixels:read': 'see the pixels of your layers and the selection',
+  'pixels:write': 'change layers and add new ones (each change is a step you can undo)',
+  commands: 'run Pixl\'s own commands (filters, new layers, selections, undo)',
+};
 
 export interface PluginEffect {
   kind: string; label: string; params: FxParam[]; glsl: string;
@@ -23,6 +30,12 @@ export interface PluginEffect {
 }
 export interface PluginManifest {
   id: string; name: string; version: string; author: string; description: string; pixl: number; permissions: string[]; effects: PluginEffect[];
+  /** A script plugin's code (from its "main" file), run in a sandbox (core/pluginhost.ts). */
+  main?: string;
+  /** Commands it adds (Filter › Plugins), handled by its script. */
+  commands: { id: string; label: string }[];
+  /** A panel of its own, showing its script's page. */
+  panel?: { title: string; width: number; height: number };
 }
 export interface InstalledPlugin { manifest: PluginManifest; enabled: boolean; installed: number }
 
@@ -68,15 +81,27 @@ function check(raw: unknown, readFile: (path: string) => string | null): PluginM
   const version = str(m.version, 20) ?? '1.0';
   const pixl = num(m.pixl) ?? 1;
   if (pixl > PLUGIN_API) throw new Error(`it needs a newer Pixl (plugin version ${pixl}; this Pixl takes ${PLUGIN_API})`);
-  const permissions = Array.isArray(m.permissions) ? m.permissions.map(String) : [];
-  const unknown = permissions.filter((p) => !PERMISSIONS.includes(p));
-  if (unknown.length) throw new Error(`it asks for ${unknown.map((p) => `"${p}"`).join(', ')}, which this version of Pixl can't give plugins yet`);
+  const permissions = [...new Set(Array.isArray(m.permissions) ? m.permissions.map(String) : [])];
+  const unknown = permissions.filter((p) => !(p in PERMISSIONS));
+  if (unknown.length) throw new Error(`it asks for ${unknown.map((p) => `"${p}"`).join(', ')}, which this version of Pixl can't give plugins`);
   const effects = (Array.isArray(m.effects) ? m.effects : []).map((e, i) => checkEffect(e as Record<string, unknown>, i, readFile));
-  if (!effects.length) throw new Error('it has nothing this version of Pixl can use (it takes effect plugins)');
   if (effects.length > 64) throw new Error('it has more than 64 effects');
   const kinds = new Set<string>();
   for (const e of effects) { if (kinds.has(e.kind)) throw new Error(`two effects are called "${e.kind}"`); kinds.add(e.kind); }
-  return { id, name, version, author: str(m.author, 80) ?? '', description: str(m.description, 400) ?? '', pixl, permissions, effects };
+  // A script: its code, the commands it handles and its panel.
+  const main = typeof m.main === 'string' ? readFile(m.main) : null;
+  if (typeof m.main === 'string' && main === null) throw new Error(`its "main" file "${m.main}" isn't in the plugin`);
+  if (main && main.length > 524288) throw new Error('its script is over 512 KB');
+  const commands = (Array.isArray(m.commands) ? m.commands : []).map((c, i) => {
+    const cid = str((c as Record<string, unknown>)?.id, 40);
+    if (!cid || !/^[a-z0-9][a-z0-9-]*$/.test(cid)) throw new Error(`command ${i + 1} needs an "id" of lowercase letters, digits and dashes`);
+    return { id: cid, label: str((c as Record<string, unknown>).label, 40) ?? cid };
+  });
+  const pw = m.panel as Record<string, unknown> | undefined;
+  const panel = pw && typeof pw === 'object' ? { title: str(pw.title, 40) ?? name, width: Math.min(900, Math.max(200, num(pw.width) ?? 320)), height: Math.min(900, Math.max(120, num(pw.height) ?? 360)) } : undefined;
+  if ((commands.length || panel) && !main) throw new Error('it has commands or a panel but no "main" script to run them');
+  if (!effects.length && !main) throw new Error('it has nothing Pixl can use: no effects and no script');
+  return { id, name, version, author: str(m.author, 80) ?? '', description: str(m.description, 400) ?? '', pixl, permissions, effects, ...(main ? { main } : {}), commands, ...(panel ? { panel } : {}) };
 }
 
 function checkEffect(e: Record<string, unknown>, i: number, readFile: (path: string) => string | null): PluginEffect {

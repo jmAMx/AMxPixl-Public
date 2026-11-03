@@ -38,7 +38,9 @@ Artboards (several canvases, each its own size, in one file), filters that stay 
   - This first step takes **effect plugins**: GPU shaders with settings that become effects like the built-in ones, under Filter › Plugins and as editable effect layers.
   - Installing says what a plugin adds and asks first. A plugin whose shader has an error is refused, with the error shown.
   - Plugins can be turned off or removed, and Pixl updates keep them. A file using a missing plugin's effect still opens, and that layer changes nothing until the plugin is back.
-  - An example plugin and a guide to writing them are in `examples/plugins`.
+  - **Script plugins** add commands (Filter › Plugins) and panels of their own. A script runs in a sandbox, cut off from Pixl, your files, the internet and new windows.
+  - Scripts work through Pixl's plugin API: read and change layers' pixels (each change one undo step), add layers, read the selection, run Pixl's own commands, and set colours. Each of these needs a permission, which is listed in plain words when the plugin is installed.
+  - Example plugins and a guide to writing them are in `examples/plugins`.
 - **Smart objects** (Layer › Smart Object): **Convert to Smart Object** puts the selected layers inside one layer that looks exactly the same, and moves, scales and takes filters as one.
   - **Edit Contents** opens what's inside in a tab of its own. Save there puts the changes back as one undo step, keeping the smart object's size and place.
   - **Rasterize Smart Object** keeps just the pixels.
