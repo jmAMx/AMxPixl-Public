@@ -6,12 +6,15 @@ import { Project } from './project';
 import { textureKeys } from './model3d';
 import { VIDEO_EXT } from './import/animated';
 import { WorkerPool } from './workers/pool';
+import { installedPlugins } from './plugins';
 
 const MAGIC = 'PIXL';
 /** The newest .pixl version this Pixl reads (see encodePixl). */
 const FORMAT_VERSION = 2;
 
 export const IMAGE_EXT = ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'avif', 'ico', 'svg'];
+/** File types installed plugins open (core/plugins.ts), for the Open dialog. */
+const pluginOpenExt = () => installedPlugins().filter((p) => p.enabled && p.manifest.main).flatMap((p) => (p.manifest.formats ?? []).filter((f) => f.open).flatMap((f) => f.extensions));
 const IMAGE_TYPES = { 'image/*': IMAGE_EXT.map((e) => '.' + e) } as Record<string, string[]>;
 const PIXL_TYPES = { 'application/x-amxpixl': ['.pixl'] } as Record<string, string[]>;
 
@@ -208,7 +211,7 @@ export async function pickFiles(kind: 'any' | 'image' | 'plugin', multiple = tru
   if (isDesktop) {
     const filters: Filters = kind === 'image'
       ? [{ name: 'Images', extensions: IMAGE_EXT }]
-      : [{ name: 'Images, projects, layered files and video', extensions: ['pixl', ...LAYERED_EXT, ...IMAGE_EXT, ...VIDEO_EXT] }, { name: 'Pixl project', extensions: ['pixl'] },
+      : [{ name: 'Images, projects, layered files and video', extensions: ['pixl', ...LAYERED_EXT, ...IMAGE_EXT, ...VIDEO_EXT, ...pluginOpenExt()] }, { name: 'Pixl project', extensions: ['pixl'] },
         { name: 'Photoshop / GIMP', extensions: LAYERED_EXT }, { name: 'Images', extensions: IMAGE_EXT }, { name: 'Video (opens frame by frame)', extensions: VIDEO_EXT }];
     const paths = await openDialog(filters, multiple);
     return Promise.all(paths.map(async (p) => ({ file: await readPath(p), ref: { name: fileName(p), path: p } })));

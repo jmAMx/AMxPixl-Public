@@ -21,6 +21,7 @@ import { encodePsd } from './core/export/psd';
 import { encodeTiff } from './core/export/tiff';
 import { encodeBmp, encodeIco } from './core/export/bmp';
 import { installPluginFile } from './ui/pluginsdialog';
+import { exportWithPlugin, formatOpening, openWithPlugin, pluginFormatExt } from './ui/pluginhost';
 import { layerBoxReady, trimRect } from './core/bounds';
 import { Stroke } from './core/brush';
 import { glops } from './core/glops';
@@ -151,6 +152,8 @@ export async function openFiles(files: Picked[]) {
     try {
       const ext = extOf(file.name);
       if (ext === 'pixlplugin') { await installPluginFile(file, file.name); continue; }
+      // A format a plugin opens: its script reads the file into layers.
+      if (formatOpening(ext)) { app.addDoc(await openWithPlugin(file)); continue; }
       let p: Project;
       let animated: Awaited<ReturnType<typeof probeAnimated>>;
       if (ext === 'pixl') {
@@ -252,7 +255,7 @@ export async function placeFiles(files: File[]) {
       const ext = extOf(f.name);
       let anim = false;
       if (ANIMATED_EXT.includes(ext)) { const a = await probeAnimated(f, ext); anim = !!a; a?.close(); }
-      if (['pixl', 'psd', 'xcf', 'pixlplugin', ...VIDEO_EXT].includes(ext) || anim) { await openFiles([{ file: f, ref: { name: f.name } }]); continue; }
+      if (['pixl', 'psd', 'xcf', 'pixlplugin', ...VIDEO_EXT].includes(ext) || anim || formatOpening(ext)) { await openFiles([{ file: f, ref: { name: f.name } }]); continue; }
       placeCanvas(await decodeImage(f), baseName(f.name), null, true);
     } catch (e) {
       toast(`Couldn't place ${f.name}: ${(e as Error).message}`, 'error');
@@ -522,7 +525,7 @@ export async function saveDoc(doc: Doc | null = app.doc, saveAs = false) {
   }
 }
 
-export type ExportOpts = { format: 'png' | 'jpeg' | 'webp' | 'tiff' | 'bmp' | 'ico' | 'psd'; quality: number; scale: number; nearest?: boolean };
+export type ExportOpts = { format: 'png' | 'jpeg' | 'webp' | 'tiff' | 'bmp' | 'ico' | 'psd' | `plugin:${string}`; quality: number; scale: number; nearest?: boolean };
 
 /** The settings of the last export (this session), for File › Quick Export. */
 let lastExport: ExportOpts | null = null;
@@ -551,6 +554,7 @@ async function exported(doc: Doc, o: ExportOpts): Promise<{ blob: Blob; w: numbe
   }
   let c = flatten(doc, o.scale, { nearest: o.nearest });
   if (o.format === 'tiff') return { blob: await encodeTiff(c), w: c.width, h: c.height };
+  if (o.format.startsWith('plugin:')) return { blob: await exportWithPlugin(o.format, c), w: c.width, h: c.height };
   if (o.format === 'bmp') return { blob: encodeBmp(c), w: c.width, h: c.height };
   if (o.format === 'ico') { const s = Math.min(256, Math.max(16, c.width, c.height)); return { blob: await encodeIco(c, o.nearest), w: s, h: s }; }
   if (o.format === 'jpeg') {
@@ -564,8 +568,8 @@ async function exported(doc: Doc, o: ExportOpts): Promise<{ blob: Blob; w: numbe
   return { blob: await canvasBlob(c, `image/${o.format}`, o.format === 'png' ? undefined : o.quality), w: c.width, h: c.height };
 }
 
-const extOfFormat = (f: ExportOpts['format']) => (f === 'jpeg' ? 'jpg' : f === 'tiff' ? 'tif' : f);
-const mimeOf = (f: ExportOpts['format']) => (f === 'psd' ? 'image/vnd.adobe.photoshop' : f === 'ico' ? 'image/x-icon' : `image/${f}`);
+const extOfFormat = (f: ExportOpts['format']) => (f.startsWith('plugin:') ? pluginFormatExt(f) : f === 'jpeg' ? 'jpg' : f === 'tiff' ? 'tif' : f);
+const mimeOf = (f: ExportOpts['format']) => (f.startsWith('plugin:') ? 'application/octet-stream' : f === 'psd' ? 'image/vnd.adobe.photoshop' : f === 'ico' ? 'image/x-icon' : `image/${f}`);
 const acceptOf = (f: ExportOpts['format']) => ({ [mimeOf(f)]: f === 'tiff' ? ['.tif', '.tiff'] : [`.${extOfFormat(f)}`] });
 /** What changed on the way into a Photoshop file, as a sentence for after the export ('' for other formats). */
 const psdNote = (o: ExportOpts) => (o.format === 'psd' && psdNotes.length ? ` ${psdNotes.join(' ')}` : '');

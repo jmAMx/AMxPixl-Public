@@ -1,6 +1,7 @@
 import { app } from '../app';
 import * as A from '../actions';
-import { flatLayers } from '../core/document';
+import { Doc, flatLayers, newId } from '../core/document';
+import type { PInfo, Tool } from '../tools/tool';
 import { cropCanvas, ctx2d, newCanvas } from '../core/layers';
 import { installedPlugins, PERMISSIONS, type InstalledPlugin } from '../core/plugins';
 import type { RasterLayer } from '../core/types';
@@ -23,12 +24,23 @@ import { icon, toast, type MenuItem } from './widgets';
 const BOOTSTRAP = `(() => {
   for (const k of ['__TAURI_INTERNALS__', '__TAURI__', '__TAURI_IPC__', 'ipc']) { try { delete window[k]; } catch {} try { Object.defineProperty(window, k, { value: undefined }); } catch {} }
   try { if (window.chrome) Object.defineProperty(window.chrome, 'webview', { value: undefined }); } catch {}
-  let seq = 0; const waiting = new Map(), commands = new Map();
+  let seq = 0; const waiting = new Map(), commands = new Map(), handlers = { open: new Map(), export: new Map() }, tools = new Map();
   const call = (method, args) => new Promise((res, rej) => { const id = ++seq; waiting.set(id, { res, rej }); parent.postMessage({ pixl: 1, type: 'call', id, method, args }, '*'); });
   const img = (v) => v && new ImageData(v.data, v.width, v.height);
   addEventListener('message', async (e) => {
     const m = e.data; if (e.source !== parent || !m || m.pixl !== 1) return;
     if (m.type === 'result') { const w = waiting.get(m.id); if (!w) return; waiting.delete(m.id); if (m.ok) w.res(m.value); else w.rej(new Error(m.error)); }
+    if (m.type === 'tool') { const t = tools.get(m.id); if (t && t[m.event]) { try { await t[m.event](m.point); } catch (err) { console.error(err); } } return; }
+    if (m.type === 'request') {
+      // Pixl asks: open a file of one of its formats (bytes in, layers out), or export the picture (bytes out).
+      const reply = (ok, value) => parent.postMessage({ pixl: 1, type: 'response', id: m.id, ok, ...(ok ? { value } : { error: value }) }, '*');
+      try {
+        const f = handlers[m.kind] && handlers[m.kind].get(m.target);
+        if (!f) throw new Error('nothing handles ' + m.kind + ' for "' + m.target + '"');
+        reply(true, m.kind === 'open' ? await f(m.bytes, m.name) : await f(img(m.image)));
+      } catch (err) { reply(false, String((err && err.message) || err)); }
+      return;
+    }
     if (m.type === 'command') {
       const f = commands.get(m.id);
       try { if (!f) throw new Error('nothing handles "' + m.id + '"'); await f(); }
@@ -37,6 +49,9 @@ const BOOTSTRAP = `(() => {
   });
   window.pixl = Object.freeze({
     onCommand: (id, f) => { commands.set(id, f); },
+    onTool: (id, h) => { tools.set(id, h); },
+    onOpen: (format, f) => { handlers.open.set(format, f); },
+    onExport: (format, f) => { handlers.export.set(format, f); },
     image: () => call('image'),
     pixels: async (layerId, rect) => { const v = await call('pixels', { layerId, rect }); return v && Object.assign(img(v), { x: v.x, y: v.y }); },
     setPixels: (layerId, image, x = 0, y = 0, label) => call('setPixels', { layerId, x, y, width: image.width, height: image.height, data: image.data, label }),
@@ -123,6 +138,109 @@ export function openPluginPanel(id: string) {
   const p = installedPlugins().find((x) => x.manifest.id === id && x.enabled);
   if (!p) return;
   frameFor(p).wrap.classList.remove('away');
+}
+
+// ---------- Pixl asking a plugin: file formats ----------
+
+const requests = new Map<number, { frame: Frame; res: (v: unknown) => void; rej: (e: Error) => void }>();
+let reqSeq = 0;
+
+/** Asks a plugin's script something (open or export), with a minute to answer. */
+async function request(p: InstalledPlugin, kind: 'open' | 'export', target: string, payload: Record<string, unknown>): Promise<unknown> {
+  const f = frameFor(p);
+  await f.ready;
+  return new Promise((res, rej) => {
+    const id = ++reqSeq;
+    requests.set(id, { frame: f, res, rej });
+    setTimeout(() => { if (requests.delete(id)) rej(new Error(`${p.manifest.name} didn't answer within a minute`)); }, 60000);
+    f.iframe.contentWindow?.postMessage({ pixl: 1, type: 'request', id, kind, target, ...payload }, '*');
+  });
+}
+
+/** The enabled plugin formats, each with its plugin. */
+export function pluginFormats() {
+  return installedPlugins().filter((p) => p.enabled && p.manifest.main).flatMap((p) => (p.manifest.formats ?? []).map((f) => ({ p, f })));
+}
+
+/** The file extension of a plugin export format ("plugin:<id>:<format>"): its first. */
+export const pluginFormatExt = (format: string) => {
+  const [, pid, fid] = format.split(':');
+  return pluginFormats().find(({ p, f }) => p.manifest.id === pid && f.id === fid)?.f.extensions[0] ?? 'bin';
+};
+
+/** A plugin that opens files ending in `.ext`, if one is installed. */
+export const formatOpening = (ext: string) => pluginFormats().find(({ f }) => f.open && f.extensions.includes(ext));
+
+/**
+ * Opens a file through the plugin whose format it is: its script gets the bytes and gives back the picture as layers
+ * ({ width, height, layers: [{ name, image, x, y }] }), which become an image here.
+ */
+export async function openWithPlugin(file: File): Promise<Doc> {
+  const ext = file.name.split('.').pop()!.toLowerCase(), fm = formatOpening(ext)!;
+  const v = await request(fm.p, 'open', fm.f.id, { bytes: new Uint8Array(await file.arrayBuffer()), name: file.name }) as
+    { width?: number; height?: number; layers?: { name?: string; image?: ImageData; x?: number; y?: number }[] } | null;
+  const w = Math.round(Number(v?.width)), hh = Math.round(Number(v?.height));
+  if (!v || !(w > 0 && hh > 0) || !Array.isArray(v.layers) || !v.layers.length) throw new Error(`${fm.p.manifest.name} gave back no picture (it should return width, height and layers)`);
+  const doc = new Doc(file.name, w, hh);
+  for (const [i, l] of v.layers.entries()) {
+    if (!(l?.image instanceof ImageData)) throw new Error(`${fm.p.manifest.name}: layer ${i + 1} has no image`);
+    const c = newCanvas(l.image.width, l.image.height);
+    ctx2d(c).putImageData(l.image, 0, 0);
+    doc.layers.push({ id: newId(), type: 'raster', name: String(l.name ?? `Layer ${i + 1}`).slice(0, 60), visible: true, opacity: 1, blend: 'normal', key: doc.addCanvas(c),
+      t: { x: Math.round(Number(l.x) || 0), y: Math.round(Number(l.y) || 0), sx: 1, sy: 1, rot: 0 } });
+  }
+  doc.activeId = doc.layers[doc.layers.length - 1].id;
+  doc.resetHistory('Open');
+  return doc;
+}
+
+/** Exports the picture through a plugin format ("plugin:<id>:<format>"): its script turns the pixels into the file. */
+export async function exportWithPlugin(format: string, picture: HTMLCanvasElement): Promise<Blob> {
+  const [, pid, fid] = format.split(':');
+  const fm = pluginFormats().find(({ p, f }) => p.manifest.id === pid && f.id === fid && f.export);
+  if (!fm) throw new Error('that plugin format isn\'t installed');
+  const image = ctx2d(picture, true).getImageData(0, 0, picture.width, picture.height);
+  const out = await request(fm.p, 'export', fid, { image: { width: image.width, height: image.height, data: image.data } });
+  if (!(out instanceof Uint8Array) && !(out instanceof ArrayBuffer)) throw new Error(`${fm.p.manifest.name} gave back no file (it should return bytes)`);
+  return new Blob([out as BlobPart]);
+}
+
+// ---------- plugin tools ----------
+
+/**
+ * A plugin's tool: while it's chosen, presses, drags and letting go on the canvas go to the plugin's script (canvas
+ * position, pressure, modifier keys); moves are sent at most once a frame. What the tool does, it does through the API.
+ */
+class PluginTool implements Tool {
+  id: string; name: string; key = ''; icon = 'plugin' as const; hint: string;
+  private pressed = false;
+  private pending: PInfo | null = null;
+  constructor(private p: InstalledPlugin, private t: { id: string; name: string; hint: string }) {
+    this.id = `plugin:${p.manifest.id}:${t.id}`; this.name = t.name; this.hint = t.hint || `${t.name} (from the plugin ${p.manifest.name})`;
+  }
+  cursor() { return 'crosshair'; }
+  private send(event: 'down' | 'move' | 'up', q: PInfo) {
+    const f = frameFor(this.p);
+    void f.ready.then(() => f.iframe.contentWindow?.postMessage({ pixl: 1, type: 'tool', id: this.t.id, event,
+      point: { x: q.x, y: q.y, pressure: q.pressure, shift: q.shift, alt: q.alt, ctrl: q.ctrl } }, '*'));
+  }
+  down(q: PInfo) { this.pressed = true; this.send('down', q); }
+  move(q: PInfo) {
+    if (!this.pressed) return;
+    if (!this.pending) requestAnimationFrame(() => { if (this.pending && this.pressed) this.send('move', this.pending); this.pending = null; });
+    this.pending = q;
+  }
+  up(q: PInfo) { if (!this.pressed) return; this.pressed = false; this.pending = null; this.send('up', q); }
+  cancel() { this.pressed = false; this.pending = null; }
+}
+
+/** Puts the enabled plugins' tools in the toolbox (after Pixl's own), and takes away those that are gone. */
+export function refreshPluginTools() {
+  const own = app.tools.filter((t) => !t.id.startsWith('plugin:'));
+  const add = installedPlugins().filter((p) => p.enabled && p.manifest.main).flatMap((p) => (p.manifest.tools ?? []).map((t) => new PluginTool(p, t)));
+  app.tools = [...own, ...add];
+  if (app.tool?.id.startsWith('plugin:') && !add.some((t) => t.id === app.tool.id)) app.setTool('move');
+  app.setPrefs({});
 }
 
 /** Filter › Plugins: each script plugin's commands, and its panel. */
@@ -236,6 +354,14 @@ window.addEventListener('message', (e) => {
   if (!f || !m || m.pixl !== 1) return;
   if (m.type === 'ready') { f.onReady(); return; }
   if (m.type === 'failed') { toast(`${f.p.manifest.name}: ${m.command} failed: ${m.error}`, 'error'); return; }
+  if (m.type === 'response') {
+    const w = requests.get(Number(m.id));
+    if (!w || w.frame !== f) return;
+    requests.delete(Number(m.id));
+    const r = m as unknown as { ok: boolean; value?: unknown; error?: string };
+    if (r.ok) w.res(r.value); else w.rej(new Error(r.error));
+    return;
+  }
   if (m.type !== 'call') return;
   const reply = (ok: boolean, value: unknown) => f.iframe.contentWindow?.postMessage({ pixl: 1, type: 'result', id: m.id, ok, ...(ok ? { value } : { error: String(value) }) }, '*');
   handle(f.p, String(m.method), m.args ?? {}).then((v) => reply(true, v), (err) => reply(false, (err as Error)?.message ?? err));

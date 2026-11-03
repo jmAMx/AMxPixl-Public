@@ -11,7 +11,7 @@ import { blurTool, burnTool, dodgeTool, sharpenTool, smudgeTool } from './tools/
 import { liquifyTool } from './tools/liquify';
 import { spotTool } from './tools/spot';
 import { registerPlugins } from './core/plugins';
-import { openPluginPanel, runPluginCommand } from './ui/pluginhost';
+import { openPluginPanel, refreshPluginTools, runPluginCommand } from './ui/pluginhost';
 import { ellipseSelectTool, lassoTool, rectSelectTool, wandTool } from './tools/select';
 import { handTool, shapeTool, zoomTool } from './tools/shape';
 import { textTool } from './tools/text';
@@ -30,6 +30,7 @@ import { ask, toast } from './ui/widgets';
 // Installed plugins' effects, before any file opens (one using them should find them).
 registerPlugins();
 app.tools = [moveTool, artboardTool, rectSelectTool, ellipseSelectTool, lassoTool, wandTool, cropTool, pickerTool, brushTool, eraserTool, cloneTool, healTool, spotTool, dodgeTool, burnTool, blurTool, sharpenTool, smudgeTool, liquifyTool, gradientTool, fillTool, penTool, textTool, shapeTool, handTool, zoomTool];
+refreshPluginTools();
 app.tool = brushTool;
 app.applyPrefs();
 document.title = `AMxPixl ${__APP_VERSION__}`;

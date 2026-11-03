@@ -40,6 +40,7 @@ Artboards (several canvases, each its own size, in one file), filters that stay 
   - Plugins can be turned off or removed, and Pixl updates keep them. A file using a missing plugin's effect still opens, and that layer changes nothing until the plugin is back.
   - **Script plugins** add commands (Filter › Plugins) and panels of their own. A script runs in a sandbox, cut off from Pixl, your files, the internet and new windows.
   - Scripts work through Pixl's plugin API: read and change layers' pixels (each change one undo step), add layers, read the selection, run Pixl's own commands, and set colours. Each of these needs a permission, which is listed in plain words when the plugin is installed.
+  - Script plugins can also add **tools** to the toolbox (they get presses, drags and releases on the canvas) and **file formats** that File › Open reads into layers and Export writes. A format plugin sees only the files you choose to open or export, and can't take over Pixl's own formats.
   - Example plugins and a guide to writing them are in `examples/plugins`.
 - **Smart objects** (Layer › Smart Object): **Convert to Smart Object** puts the selected layers inside one layer that looks exactly the same, and moves, scales and takes filters as one.
   - **Edit Contents** opens what's inside in a tab of its own. Save there puts the changes back as one undo step, keeping the smart object's size and place.

@@ -46,7 +46,7 @@ const TOPICS: [string, string[]][] = [
   ['Plugins', [
     '**Edit › Plugins** installs a plugin from its .pixlplugin file (or drop the file on the window), and turns plugins off or removes them. Installing shows what a plugin adds and asks first. Plugins stay when Pixl updates.',
     '**Effect plugins** add effects under **Filter › Plugins** and as effect layers, working like the built-in ones. They run on the graphics card and can\'t reach your files or the internet.',
-    '**Script plugins** add commands (also under Filter › Plugins) and panels. Their scripts run walled off from your files and the internet, and can only do what their permissions allow (see your pixels, change layers, run Pixl\'s commands), as listed when you install them.',
+    '**Script plugins** add commands (also under Filter › Plugins), panels, tools (in the toolbox) and file formats (in File › Open and Export). Their scripts run walled off from your files and the internet, and can only do what their permissions allow (see your pixels, change layers, run Pixl\'s commands), as listed when you install them.',
   ]],
   ['Preferences and shortcuts', [
     '**Edit › Preferences** (Ctrl+K) sets the theme, the toolbox, how often crash-recovery copies are kept, and every **keyboard shortcut**: click a command\'s keys and press new ones. **Help › Keyboard Shortcuts** (F1) lists them all.',

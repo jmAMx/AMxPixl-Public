@@ -2,12 +2,12 @@ import { app } from '../app';
 import { pickFiles } from '../core/fileio';
 import { fxEngine } from '../core/fx';
 import { installedPlugins, installPlugin, PERMISSIONS, pluginFx, readPlugin, removePlugin, setPluginEnabled, type InstalledPlugin, type PluginManifest } from '../core/plugins';
-import { closeFrame } from './pluginhost';
+import { closeFrame, refreshPluginTools } from './pluginhost';
 import { h } from './dom';
 import { ask, checkbox, dialog, toast } from './widgets';
 
 /** After plugins change: open images draw again (an effect that came or went) and the panels catch up. */
-function refresh() { for (const p of app.projects) for (const d of p.docs) d.touch('meta'); }
+function refresh() { for (const p of app.projects) for (const d of p.docs) d.touch('meta'); refreshPluginTools(); }
 
 /**
  * Installs a .pixlplugin (from Edit › Plugins, opening it, or dropping it on the window): reads and checks it, tries
@@ -21,24 +21,30 @@ export async function installPluginFile(file: Blob, name: string): Promise<boole
     if (err) { toast(`Couldn't install ${m.name}: the shader of "${e.label}" has an error: ${err.split('\n').find((l) => l.trim()) ?? err}`, 'error'); return false; }
   }
   const old = installedPlugins().find((p) => p.manifest.id === m.id);
-  const adds = [
-    m.effects.length ? `${m.effects.length} effect${m.effects.length === 1 ? '' : 's'} (${m.effects.map((e) => e.label).join(', ')})` : '',
-    m.commands.length ? `${m.commands.length === 1 ? 'a command' : `${m.commands.length} commands`} (${m.commands.map((c) => c.label).join(', ')})` : '',
+  const count = (n: number, one: string, many: string) => n === 1 ? one : `${n} ${many}`;
+  const menu = [
+    m.effects.length ? `${count(m.effects.length, 'an effect', 'effects')} (${m.effects.map((e) => e.label).join(', ')})` : '',
+    m.commands.length ? `${count(m.commands.length, 'a command', 'commands')} (${m.commands.map((c) => c.label).join(', ')})` : '',
     m.panel ? `a panel (${m.panel.title})` : '',
   ].filter(Boolean).join(', ');
+  const adds = [
+    menu ? `${menu} under Filter › Plugins` : '',
+    m.tools.length ? `${count(m.tools.length, 'a tool', 'tools')} (${m.tools.map((t) => t.name).join(', ')}) in the toolbox` : '',
+    m.formats.length ? `${count(m.formats.length, 'a file format', 'file formats')} (${m.formats.map((f) => `${f.label}: .${f.extensions.join(', .')}`).join('; ')}) for File › Open and Export` : '',
+  ].filter(Boolean).join('; ');
   // What it may do: shaders need nothing; a script runs walled off, and can only do what it asks for here.
   const perms = m.permissions.map((p) => PERMISSIONS[p]);
   const trust = !m.main ? 'It needs no permissions: effects run on the graphics card and can\'t reach your files or the internet.'
     : `Its script runs walled off from your files and the internet. ${perms.length ? `It asks to ${perms.join('; to ')}.` : 'It asks for no permissions.'}`;
   const r = await ask(old ? `Update ${m.name}?` : `Install ${m.name}?`,
-    `${m.name} ${m.version}${m.author ? ` by ${m.author}` : ''}${m.description ? `: ${m.description}` : '.'} It adds ${adds}, under Filter › Plugins. ${trust}`
+    `${m.name} ${m.version}${m.author ? ` by ${m.author}` : ''}${m.description ? `: ${m.description}` : '.'} It adds ${adds}. ${trust}`
     + (old ? ` This replaces version ${old.manifest.version}.` : ''),
     [{ id: 'cancel', label: 'Cancel' }, { id: 'install', label: old ? 'Update' : 'Install', primary: true }]);
   if (r !== 'install') return false;
   closeFrame(m.id); // (an update's script starts afresh)
   installPlugin(m);
   refresh();
-  toast(`${old ? 'Updated' : 'Installed'} ${m.name}: find it under Filter › Plugins.`);
+  toast(`${old ? 'Updated' : 'Installed'} ${m.name}${menu ? ': find it under Filter › Plugins' : ''}.`);
   return true;
 }
 
@@ -55,6 +61,8 @@ export function pluginsDialog() {
           m.effects.length ? `Effects: ${m.effects.map((e) => e.label).join(', ')}` : '',
           m.commands?.length ? `Commands: ${m.commands.map((c) => c.label).join(', ')}` : '',
           m.panel ? `Panel: ${m.panel.title}` : '',
+          m.tools?.length ? `Tools: ${m.tools.map((t) => t.name).join(', ')}` : '',
+          m.formats?.length ? `Formats: ${m.formats.map((f) => f.label).join(', ')}` : '',
           m.main ? `Permissions: ${m.permissions.length ? m.permissions.join(', ') : 'none'}` : '',
         ].filter(Boolean).join(' · '))),
       checkbox('On', p.enabled, (v) => { if (!v) closeFrame(m.id); setPluginEnabled(m.id, v); refresh(); render(); }, 'Turn it off to hide what it adds (layers using its effects show nothing until it\'s on again)'),
@@ -76,7 +84,7 @@ export function pluginsDialog() {
         for (const { file } of await pickFiles('plugin', false)) await installPluginFile(file, file.name);
         render();
       } }, 'Install from file…')),
-      h('p', { class: 'dialog-note' }, 'Plugins add effects (shaders), and commands and panels (scripts, which run walled off from your files and the internet, doing only what their permissions allow). They\'re kept when Pixl updates.')],
+      h('p', { class: 'dialog-note' }, 'Plugins add effects (shaders), and commands, panels, tools and file formats (scripts, which run walled off from your files and the internet, doing only what their permissions allow). They\'re kept when Pixl updates.')],
     buttons: [{ label: 'Close', primary: true }],
   });
 }

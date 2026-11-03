@@ -1,0 +1,12 @@
+{
+  "id": "solutions.automatrix.example-ppm-stamp",
+  "name": "PPM Files & Stamp",
+  "version": "1.0.0",
+  "author": "AMx",
+  "description": "An example plugin with a file format (PPM: open and export) and a tool (a round stamp in the foreground colour).",
+  "pixl": 1,
+  "permissions": ["pixels:read", "pixels:write", "files"],
+  "main": "main.js",
+  "formats": [{ "id": "ppm", "label": "PPM", "extensions": ["ppm", "pnm"], "open": true, "export": true }],
+  "tools": [{ "id": "stamp", "name": "Stamp", "hint": "Click to stamp a dot in the foreground colour" }]
+}

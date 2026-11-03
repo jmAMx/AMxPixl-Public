@@ -55,8 +55,9 @@ The `duotone` folder here is a working example: zip it and rename the zip to `.p
 
 ## Script plugins
 
-A plugin can also have a script (`"main": "main.js"`): **commands** (listed under Filter › Plugins) and a **panel** (a
-floating window showing the script's own page). The script runs in a sandbox: its own page, cut off from Pixl, your
+A plugin can also have a script (`"main": "main.js"`): **commands** (listed under Filter › Plugins), a **panel** (a
+floating window showing the script's own page), **tools** (in the toolbox) and **file formats** (in File › Open and
+the Export dialog). The script runs in a sandbox: its own page, cut off from Pixl, your
 files, the network and new windows. It works only through `pixl`, and only as far as its `permissions` allow (shown,
 in plain words, when it's installed):
 
@@ -65,13 +66,19 @@ in plain words, when it's installed):
 | `pixels:read` | read layers' pixels and the selection |
 | `pixels:write` | change layers and add new ones (each change is a step you can undo) |
 | `commands` | run Pixl's own commands |
+| `files` | open and export files in its own formats (the person chooses the files; it sees only their contents) |
 
 ```json
-"permissions": ["pixels:read", "pixels:write"],
+"permissions": ["pixels:read", "pixels:write", "files"],
 "main": "main.js",
 "commands": [{ "id": "invert", "label": "Invert" }],
-"panel": { "title": "My Panel", "width": 280, "height": 220 }
+"panel": { "title": "My Panel", "width": 280, "height": 220 },
+"tools": [{ "id": "stamp", "name": "Stamp", "hint": "Click to stamp a dot" }],
+"formats": [{ "id": "ppm", "label": "PPM", "extensions": ["ppm", "pnm"], "open": true, "export": true }]
 ```
+
+A format's extensions are lowercase letters and digits; a plugin can't take over Pixl's own formats (PNG, JPEG,
+WebP, GIF, PSD, XCF, TIFF, BMP, ICO, `.pixl`).
 
 The `pixl` API (every call returns a promise):
 
@@ -87,5 +94,14 @@ The `pixl` API (every call returns a promise):
   `fill` (`{ with: 'fg' | 'bg' }`), `undo`, `redo`, `selectLayer` (`{ id }`), and `filter`
   (`{ kind, settings }`, any effect: `{ kind: 'gblur', settings: { radius: 4 } }`).
 - `pixl.toast(text)`, `pixl.colors()`, `pixl.setColors(fg, bg)`.
+- `pixl.onTool(id, { down, move, up })`: what a tool does. Each gets the point in canvas pixels (`x`, `y`,
+  `pressure`, `shift`, `alt`, `ctrl`); `move` comes only while the button is down, at most once a frame.
+- `pixl.onOpen(id, (bytes, name) => image)`: reads a file (`bytes` is a `Uint8Array`) and returns
+  `{ width, height, layers: [{ name, image, x?, y? }] }`, each `image` an `ImageData`, bottom layer first.
+- `pixl.onExport(id, (image) => bytes)`: turns the flattened picture (an `ImageData`) into the file's bytes
+  (a `Uint8Array` or `ArrayBuffer`).
 
-The `pixel-tools` folder is a working example of a script plugin with commands and a panel.
+Handlers may be `async`; throwing shows the person your error's message.
+
+The `pixel-tools` folder is a working example of a script plugin with commands and a panel; `ppm-and-stamp` has a
+tool and a file format.

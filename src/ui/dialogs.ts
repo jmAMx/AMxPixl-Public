@@ -17,6 +17,7 @@ import { effectReach } from '../core/render';
 import { isFilter, type FxParams, type PixelTarget } from '../core/types';
 import { apply, invert, xformMatrix } from '../core/math';
 import { fxParamControl } from './fxcontrols';
+import { pluginFormats } from './pluginhost';
 import { setSetting } from '../core/settings';
 import { WorkerPool } from '../core/workers/pool';
 import type { InpaintJob } from '../core/inpaint';
@@ -222,7 +223,8 @@ export function exportDialog(all = false, startFormat: ExportOpts['format'] = 'p
       ...(pick ? [pick] : []),
       h('div', { class: 'field wide' }, h('span', null, 'Format'),
         seg<ExportOpts['format']>([{ v: 'png', label: 'PNG' }, { v: 'jpeg', label: 'JPEG' }, { v: 'webp', label: 'WebP' }, { v: 'tiff', label: 'TIFF' },
-          { v: 'bmp', label: 'BMP' }, { v: 'ico', label: 'ICO', title: 'Windows icon, 16 to 256 pixels' }, { v: 'psd', label: 'PSD', title: 'Photoshop, with layers' }], format, (v) => { format = v; upd(); })),
+          { v: 'bmp', label: 'BMP' }, { v: 'ico', label: 'ICO', title: 'Windows icon, 16 to 256 pixels' }, { v: 'psd', label: 'PSD', title: 'Photoshop, with layers' },
+          ...pluginFormats().filter(({ f }) => f.export).map(({ p, f }) => ({ v: `plugin:${p.manifest.id}:${f.id}` as ExportOpts['format'], label: f.label, title: `${f.label}, from the plugin ${p.manifest.name}` }))], format, (v) => { format = v; upd(); })),
       q, sc, resampleField(resample, (v) => { resample = v; }), info, psdNote, flatNote,
     ],
     buttons: [{ label: 'Cancel' }, { label: 'Export', primary: true, onClick: () => {

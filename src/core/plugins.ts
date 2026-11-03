@@ -19,6 +19,7 @@ export const PERMISSIONS: Record<string, string> = {
   'pixels:read': 'see the pixels of your layers and the selection',
   'pixels:write': 'change layers and add new ones (each change is a step you can undo)',
   commands: 'run Pixl\'s own commands (filters, new layers, selections, undo)',
+  files: 'open and export files in its own formats (you choose the files; it sees only their contents)',
 };
 
 export interface PluginEffect {
@@ -36,6 +37,10 @@ export interface PluginManifest {
   commands: { id: string; label: string }[];
   /** A panel of its own, showing its script's page. */
   panel?: { title: string; width: number; height: number };
+  /** Tools it adds to the toolbox: its script gets the pointer on the canvas while one is chosen. */
+  tools: { id: string; name: string; hint: string }[];
+  /** File formats its script opens (into layers) and/or exports (from the picture). Needs "files". */
+  formats: { id: string; label: string; extensions: string[]; open: boolean; export: boolean }[];
 }
 export interface InstalledPlugin { manifest: PluginManifest; enabled: boolean; installed: number }
 
@@ -99,9 +104,25 @@ function check(raw: unknown, readFile: (path: string) => string | null): PluginM
   });
   const pw = m.panel as Record<string, unknown> | undefined;
   const panel = pw && typeof pw === 'object' ? { title: str(pw.title, 40) ?? name, width: Math.min(900, Math.max(200, num(pw.width) ?? 320)), height: Math.min(900, Math.max(120, num(pw.height) ?? 360)) } : undefined;
-  if ((commands.length || panel) && !main) throw new Error('it has commands or a panel but no "main" script to run them');
+  const tools = (Array.isArray(m.tools) ? m.tools : []).map((t, i) => {
+    const o = t as Record<string, unknown>, tid = str(o?.id, 40);
+    if (!tid || !/^[a-z0-9][a-z0-9-]*$/.test(tid)) throw new Error(`tool ${i + 1} needs an "id" of lowercase letters, digits and dashes`);
+    return { id: tid, name: str(o.name, 30) ?? tid, hint: str(o.hint, 160) ?? '' };
+  });
+  const formats = (Array.isArray(m.formats) ? m.formats : []).map((f, i) => {
+    const o = f as Record<string, unknown>, fid = str(o?.id, 40);
+    if (!fid || !/^[a-z0-9][a-z0-9-]*$/.test(fid)) throw new Error(`format ${i + 1} needs an "id" of lowercase letters, digits and dashes`);
+    const extensions = (Array.isArray(o.extensions) ? o.extensions : []).map((e) => String(e).toLowerCase().replace(/^\./, '')).filter((e) => /^[a-z0-9]{1,10}$/.test(e));
+    if (!extensions.length) throw new Error(`format "${fid}" needs its file "extensions"`);
+    // A plugin can't take over Pixl's own formats.
+    const own = ['pixl', 'png', 'jpg', 'jpeg', 'webp', 'gif', 'psd', 'xcf', 'tif', 'tiff', 'bmp', 'ico', 'pixlplugin'];
+    if (extensions.some((e) => own.includes(e))) throw new Error(`format "${fid}" can't use ${extensions.filter((e) => own.includes(e)).map((e) => `.${e}`).join(', ')}: Pixl opens those itself`);
+    return { id: fid, label: str(o.label, 40) ?? fid, extensions, open: o.open !== false, export: o.export === true };
+  });
+  if (formats.length && !permissions.includes('files')) throw new Error('it has file formats but doesn\'t ask for the "files" permission');
+  if ((commands.length || panel || tools.length || formats.length) && !main) throw new Error('it has commands, tools, formats or a panel but no "main" script to run them');
   if (!effects.length && !main) throw new Error('it has nothing Pixl can use: no effects and no script');
-  return { id, name, version, author: str(m.author, 80) ?? '', description: str(m.description, 400) ?? '', pixl, permissions, effects, ...(main ? { main } : {}), commands, ...(panel ? { panel } : {}) };
+  return { id, name, version, author: str(m.author, 80) ?? '', description: str(m.description, 400) ?? '', pixl, permissions, effects, ...(main ? { main } : {}), commands, ...(panel ? { panel } : {}), tools, formats };
 }
 
 function checkEffect(e: Record<string, unknown>, i: number, readFile: (path: string) => string | null): PluginEffect {

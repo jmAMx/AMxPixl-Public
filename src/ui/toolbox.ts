@@ -165,6 +165,7 @@ function applyToolOrder() {
     const prev = defaultOrder!.slice(0, i).reverse().find((p) => order.includes(p));
     order.splice(prev ? order.indexOf(prev) + 1 : 0, 0, id);
   });
+  for (const t of app.tools) if (!order.includes(t.id)) order.push(t.id); // (a plugin's tools, installed since)
   app.tools.sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
 }
 
