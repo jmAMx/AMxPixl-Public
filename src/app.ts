@@ -99,6 +99,9 @@ export const DEFAULT_OPTS = {
 };
 export type ToolOpts = typeof DEFAULT_OPTS;
 
+/** The swatches Pixl starts with (and Reset brings back). */
+export const DEFAULT_SWATCHES = ['#000000', '#ffffff', '#808080', '#2ee6be', '#11a585', '#e53935', '#fb8c00', '#fdd835', '#43a047', '#1e88e5', '#5e35b1', '#d81b60'];
+
 class App {
   /** Open files, one per tab, and the one shown. */
   projects: Project[] = [];
@@ -110,6 +113,8 @@ class App {
   fg = '#000000';
   bg = '#ffffff';
   recent: string[] = [];
+  /** The colour panel's own swatches: a starting set to change as you like; recent colours follow them. */
+  swatches: string[] = [...DEFAULT_SWATCHES];
   tool!: Tool;
   tools: Tool[] = [];
   opts: ToolOpts = structuredClone(DEFAULT_OPTS);
@@ -133,8 +138,8 @@ class App {
     for (const k of Object.keys(DEFAULT_OPTS) as (keyof ToolOpts)[]) {
       if (saved[k]) Object.assign(this.opts[k], saved[k]);
     }
-    const colors = load('amxpixl.colors', { fg: '#000000', bg: '#ffffff', recent: [] as string[] });
-    this.fg = colors.fg; this.bg = colors.bg; this.recent = colors.recent;
+    const colors = load('amxpixl.colors', { fg: '#000000', bg: '#ffffff', recent: [] as string[], swatches: [...DEFAULT_SWATCHES] });
+    this.fg = colors.fg; this.bg = colors.bg; this.recent = colors.recent; this.swatches = colors.swatches;
   }
 
   on<K extends keyof Events>(k: K, f: Handler<Events[K]>) {
@@ -269,7 +274,14 @@ class App {
     this.emit('colors');
   }
 
-  private saveColors() { store('amxpixl.colors', { fg: this.fg, bg: this.bg, recent: this.recent }); }
+  /** The swatches, changed (at most 36, each once). */
+  setSwatches(list: string[]) {
+    this.swatches = [...new Set(list.map((c) => c.toLowerCase()))].slice(0, 36);
+    this.saveColors();
+    this.emit('colors');
+  }
+
+  private saveColors() { store('amxpixl.colors', { fg: this.fg, bg: this.bg, recent: this.recent, swatches: this.swatches }); }
 
   saveOpts() { store('amxpixl.opts', this.opts); this.emit('options'); }
 

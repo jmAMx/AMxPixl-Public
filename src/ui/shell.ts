@@ -38,23 +38,23 @@ const hasSel = () => !!app.doc?.selection;
 const open = async () => A.openFiles(await pickFiles('any'));
 const place = async () => A.placeFiles((await pickFiles('image')).map((p) => p.file));
 
-/** Edit › Paste (a layer), or File › New from Clipboard (`asNew`: an image of its own, the clipboard's size). */
-const pasteFromMenu = async (asNew = false) => {
+/** Edit › Paste and its kinds, and File › New from Clipboard (an image of its own, the clipboard's size). */
+const pasteFromMenu = async (how: A.PasteAs = 'layer') => {
   try {
     const items = await navigator.clipboard.read();
     for (const it of items) {
       const t = it.types.find((x) => x.startsWith('image/'));
-      if (t) { await A.pasteBlob(await it.getType(t), asNew); return; }
+      if (t) { await A.pasteBlob(await it.getType(t), how); return; }
     }
   } catch { /* permission denied: fall back to the in-app clipboard */ }
-  await A.pasteBlob(null, asNew);
+  await A.pasteBlob(null, how);
 };
 
 const MENUS: MenuDef[] = [
   {
     title: 'File', items: [
       { label: 'New…', accel: 'Ctrl+N', run: newDocDialog },
-      { label: 'New from Clipboard', accel: 'Ctrl+Alt+N', run: () => pasteFromMenu(true) },
+      { label: 'New from Clipboard', accel: 'Ctrl+Alt+N', run: () => pasteFromMenu('image') },
       { label: 'Open…', accel: 'Ctrl+O', run: open },
       { label: 'Open Recent', sub: recentMenuItems },
       { label: 'Place Image as Layer…', accel: 'Ctrl+Shift+O', run: place, enabled: hasDoc },
@@ -82,6 +82,9 @@ const MENUS: MenuDef[] = [
       { label: 'Copy', accel: 'Ctrl+C', run: () => A.copy(), enabled: hasLayer },
       { label: 'Copy Merged', accel: 'Ctrl+Shift+C', run: () => A.copy(true), enabled: hasDoc },
       { label: 'Paste', accel: 'Ctrl+V', run: () => pasteFromMenu(), native: true },
+      { label: 'Paste in Place', accel: 'Ctrl+Shift+V', run: () => pasteFromMenu('inPlace'), enabled: hasDoc },
+      { label: 'Paste as New Artboard', run: () => pasteFromMenu('artboard'), enabled: hasDoc },
+      { label: 'Paste as New Image', run: () => pasteFromMenu('image') },
       { label: 'Clear', accel: 'Delete', alt: 'Backspace', run: A.clearSelection, enabled: hasLayer },
       'sep',
       { label: 'Fill with Foreground', accel: 'Alt+Backspace', run: () => A.fillWith('fg'), enabled: hasLayer },

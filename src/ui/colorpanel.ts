@@ -1,10 +1,9 @@
-import { app } from '../app';
+import { app, DEFAULT_SWATCHES } from '../app';
 import { ctx2d } from '../core/layers';
 import { hexToRgb, hsvToRgb, normHex, rgbToHex, rgbToHsv } from './color';
 import { h } from './dom';
-import { icon, numField } from './widgets';
+import { icon, numField, popupMenu, type MenuItem } from './widgets';
 
-const PRESETS = ['#000000', '#ffffff', '#808080', '#2ee6be', '#11a585', '#e53935', '#fb8c00', '#fdd835', '#43a047', '#1e88e5', '#5e35b1', '#d81b60'];
 
 /** HSV picker: saturation/value square + hue strip, editing the foreground (or background) colour. */
 export function colorPanel() {
@@ -63,9 +62,46 @@ export function colorPanel() {
     (bgBtn.firstChild as HTMLElement).style.background = app.bg;
     fgBtn.classList.toggle('on', target === 'fg');
     bgBtn.classList.toggle('on', target === 'bg');
-    recent.replaceChildren(...[...new Set([...app.recent, ...PRESETS])].slice(0, 18).map((col) =>
-      h('button', { class: 'swatch', type: 'button', title: `${col} (Alt+click for background)`, style: `background:${col}`, onclick: (e: MouseEvent) => app.setColor(e.altKey ? 'bg' : target, col) })));
+    // The swatches, the + square, then recent colours not among them: 18 squares in all, or more when there are more
+    // swatches.
+    const kept = app.swatches;
+    const fill = app.recent.filter((c) => !kept.includes(c)).slice(0, Math.max(0, 17 - kept.length));
+    const square = (col: string, isKept: boolean) => h('button', {
+      class: 'swatch' + (isKept ? '' : ' recent'), type: 'button', style: `background:${col}`,
+      title: `${col}${isKept ? '' : ' (recent)'}: Alt+click for background; right-click to ${isKept ? 'replace or remove it' : 'keep it as a swatch'}`,
+      onclick: (e: MouseEvent) => app.setColor(e.altKey ? 'bg' : target, col),
+      oncontextmenu: (e: MouseEvent) => { e.preventDefault(); popupMenu(isKept ? keptItems(col) : [{ label: 'Add to Swatches', swatch: col, onClick: () => app.setSwatches([...app.swatches, col]) }], e.clientX, e.clientY); },
+    });
+    const add = h('button', { class: 'swatch swatch-add', type: 'button', title: 'Add a swatch: the foreground or background colour, or a recent one',
+      onclick: (e: MouseEvent) => { const r = (e.currentTarget as HTMLElement).getBoundingClientRect(); popupMenu(addItems(), r.left, r.bottom + 2); } }, icon('plus'));
+    recent.replaceChildren(...kept.map((c) => square(c, true)), add, ...fill.map((c) => square(c, false)));
+    queueMicrotask(() => fit()); // (how many there are changes how they fit)
   };
+
+  /**
+   * Colours to put in a swatch: the foreground, the background and the recent ones (those already a swatch can't be
+   * chosen twice). `put` adds or replaces with the one chosen.
+   */
+  const choices = (put: (col: string) => void): MenuItem[] => {
+    const item = (label: string, col: string): MenuItem => ({ label, swatch: col, disabled: app.swatches.includes(col), onClick: () => put(col) });
+    const recents = app.recent.filter((c) => !app.swatches.includes(c));
+    return [
+      item(`Foreground (${app.fg})`, app.fg),
+      item(`Background (${app.bg})`, app.bg),
+      recents.length ? { label: 'Recent Colours', sub: recents.map((c) => item(c, c)) } : { label: 'No recent colours yet', disabled: true },
+    ];
+  };
+  /** The + square's menu: add a colour, or go back to the starting set. */
+  const addItems = (): MenuItem[] => [
+    ...choices((col) => app.setSwatches([...app.swatches, col])),
+    { sep: true },
+    { label: 'Reset to Default Swatches', disabled: app.swatches.join() === DEFAULT_SWATCHES.join(), onClick: () => app.setSwatches(DEFAULT_SWATCHES) },
+  ];
+  /** A swatch's own menu (right-click): switch it for another colour, or remove it. */
+  const keptItems = (col: string): MenuItem[] => [
+    { label: 'Replace With', swatch: col, sub: choices((next) => app.setSwatches(app.swatches.map((c) => (c === col ? next : c)))) },
+    { label: 'Remove Swatch', onClick: () => app.setSwatches(app.swatches.filter((c) => c !== col)) },
+  ];
 
   let selfSet = false;
   const commit = () => {
@@ -135,30 +171,35 @@ export function colorPanel() {
       el.style.marginTop = room === null ? '' : `${Math.min(GAP, room)}px`;
     };
     let svH = SV, compact = false;
-    // The swatches: two rows of nine squares as wide as the panel lets them be, shrinking (not cut off) when short,
-    // until all of them fit in one row across it.
-    const swatch = (s: number | null, cols = 9) => { recent.style.setProperty('--sw', s === null ? '' : `${s}px`); recent.style.setProperty('--swc', String(cols)); };
-    const two = (s: number) => s * 2 + 4;
-    if (!sized) { swatch(null); collapse(rgbRow, null); }
+    // The swatches: rows of nine squares across the panel, wrapping into more, smaller columns (never cut off, and
+    // always the panel's full width) when it's short, down to rows of eighteen.
+    const swatch = (cols = 9) => recent.style.setProperty('--swc', String(cols));
+    if (!sized) { swatch(); collapse(rgbRow, null); }
     else {
       const H = root.clientHeight, hueH = 12, W = root.clientWidth - 20;
       if (!root.classList.contains('compact')) tgtH = tgtRow.offsetHeight || tgtH;
-      const s0 = (W - 8 * 4) / 9, s1 = Math.max(8, Math.floor((W - 17 * 4) / 18));
+      // The squares' height across `cols` columns: all of them, wrapped into rows.
+      const n = recent.childElementCount || 18;
+      const tall = (cols: number) => { const s = (W - (cols - 1) * 4) / cols, rows = Math.ceil(n / cols); return rows * s + (rows - 1) * 4; };
+      const s1 = tall(18);
       // Room for the square, the swatches and the RGB row (those two with the gap above them).
       const rest = H - 18 - tgtH - GAP - GAP - hueH;
       if (rest < SV_MIN + GAP + s1) compact = true;
       else {
-        let sw = GAP + two(s0), rgb = rgbRow.scrollHeight + GAP, over = SV + sw + rgb - rest;
+        let sw = GAP + tall(9), rgb = rgbRow.scrollHeight + GAP, over = SV + sw + rgb - rest;
         const cut = (have: number, floor: number) => { const c = Math.max(0, Math.min(over, have - floor)); over -= c; return have - c; };
         if (over <= 0) svH = Math.min(SV_MAX, SV - over);
         else { svH = cut(SV, SV_MID); sw = cut(sw, GAP + s1); rgb = cut(rgb, 0); svH = cut(svH, SV_MIN); }
+        // Shorter, they wrap into more columns (smaller squares, fewer rows), always the panel's full width; the room
+        // they don't need goes to the square.
         const room = sw - GAP;
-        if (room >= two(s0)) swatch(null);
-        else if (room >= two(s1)) swatch((room - 4) / 2);
-        else { swatch(s1, 18); svH += room - s1; } // one row: the room it doesn't need goes to the square
+        let cols = 9, used = tall(9);
+        while (used > room && cols < 18) used = tall(++cols);
+        swatch(cols);
+        svH += Math.max(0, room - used);
         collapse(rgbRow, rgb);
       }
-      if (compact) { svH = Math.max(16, H - 12); swatch(null); collapse(rgbRow, null); }
+      if (compact) { svH = Math.max(16, H - 12); swatch(); collapse(rgbRow, null); }
     }
     root.classList.toggle('compact', compact);
     sv.style.height = `${svH}px`;

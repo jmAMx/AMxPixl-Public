@@ -185,7 +185,8 @@ export function seg<T extends string>(options: { v: T; label?: string; icon?: Ic
 
 // ---------- popup menus ----------
 
-export interface MenuItem { label?: string; accel?: string; disabled?: boolean; checked?: boolean; sep?: boolean; onClick?: () => void; sub?: MenuItem[] }
+/** A menu row; `swatch` shows a colour chip where the tick goes. */
+export interface MenuItem { label?: string; accel?: string; disabled?: boolean; checked?: boolean; swatch?: string; sep?: boolean; onClick?: () => void; sub?: MenuItem[] }
 
 let closeActivePopup: (() => void) | null = null;
 
@@ -229,7 +230,7 @@ function buildMenu(items: MenuItem[], done: () => void): HTMLElement {
       type: 'button', class: 'menu-item' + (it.sub ? ' has-sub' : ''), role: 'menuitem', disabled: it.disabled,
       onclick: () => { if (it.sub) return; done(); it.onClick?.(); },
     },
-    h('span', { class: 'menu-check' }, it.checked ? icon('check') : null),
+    h('span', { class: 'menu-check' }, it.checked ? icon('check') : it.swatch ? h('span', { class: 'chip-swatch', style: `background:${it.swatch}` }) : null),
     h('span', { class: 'menu-label' }, it.label ?? ''),
     h('span', { class: 'menu-accel' }, it.accel ?? (it.sub ? '›' : '')));
     if (it.sub) {

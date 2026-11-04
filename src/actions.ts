@@ -659,18 +659,19 @@ function artboardName(p: Project): string {
  * Adds an artboard to the file shown: a new image of its own, `w` × `h`, at `at` (spread pixels) or to the right of
  * the others. The first artboard, still named after the file, becomes "Artboard 1". One undo step.
  */
-export function newArtboard(w: number, h: number, bg: string | null = '#ffffff', at?: Pt) {
+export function newArtboard(w: number, h: number, bg: string | null = '#ffffff', at?: Pt, content?: { canvas: HTMLCanvasElement; name: string; label: string }) {
   const p = app.project; if (!p || tooLarge(w, h)) return;
   const before = p.layout();
   const r = p.bounds();
   if (p.boards.length === 1 && p.boards[0].doc.name === p.name) p.boards[0].doc.name = 'Artboard 1';
   const doc = new Doc(artboardName(p), Math.max(1, Math.round(w)), Math.max(1, Math.round(h)));
-  const l = doc.newRasterLayer(bg ? 'Background' : 'Layer 1', bg ?? undefined);
+  const l = doc.newRasterLayer(content?.name ?? (bg ? 'Background' : 'Layer 1'), bg ?? undefined);
+  if (content) ctx2d(doc.canvasOf(l)).drawImage(content.canvas, 0, 0);
   if (!bg) doc.counter = 2;
   doc.layers.push(l);
   doc.activeId = l.id;
   app.addArtboard(p, doc, Math.round(at?.x ?? r.x + r.w + ARTBOARD_GAP), Math.round(at?.y ?? r.y));
-  p.commitLayout('New artboard', before, doc);
+  p.commitLayout(content?.label ?? 'New artboard', before, doc);
   app.setDoc(doc);
 }
 
@@ -2057,7 +2058,8 @@ export function lumOf(hex: string) {
 
 // ---------- clipboard ----------
 
-let clip: { canvas: HTMLCanvasElement; at: Pt } | null = null;
+/** What was last copied in Pixl: its pixels, where they were, and the file they came from (for Paste in Place). */
+let clip: { canvas: HTMLCanvasElement; at: Pt; project: Project | null } | null = null;
 
 export async function copy(merged = false, cut = false) {
   const doc = need(); if (!doc) return;
@@ -2068,7 +2070,7 @@ export async function copy(merged = false, cut = false) {
   renderDoc(doc, c, [1, 0, 0, 1, -r.x, -r.y], { layers: merged ? undefined : [{ ...(l as PlacedLayer), opacity: 1, blend: 'normal', visible: true, clip: false }], clip: merged });
   const mask = doc.selectionMask();
   if (mask) { const x = ctx2d(c); x.globalCompositeOperation = 'destination-in'; x.drawImage(mask, -r.x, -r.y); }
-  clip = { canvas: c, at: { x: r.x, y: r.y } };
+  clip = { canvas: c, at: { x: r.x, y: r.y }, project: app.project };
   // Cleared now, while this image and its selection are still the current ones (not after the clipboard write).
   if (cut) clearSelection();
   try {
@@ -2078,19 +2080,32 @@ export async function copy(merged = false, cut = false) {
   toast(cut ? 'Cut to clipboard' : 'Copied to clipboard');
 }
 
-/** Pastes an image as a new layer (or, with `asNew` or when none is open, as a new image the clipboard's size). */
-export async function pasteBlob(blob: Blob | null, asNew = false) {
+/**
+ * How to paste: a new layer in the middle of the image, a layer where it was copied from (when it was copied in Pixl,
+ * from the same file), a new artboard the image's size, or a new image of its own.
+ */
+export type PasteAs = 'layer' | 'inPlace' | 'artboard' | 'image';
+
+/** Pastes the clipboard's image (`blob`, or Pixl's own copy without one). With no image open, it becomes one. */
+export async function pasteBlob(blob: Blob | null, how: PasteAs = 'layer') {
   let c: HTMLCanvasElement | null = null;
-  let at: Pt | null = null;
+  // Pixl's own copy, if that's what's on the clipboard (the system clipboard has an image the same size).
+  let mine = false;
   if (blob) {
     c = await decodeImage(blob);
-    if (clip && clip.canvas.width === c.width && clip.canvas.height === c.height) at = clip.at;
+    mine = !!clip && clip.canvas.width === c.width && clip.canvas.height === c.height;
   } else if (clip) {
     c = cloneCanvas(clip.canvas);
-    at = clip.at;
+    mine = true;
   }
   if (!c) { toast('The clipboard has no image.'); return; }
-  if (!app.doc || asNew) { app.addDoc(docFromCanvas(nextUntitled(), c)); return; }
+  if (!app.doc || how === 'image') { app.addDoc(docFromCanvas(nextUntitled(), c)); return; }
+  if (how === 'artboard') { newArtboard(c.width, c.height, null, undefined, { canvas: c, name: 'Pasted', label: 'Paste as new artboard' }); return; }
+  let at: Pt | null = null;
+  if (how === 'inPlace') {
+    if (mine && clip!.project === app.project) at = clip!.at;
+    else toast('Paste in Place puts back what was copied from this file in Pixl. This came from elsewhere, so it\'s pasted in the middle.');
+  }
   placeCanvas(c, 'Pasted', at);
 }
 

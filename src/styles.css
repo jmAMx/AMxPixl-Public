@@ -491,9 +491,13 @@ input[type="range"]:focus-visible::-webkit-slider-thumb { background: var(--acce
 .rgb-row .field { gap: 3px; }
 .rgb-row input { width: 100%; }
 .hex { font-variant-numeric: tabular-nums; }
-.swatches { display: grid; grid-template-columns: repeat(var(--swc, 9), var(--sw, 1fr)); gap: 4px; justify-content: center; }
+.swatches { display: grid; grid-template-columns: repeat(var(--swc, 9), minmax(0, 1fr)); gap: 4px; }
 .swatch { aspect-ratio: 1; border-radius: 3px; border: 1px solid var(--border-strong); cursor: pointer; padding: 0; }
 .swatch:hover { outline: 2px solid var(--accent); outline-offset: 1px; }
+.swatch-add { display: grid; place-items: center; background: transparent; border-style: dashed; color: var(--text-dim); min-width: 0; }
+.swatch-add:hover { color: var(--text); }
+.swatch.recent { border-radius: 50%; } /* recent colours: dots, after your own square swatches */
+.swatch-add svg { width: 70%; height: 70%; min-width: 0; }
 
 /* properties */
 .props-body { padding: 4px 0 8px; }
