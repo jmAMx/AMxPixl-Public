@@ -497,7 +497,7 @@ input[type="range"]:focus-visible::-webkit-slider-thumb { background: var(--acce
 .swatch-add { display: grid; place-items: center; background: transparent; border-style: dashed; color: var(--text-dim); min-width: 0; }
 .swatch-add:hover { color: var(--text); }
 .swatch.recent { border-radius: 50%; } /* recent colours: dots, after your own square swatches */
-.swatch-add svg { width: 70%; height: 70%; min-width: 0; }
+.swatch-add .ico { width: 70%; height: 70%; }
 
 /* properties */
 .props-body { padding: 4px 0 8px; }
